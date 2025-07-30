@@ -1,0 +1,41 @@
+INFO:     Will watch for changes in these directories: ['D:\\HuaweiMoveData\\Users\\Dr.Tom_Great\\Desktop\\final']
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     Started reloader process [25804] using StatReload
+D:\anaconda3\envs\fornew\Lib\site-packages\pydantic\_internal\_fields.py:149: UserWarning: Field "model_name" has conflict with protected namespace "model_".
+
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+2025-07-26 16:48:38.332 | INFO     | workflow_framework.utils.openai_client:<module>:15 - OpenAI库导入成功
+INFO:     Started server process [26664]
+2025-07-26 16:48:39 | INFO     | main:startup_event:114 - 正在启动工作流管理框架...
+INFO:     Waiting for application startup.
+2025-07-26 16:48:39 | INFO     | workflow_framework.utils.database:initialize:40 - 单个连接测试成功
+2025-07-26 16:48:39 | INFO     | workflow_framework.utils.database:initialize:43 - 使用单连接模式（Windows兼容）
+2025-07-26 16:48:39 | INFO     | main:startup_event:118 - 数据库连接初始化成功
+2025-07-26 16:48:39 | INFO     | workflow_framework.services.execution_service:start_engine:62 - 工作流执行引擎启动
+2025-07-26 16:48:39 | INFO     | workflow_framework.services.agent_task_service:register_completion_callback:40 - 注册任务完成回调: <workflow_framework.services.execution_service.ExecutionEngine object at 0x0000019C1F203E30>
+2025-07-26 16:48:39 | INFO     | workflow_framework.services.execution_service:start_engine:72 - 已注册回调监听器
+2025-07-26 16:48:39 | INFO     | main:startup_event:122 - 工作流执行引擎启动成功
+2025-07-26 16:48:39 | INFO     | workflow_framework.services.agent_task_service:start_service:71 - Agent任务处理服务启动
+2025-07-26 16:48:39 | INFO     | main:startup_event:126 - Agent任务处理服务启动成功
+2025-07-26 16:48:39 | INFO     | workflow_framework.services.monitoring_service:start_monitoring:71 - 启动工作流监控服务
+2025-07-26 16:48:39 | INFO     | main:startup_event:130 - 监控服务启动成功
+2025-07-26 16:48:39 | INFO     | main:startup_event:132 - 工作流管理框架启动完成
+INFO:     Application startup complete.
+2025-07-26 16:49:09 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:49:39 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:50:09 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:50:39 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:51:09 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:51:40 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:52:10 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:52:40 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:53:10 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:53:40 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:54:10 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:54:40 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:55:10 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+WARNING:  StatReload detected changes in 'start_backend_simple.py'. Reloading...
+2025-07-26 16:55:40 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:56:11 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
+2025-07-26 16:56:41 | INFO     | workflow_framework.services.agent_task_service:get_pending_agent_tasks:90 - 获取待处理Agent任务 0 个
