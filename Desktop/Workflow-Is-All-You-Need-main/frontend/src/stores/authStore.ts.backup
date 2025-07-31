@@ -1,0 +1,166 @@
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { authAPI } from '../services/api';
+
+interface User {
+  user_id: string;
+  username: string;
+  email: string;
+  full_name?: string;
+  phone?: string;
+  description?: string;
+  role?: string;
+  created_at: string;
+}
+
+interface AuthState {
+  user: User | null;
+  token: string | null;
+  isAuthenticated: boolean;
+  loading: boolean;
+  
+  // Actions
+  login: (username: string, password: string) => Promise<void>;
+  register: (username: string, email: string, password: string) => Promise<void>;
+  logout: () => void;
+  getCurrentUser: () => Promise<void>;
+  checkAuth: () => Promise<boolean>;
+  setUser: (user: User) => void;
+  setToken: (token: string) => void;
+}
+
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      user: null,
+      token: null,
+      isAuthenticated: false,
+      loading: false,
+
+      login: async (username: string, password: string) => {
+        set({ loading: true });
+        try {
+          const response: any = await authAPI.login({ username_or_email: username, password });
+          
+          // 后端返回格式: { success: true, message: string, data: { token: { access_token, user_id, username } } }
+          if (response.success && response.data?.token) {
+            const tokenData = response.data.token;
+            const access_token = tokenData.access_token;
+            
+            localStorage.setItem('token', access_token);
+            
+            // 创建用户对象，适配后端字段
+            const user = {
+              user_id: tokenData.user_id,
+              username: tokenData.username,
+              email: tokenData.email || '', // 登录可能返回email
+              full_name: tokenData.full_name || '',
+              role: tokenData.role || 'user',
+              created_at: tokenData.created_at || new Date().toISOString()
+            };
+            
+            set({
+              user,
+              token: access_token,
+              isAuthenticated: true,
+              loading: false,
+            });
+          } else {
+            throw new Error(response.message || '登录响应格式错误');
+          }
+        } catch (error) {
+          set({ loading: false });
+          throw error;
+        }
+      },
+
+      register: async (username: string, email: string, password: string) => {
+        set({ loading: true });
+        try {
+          const response: any = await authAPI.register({ username, email, password });
+          
+          // 后端返回格式: { success: true, message: "注册成功", data: { user: { ... } } }
+          if (response.success) {
+            set({ loading: false });
+          } else {
+            throw new Error(response.message || '注册失败');
+          }
+        } catch (error) {
+          set({ loading: false });
+          throw error;
+        }
+      },
+
+      logout: () => {
+        localStorage.removeItem('token');
+        set({
+          user: null,
+          token: null,
+          isAuthenticated: false,
+        });
+      },
+
+      getCurrentUser: async () => {
+        set({ loading: true });
+        try {
+          const response: any = await authAPI.getCurrentUser();
+          
+          // 后端返回格式: { success: true, message: string, data: { user: { ... } } }
+          if (response.success && response.data?.user) {
+            const userData = response.data.user;
+            const user = {
+              user_id: userData.user_id,
+              username: userData.username,
+              email: userData.email || '',
+              full_name: userData.full_name || '',
+              role: userData.role || 'user',
+              created_at: userData.created_at || new Date().toISOString()
+            };
+            
+            set({
+              user,
+              isAuthenticated: true,
+              loading: false,
+            });
+          } else {
+            throw new Error(response.message || '获取用户信息响应格式错误');
+          }
+        } catch (error) {
+          set({ loading: false, isAuthenticated: false });
+          throw error;
+        }
+      },
+
+      // 自动登录检查
+      checkAuth: async () => {
+        const token = localStorage.getItem('token');
+        if (token) {
+          try {
+            await get().getCurrentUser();
+            return true;
+          } catch (error) {
+            localStorage.removeItem('token');
+            return false;
+          }
+        }
+        return false;
+      },
+
+      setUser: (user: User) => {
+        set({ user });
+      },
+
+      setToken: (token: string) => {
+        set({ token, isAuthenticated: true });
+      },
+    }),
+    {
+      name: 'auth-storage',
+      partialize: (state) => ({
+        user: state.user,
+        token: state.token,
+        isAuthenticated: state.isAuthenticated,
+      }),
+    }
+  )
+); 
