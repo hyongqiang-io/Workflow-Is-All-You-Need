@@ -16,12 +16,14 @@ const Todo: React.FC = () => {
     loading, 
     error,
     loadTasks, 
+    getTaskDetails,
     startTask, 
     submitTaskResult,
     pauseTask,
     requestHelp,
     rejectTask,
     cancelTask,
+    deleteTask,
     saveTaskDraft,
     getTaskDraft,
     clearTaskDraft
@@ -132,8 +134,26 @@ const Todo: React.FC = () => {
   };
 
   const handleViewDetails = async (task: any) => {
+    console.log('🔍 前端: 查看任务详情', task.task_instance_id);
     setCurrentTask(task);
     setDetailModalVisible(true);
+    
+    // 调用API获取完整的任务详情（包含context_data）
+    try {
+      console.log('📡 前端: 调用getTaskDetails API');
+      await getTaskDetails(task.task_instance_id);
+      console.log('✅ 前端: 任务详情获取成功');
+      
+      // 使用从store获取的最新任务数据
+      const updatedTask = tasks.find(t => t.task_instance_id === task.task_instance_id);
+      if (updatedTask) {
+        console.log('🔄 前端: 更新当前任务数据');
+        console.log('📊 前端: 最新context_data', updatedTask.context_data);
+        setCurrentTask(updatedTask);
+      }
+    } catch (error) {
+      console.error('❌ 前端: 获取任务详情失败', error);
+    }
   };
 
   const handleSubmitConfirm = async () => {
@@ -227,6 +247,34 @@ const Todo: React.FC = () => {
     }
   };
 
+  const handleDeleteTask = async (task: any) => {
+    console.log('🗑️ 点击删除任务按钮', task);
+    
+    try {
+      console.log('🔔 准备显示确认对话框');
+      
+      // 临时使用原生确认对话框进行测试
+      const confirmed = window.confirm(`确定要删除任务"${task.task_title}"吗？删除后将无法恢复。`);
+      
+      if (confirmed) {
+        console.log('📝 用户确认删除，开始调用deleteTask');
+        try {
+          await deleteTask(task.task_instance_id);
+          console.log('✅ 删除任务成功');
+          message.success('任务已删除');
+        } catch (error) {
+          console.error('❌ 删除任务失败:', error);
+          message.error('删除任务失败，请稍后再试');
+        }
+      } else {
+        console.log('🚫 用户取消删除');
+      }
+    } catch (error) {
+      console.error('❌ 删除任务处理失败:', error);
+      message.error('删除任务失败');
+    }
+  };
+
   return (
     <div>
       <h2 style={{ marginBottom: '24px' }}>我的待办</h2>
@@ -303,6 +351,20 @@ const Todo: React.FC = () => {
                     onClick={() => handleCancelTask(item)}
                   >
                     取消任务
+                  </Button>
+                ),
+                // 已完成和已取消状态可以删除任务
+                (item.status.toLowerCase() === 'completed' || item.status.toLowerCase() === 'cancelled') && (
+                  <Button 
+                    key="delete" 
+                    danger
+                    size="small"
+                    onClick={() => {
+                      console.log('🔍 删除按钮被点击，任务状态:', item.status);
+                      handleDeleteTask(item);
+                    }}
+                  >
+                    删除任务
                   </Button>
                 ),
                 // 所有状态都可以查看详情
@@ -412,6 +474,19 @@ const Todo: React.FC = () => {
             {/* 上下文信息 */}
             {(currentTask.context_data || currentTask.input_data) && (
               <Card size="small" title="执行上下文" style={{ marginBottom: '16px' }}>
+                {/* 添加详细调试信息 */}
+                <div style={{ background: '#f0f0f0', padding: '8px', marginBottom: '12px', fontSize: '12px' }}>
+                  <div><strong>Debug Info:</strong></div>
+                  <div>context_data type: <code>{typeof currentTask.context_data}</code></div>
+                  <div>context_data keys: <code>{currentTask.context_data ? JSON.stringify(Object.keys(currentTask.context_data)) : '[]'}</code></div>
+                  <div>context_data content preview: <code>{JSON.stringify(currentTask.context_data).substring(0, 200)}...</code></div>
+                  <div>input_data type: <code>{typeof currentTask.input_data}</code></div>
+                  <div>input_data keys: <code>{currentTask.input_data ? JSON.stringify(Object.keys(currentTask.input_data)) : '[]'}</code></div>
+                  <div>task_instance_id: <code>{currentTask.task_instance_id}</code></div>
+                  <div>node_instance_id: <code>{currentTask.node_instance_id}</code></div>
+                  <div>workflow_instance_id: <code>{currentTask.workflow_instance_id}</code></div>
+                  <div>最后更新时间: <code>{new Date().toLocaleString()}</code></div>
+                </div>
                 <Collapse size="small">
                   {/* 新的context_data字段 */}
                   {currentTask.context_data && (
@@ -445,6 +520,11 @@ const Todo: React.FC = () => {
                                   完成时间: {upstreamNode.completed_at ? new Date(upstreamNode.completed_at).toLocaleString() : '未知'}
                                 </span>
                               </div>
+                              {upstreamNode.node_description && (
+                                <div style={{ marginBottom: '8px', fontSize: '13px', color: '#555', background: '#f9f9f9', padding: '4px 8px', borderRadius: '3px' }}>
+                                  <Text type="secondary">节点描述: {upstreamNode.node_description}</Text>
+                                </div>
+                              )}
                               {upstreamNode.output_data && Object.keys(upstreamNode.output_data).length > 0 ? (
                                 <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', maxHeight: '150px', overflow: 'auto' }}>
                                   {JSON.stringify(upstreamNode.output_data, null, 2)}
@@ -462,7 +542,7 @@ const Todo: React.FC = () => {
                           <div>
                             <p><Text strong>节点名称:</Text> {currentTask.context_data.current_node.name}</p>
                             <p><Text strong>节点类型:</Text> {currentTask.context_data.current_node.type}</p>
-                            <p><Text strong>节点描述:</Text> {currentTask.context_data.current_node.description}</p>
+                            <p><Text strong>任务描述:</Text> {currentTask.context_data.current_node.description}</p>
                             <p><Text strong>状态:</Text> {currentTask.context_data.current_node.status}</p>
                             {currentTask.context_data.current_node.input_data && Object.keys(currentTask.context_data.current_node.input_data).length > 0 && (
                               <div>

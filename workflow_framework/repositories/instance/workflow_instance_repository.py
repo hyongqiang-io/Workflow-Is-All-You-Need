@@ -428,6 +428,54 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             logger.error(f"   - 完整异常堆栈: {traceback.format_exc()}")
             raise
     
+    async def delete_instance_cascade(self, instance_id: uuid.UUID, soft_delete: bool = True) -> Dict[str, Any]:
+        """级联删除工作流实例及其相关数据"""
+        try:
+            logger.info(f"🗑️ 开始级联删除工作流实例: {instance_id} (软删除: {soft_delete})")
+            
+            # 统计删除的数据量
+            deletion_stats = {
+                'workflow_instance_id': str(instance_id),
+                'deleted_tasks': 0,
+                'deleted_nodes': 0,
+                'deleted_workflow': False,
+                'soft_delete': soft_delete
+            }
+            
+            # 1. 首先删除所有任务实例
+            logger.info(f"📋 步骤1: 删除相关任务实例")
+            from .task_instance_repository import TaskInstanceRepository
+            task_repo = TaskInstanceRepository()
+            deleted_tasks = await task_repo.delete_tasks_by_workflow_instance(instance_id, soft_delete)
+            deletion_stats['deleted_tasks'] = deleted_tasks
+            
+            # 2. 然后删除所有节点实例
+            logger.info(f"📋 步骤2: 删除相关节点实例")
+            from .node_instance_repository import NodeInstanceRepository
+            node_repo = NodeInstanceRepository()
+            deleted_nodes = await node_repo.delete_nodes_by_workflow_instance(instance_id, soft_delete)
+            deletion_stats['deleted_nodes'] = deleted_nodes
+            
+            # 3. 最后删除工作流实例本身
+            logger.info(f"📋 步骤3: 删除工作流实例")
+            workflow_deleted = await self.delete_instance(instance_id, soft_delete)
+            deletion_stats['deleted_workflow'] = workflow_deleted
+            
+            if workflow_deleted:
+                logger.info(f"✅ 级联删除工作流实例成功:")
+                logger.info(f"   - 工作流实例: {instance_id}")
+                logger.info(f"   - 删除的任务: {deleted_tasks} 个")
+                logger.info(f"   - 删除的节点实例: {deleted_nodes} 个")
+                logger.info(f"   - 删除方式: {'软删除' if soft_delete else '硬删除'}")
+            else:
+                logger.error(f"❌ 级联删除工作流实例失败: {instance_id}")
+            
+            return deletion_stats
+            
+        except Exception as e:
+            logger.error(f"级联删除工作流实例失败: {e}")
+            raise
+    
     async def get_execution_statistics(self, instance_id: uuid.UUID) -> Optional[ExecutionStatistics]:
         """获取实例执行统计"""
         try:

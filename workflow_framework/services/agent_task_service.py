@@ -86,12 +86,37 @@ class AgentTaskService:
                                     limit: int = 50) -> List[Dict[str, Any]]:
         """获取待处理的Agent任务"""
         try:
+            logger.info(f"🔍 [AGENT-SERVICE] 开始获取待处理Agent任务")
+            logger.info(f"   - Agent ID: {agent_id if agent_id else '所有Agent'}")  
+            logger.info(f"   - 限制数量: {limit}")
+            
             tasks = await self.task_repo.get_agent_tasks_for_processing(agent_id, limit)
-            logger.info(f"获取待处理Agent任务 {len(tasks)} 个")
+            
+            logger.info(f"📋 [AGENT-SERVICE] 获取待处理Agent任务完成")
+            logger.info(f"   - 找到任务数量: {len(tasks)}")
+            
+            if tasks:
+                logger.info(f"   - 任务详情:")
+                for i, task in enumerate(tasks[:3]):  # 只显示前3个任务
+                    task_id = task.get('task_instance_id', 'unknown')
+                    task_title = task.get('task_title', 'unknown')
+                    task_status = task.get('status', 'unknown')
+                    logger.info(f"     {i+1}. {task_title} (ID: {task_id}, 状态: {task_status})")
+                if len(tasks) > 3:
+                    logger.info(f"     ... 还有 {len(tasks) - 3} 个任务")
+            else:
+                logger.warning(f"⚠️ [AGENT-SERVICE] 没有找到待处理的Agent任务")
+                logger.info(f"   - 可能原因:")
+                logger.info(f"     1. 没有创建Agent类型的任务")
+                logger.info(f"     2. Agent任务状态不是PENDING")
+                logger.info(f"     3. Agent任务没有正确分配assigned_agent_id")
+                
             return tasks
             
         except Exception as e:
-            logger.error(f"获取待处理Agent任务失败: {e}")
+            logger.error(f"❌ [AGENT-SERVICE] 获取待处理Agent任务失败: {e}")
+            import traceback
+            logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
             raise
     
     async def submit_task_to_agent(self, task_id: uuid.UUID, 
@@ -133,38 +158,92 @@ class AgentTaskService:
     async def process_agent_task(self, task_id: uuid.UUID) -> Dict[str, Any]:
         """处理单个Agent任务"""
         try:
+            logger.info(f"🚀 [AGENT-PROCESS] 开始处理Agent任务: {task_id}")
+            
             # 获取任务详情
             task = await self.task_repo.get_task_by_id(task_id)
             if not task:
+                logger.error(f"❌ [AGENT-PROCESS] 任务不存在: {task_id}")
                 raise ValueError("任务不存在")
             
+            logger.info(f"📋 [AGENT-PROCESS] 任务详情获取成功:")
+            logger.info(f"   - 任务标题: {task['task_title']}")
+            logger.info(f"   - 任务类型: {task.get('task_type', 'unknown')}")
+            logger.info(f"   - 当前状态: {task.get('status', 'unknown')}")
+            logger.info(f"   - 处理器ID: {task.get('processor_id', 'none')}")
+            logger.info(f"   - 分配Agent ID: {task.get('assigned_agent_id', 'none')}")
+            logger.info(f"   - 优先级: {task.get('priority', 0)}")
+            
             # 更新任务状态为进行中
+            logger.info(f"⏳ [AGENT-PROCESS] 更新任务状态为IN_PROGRESS")
             update_data = TaskInstanceUpdate(status=TaskInstanceStatus.IN_PROGRESS)
             await self.task_repo.update_task(task_id, update_data)
+            logger.info(f"✅ [AGENT-PROCESS] 任务状态更新成功")
             
             start_time = datetime.now()
-            logger.info(f"开始处理Agent任务: {task['task_title']}")
+            logger.info(f"⏰ [AGENT-PROCESS] 任务开始时间: {start_time.isoformat()}")
             
             # 获取Agent信息
             agent_id = task.get('assigned_agent_id')
-            if not agent_id:
-                raise ValueError("任务未分配Agent")
+            logger.info(f"🔍 [AGENT-PROCESS] 检查Agent分配: {agent_id}")
             
+            # 如果任务没有直接分配Agent，尝试从processor获取
+            if not agent_id:
+                processor_id = task.get('processor_id')
+                logger.warning(f"⚠️ [AGENT-PROCESS] 任务未直接分配Agent，尝试从processor获取: {processor_id}")
+                
+                if processor_id:
+                    # 从processor获取关联的agent
+                    from ..repositories.processor.processor_repository import ProcessorRepository
+                    processor_repo = ProcessorRepository()
+                    processor = await processor_repo.get_processor_with_details(processor_id)
+                    if processor and processor.get('agent_id'):
+                        agent_id = processor['agent_id']
+                        logger.info(f"✅ [AGENT-PROCESS] 从processor获取到Agent ID: {agent_id}")
+                    else:
+                        logger.error(f"❌ [AGENT-PROCESS] Processor未关联Agent: {processor_id}")
+                        raise ValueError(f"Processor {processor_id} 未关联Agent")
+                else:
+                    logger.error(f"❌ [AGENT-PROCESS] 任务既没有assigned_agent_id也没有processor_id")
+                    raise ValueError("任务未分配Agent")
+            
+            logger.info(f"🤖 [AGENT-PROCESS] 获取Agent详情: {agent_id}")
             agent = await self.agent_repo.get_agent_by_id(agent_id)
             if not agent:
-                raise ValueError("Agent不存在")
+                logger.error(f"❌ [AGENT-PROCESS] Agent不存在: {agent_id}")
+                raise ValueError(f"Agent不存在: {agent_id}")
+            
+            logger.info(f"✅ [AGENT-PROCESS] Agent详情获取成功:")
+            logger.info(f"   - Agent名称: {agent.get('agent_name', 'unknown')}")
+            logger.info(f"   - 模型: {agent.get('model_name', 'unknown')}")
+            logger.info(f"   - Base URL: {agent.get('base_url', 'none')}")
+            logger.info(f"   - API Key存在: {'是' if agent.get('api_key') else '否'}")
             
             # 准备AI任务数据（与人类任务一致的内容，但整理成AI可接收的形式）
             input_data = task.get('input_data', {})
+            logger.info(f"📊 [AGENT-PROCESS] 准备任务数据:")
+            logger.info(f"   - 输入数据大小: {len(str(input_data))} 字符")
+            logger.info(f"   - 输入数据类型: {type(input_data)}")
+            if isinstance(input_data, dict):
+                logger.info(f"   - 输入数据键: {list(input_data.keys())}")
             
             # 构建系统 Prompt（使用任务的详细描述）
+            logger.info(f"🔨 [AGENT-PROCESS] 构建系统Prompt")
             system_prompt = self._build_system_prompt(task)
+            logger.info(f"   - 系统Prompt长度: {len(system_prompt)} 字符")
+            logger.info(f"   - 系统Prompt预览: {system_prompt[:200]}...")
             
             # 预处理上游上下文（整理成补充信息）
+            logger.info(f"🔄 [AGENT-PROCESS] 预处理上游上下文")
             context_info = self._preprocess_upstream_context(input_data)
+            logger.info(f"   - 上下文信息长度: {len(context_info)} 字符")
+            logger.info(f"   - 上下文信息预览: {context_info[:200]}...")
             
             # 构建用户消息（作为任务输入）
+            logger.info(f"✉️ [AGENT-PROCESS] 构建用户消息")
             user_message = self._build_user_message(task, context_info)
+            logger.info(f"   - 用户消息长度: {len(user_message)} 字符")
+            logger.info(f"   - 用户消息预览: {user_message[:200]}...")
             
             # 整理成AI Client可接收的数据结构
             ai_client_data = {
@@ -178,14 +257,30 @@ class AgentTaskService:
                 }
             }
             
+            logger.info(f"📦 [AGENT-PROCESS] AI Client数据准备完成:")
+            logger.info(f"   - 任务ID: {ai_client_data['task_id']}")
+            logger.info(f"   - 系统Prompt: {len(ai_client_data['system_prompt'])} 字符")
+            logger.info(f"   - 用户消息: {len(ai_client_data['user_message'])} 字符")
+            logger.info(f"   - 元数据: {ai_client_data['task_metadata']}")
+            
             # 调用Agent处理
+            logger.info(f"🚀 [AGENT-PROCESS] 开始调用Agent API")
             result = await self._call_agent_api(agent, ai_client_data)
+            logger.info(f"✅ [AGENT-PROCESS] Agent API调用成功")
+            logger.info(f"   - 结果类型: {type(result)}")
+            logger.info(f"   - 结果键: {list(result.keys()) if isinstance(result, dict) else 'N/A'}")
             
             # 计算执行时间
             end_time = datetime.now()
             actual_duration = int((end_time - start_time).total_seconds() / 60)
             
+            logger.info(f"⏰ [AGENT-PROCESS] 任务执行完成:")
+            logger.info(f"   - 开始时间: {start_time.isoformat()}")
+            logger.info(f"   - 结束时间: {end_time.isoformat()}")
+            logger.info(f"   - 实际用时: {actual_duration} 分钟")
+            
             # 更新任务状态为已完成
+            logger.info(f"💾 [AGENT-PROCESS] 更新任务状态为COMPLETED")
             complete_update = TaskInstanceUpdate(
                 status=TaskInstanceStatus.COMPLETED,
                 output_data=result,
@@ -194,8 +289,61 @@ class AgentTaskService:
             )
             
             updated_task = await self.task_repo.update_task(task_id, complete_update)
+            logger.info(f"✅ [AGENT-PROCESS] 任务状态更新为COMPLETED成功")
             
-            logger.info(f"Agent任务处理完成: {task['task_title']} (耗时: {actual_duration}分钟)")
+            if updated_task:
+                logger.info(f"📋 [AGENT-PROCESS] 更新后任务状态: {updated_task.get('status', 'unknown')}")
+            else:
+                logger.warning(f"⚠️ [AGENT-PROCESS] 任务更新返回空结果")
+            
+            # 显示Agent输出结果
+            logger.info(f"🎯 [AGENT-PROCESS] === AGENT输出结果 ===")
+            logger.info(f"   📝 任务标题: {task['task_title']}")
+            logger.info(f"   ⏱️  处理时长: {actual_duration}分钟")
+            logger.info(f"   📊 结果概览:")
+            
+            if isinstance(result, dict):
+                # 显示结构化结果
+                analysis_result = result.get('analysis_result', 'N/A')
+                if analysis_result and analysis_result != 'N/A':
+                    logger.info(f"      💡 分析结果: {analysis_result[:200]}{'...' if len(str(analysis_result)) > 200 else ''}")
+                
+                key_findings = result.get('key_findings', [])
+                if key_findings:
+                    logger.info(f"      🔍 关键发现 ({len(key_findings)}个):")
+                    for i, finding in enumerate(key_findings[:3]):
+                        logger.info(f"         {i+1}. {finding}")
+                    if len(key_findings) > 3:
+                        logger.info(f"         ... 还有{len(key_findings)-3}个发现")
+                
+                recommendations = result.get('recommendations', [])
+                if recommendations:
+                    logger.info(f"      💡 建议 ({len(recommendations)}个):")
+                    for i, rec in enumerate(recommendations[:3]):
+                        logger.info(f"         {i+1}. {rec}")
+                    if len(recommendations) > 3:
+                        logger.info(f"         ... 还有{len(recommendations)-3}个建议")
+                
+                confidence_score = result.get('confidence_score', 0)
+                if confidence_score:
+                    logger.info(f"      📈 置信度: {confidence_score}")
+                
+                summary = result.get('summary', 'N/A')
+                if summary and summary != 'N/A':
+                    logger.info(f"      📋 总结: {summary}")
+                
+                model_used = result.get('model_used', 'N/A')
+                if model_used and model_used != 'N/A':
+                    logger.info(f"      🤖 使用模型: {model_used}")
+                
+                token_usage = result.get('token_usage', {})
+                if token_usage:
+                    logger.info(f"      💰 Token使用: {token_usage}")
+            else:
+                # 非结构化结果
+                logger.info(f"      📄 输出内容: {str(result)[:300]}{'...' if len(str(result)) > 300 else ''}")
+            
+            logger.info(f"🎉 [AGENT-PROCESS] Agent任务处理完成: {task['task_title']}")
             
             # 通知任务完成回调
             completion_result = {
@@ -228,11 +376,27 @@ class AgentTaskService:
                             ai_client_data: Dict[str, Any]) -> Dict[str, Any]:
         """调用Agent API处理任务（仅使用OpenAI规范）"""
         try:
+            logger.info(f"🔌 [AGENT-API] 开始调用Agent API")
+            logger.info(f"   - Agent: {agent.get('agent_name', 'unknown')}")
+            logger.info(f"   - 模型: {agent.get('model_name', 'unknown')}")
+            logger.info(f"   - Base URL: {agent.get('base_url', 'none')}")
+            logger.info(f"   - 任务ID: {ai_client_data.get('task_id', 'unknown')}")
+            
             # 统一使用OpenAI规范格式处理所有AI任务
-            return await self._process_with_openai_format(agent, ai_client_data)
+            result = await self._process_with_openai_format(agent, ai_client_data)
+            
+            logger.info(f"✅ [AGENT-API] Agent API调用成功")
+            logger.info(f"   - 返回结果类型: {type(result)}")
+            if isinstance(result, dict):
+                logger.info(f"   - 结果包含的键: {list(result.keys())}")
+                logger.info(f"   - 置信度: {result.get('confidence_score', 'N/A')}")
+                
+            return result
                 
         except Exception as e:
-            logger.error(f"调用Agent API失败: {e}")
+            logger.error(f"❌ [AGENT-API] 调用Agent API失败: {e}")
+            import traceback
+            logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
             raise
     
     async def _process_with_openai_format(self, agent: Dict[str, Any], 
@@ -240,9 +404,24 @@ class AgentTaskService:
         """使用OpenAI规范格式处理任务"""
         try:
             task_title = ai_client_data['task_metadata']['task_title']
-            logger.info(f"使用OpenAI规范处理任务: {task_title}")
+            logger.info(f"🚀 [OPENAI-FORMAT] 使用OpenAI规范处理任务: {task_title}")
             
             # 构建符合OpenAI API规范的请求数据
+            logger.info(f"🛠️ [OPENAI-FORMAT] 构建 OpenAI API 请求数据")
+            
+            # 从 agent 的 parameters 中获取参数
+            agent_params = agent.get('parameters') or {}
+            model_name = agent.get('model_name', 'gpt-3.5-turbo')
+            temperature = agent_params.get('temperature', 0.7)
+            max_tokens = agent_params.get('max_tokens', 2000)
+            
+            # 添加调试日志
+            logger.info(f"🔧 [OPENAI-FORMAT] Agent参数:")
+            logger.info(f"   - model_name: {model_name}")
+            logger.info(f"   - agent_params: {agent_params}")
+            logger.info(f"   - temperature: {temperature}")
+            logger.info(f"   - max_tokens: {max_tokens}")
+            
             openai_request = {
                 'messages': [
                     {
@@ -254,13 +433,37 @@ class AgentTaskService:
                         'content': ai_client_data['user_message']
                     }
                 ],
-                'model': agent.get('model', 'gpt-3.5-turbo'),
-                'temperature': agent.get('temperature', 0.7),
-                'max_tokens': agent.get('max_tokens', 2000)
+                'model': model_name,
+                'temperature': temperature,
+                'max_tokens': max_tokens
             }
             
+            logger.info(f"   - 模型: {model_name}")
+            logger.info(f"   - 温度: {temperature}")
+            logger.info(f"   - 最大token: {max_tokens}")
+            logger.info(f"   - 消息数量: {len(openai_request['messages'])}")
+            logger.info(f"   - 系统消息长度: {len(openai_request['messages'][0]['content'])}")
+            logger.info(f"   - 用户消息长度: {len(openai_request['messages'][1]['content'])}")
+            
             # 调用OpenAI客户端处理任务
-            openai_result = await openai_client.process_task(openai_request)
+            logger.info(f"🔄 [OPENAI-FORMAT] 调用OpenAI客户端")
+            logger.info(f"   - 使用模型: {openai_request['model']}")
+            logger.info(f"   - Base URL: {agent.get('base_url', 'default')}")
+            logger.info(f"   - API Key存在: {'是' if agent.get('api_key') else '否'}")
+            
+            # 设置超时时间（防止卡死）
+            try:
+                openai_result = await asyncio.wait_for(
+                    openai_client.process_task(openai_request),
+                    timeout=300  # 5分钟超时
+                )
+                logger.info(f"✅ [OPENAI-FORMAT] OpenAI客户端调用成功")
+            except asyncio.TimeoutError:
+                logger.error(f"⏰ [OPENAI-FORMAT] OpenAI API调用超时（5分钟）")
+                raise RuntimeError("OpenAI API调用超时")
+            except Exception as api_e:
+                logger.error(f"❌ [OPENAI-FORMAT] OpenAI API调用异常: {api_e}")
+                raise
             
             if openai_result['success']:
                 # 从OpenAI格式的回复中提取结构化结果

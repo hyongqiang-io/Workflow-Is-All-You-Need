@@ -8,8 +8,10 @@ from datetime import datetime
 from typing import Dict, List, Any, Set, Optional
 import asyncio
 import logging
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+# 延迟导入避免循环依赖
+from ..models.instance import WorkflowInstanceStatus, WorkflowInstanceUpdate
 
 
 class WorkflowContextManager:
@@ -97,6 +99,9 @@ class WorkflowContextManager:
         await self._check_and_trigger_downstream_nodes(
             workflow_instance_id, node_base_id
         )
+        
+        # 检查工作流是否全部完成
+        await self._check_workflow_completion(workflow_instance_id)
     
     async def mark_node_failed(self,
                              workflow_instance_id: uuid.UUID,
@@ -284,3 +289,68 @@ class WorkflowContextManager:
         """检查节点是否准备好执行"""
         deps = self.node_dependencies.get(node_instance_id)
         return deps is not None and deps.get('ready_to_execute', False)
+    
+    async def _check_workflow_completion(self, workflow_instance_id: uuid.UUID):
+        """检查工作流是否完成并更新数据库状态"""
+        try:
+            if workflow_instance_id not in self.workflow_contexts:
+                return
+            
+            # 获取工作流状态
+            status_info = await self.get_workflow_status(workflow_instance_id)
+            current_status = status_info.get('status')
+            
+            logger.info(f"🔍 [工作流状态检查] 工作流 {workflow_instance_id}:")
+            logger.info(f"   - 当前状态: {current_status}")
+            logger.info(f"   - 总节点数: {status_info.get('total_nodes', 0)}")
+            logger.info(f"   - 已完成节点: {status_info.get('completed_nodes', 0)}")
+            logger.info(f"   - 失败节点: {status_info.get('failed_nodes', 0)}")
+            logger.info(f"   - 执行中节点: {status_info.get('executing_nodes', 0)}")
+            
+            # 如果工作流已完成或失败，更新数据库状态
+            if current_status in ['COMPLETED', 'FAILED']:
+                logger.info(f"🎯 [工作流状态检查] 工作流 {workflow_instance_id} 需要更新状态为: {current_status}")
+                
+                # 延迟导入工作流实例仓库避免循环依赖
+                from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+                workflow_repo = WorkflowInstanceRepository()
+                
+                # 准备输出数据
+                context = self.workflow_contexts[workflow_instance_id]
+                output_data = {
+                    'completion_time': datetime.utcnow().isoformat(),
+                    'node_outputs': context.get('node_outputs', {}),
+                    'execution_path': context.get('execution_path', []),
+                    'total_nodes': status_info.get('total_nodes', 0),
+                    'completed_nodes': status_info.get('completed_nodes', 0),
+                    'failed_nodes': status_info.get('failed_nodes', 0)
+                }
+                
+                # 更新工作流实例状态
+                if current_status == 'COMPLETED':
+                    update_data = WorkflowInstanceUpdate(
+                        status=WorkflowInstanceStatus.COMPLETED,
+                        output_data=output_data
+                    )
+                    logger.info(f"✅ [工作流状态检查] 标记工作流 {workflow_instance_id} 为已完成")
+                else:  # FAILED
+                    update_data = WorkflowInstanceUpdate(
+                        status=WorkflowInstanceStatus.FAILED,
+                        output_data=output_data,
+                        error_message="工作流中有节点执行失败"
+                    )
+                    logger.error(f"❌ [工作流状态检查] 标记工作流 {workflow_instance_id} 为失败")
+                
+                # 更新数据库
+                await workflow_repo.update_instance(workflow_instance_id, update_data)
+                
+                # 清理工作流上下文
+                await self.cleanup_workflow_context(workflow_instance_id)
+                
+            else:
+                logger.info(f"⏳ [工作流状态检查] 工作流 {workflow_instance_id} 仍在运行中")
+                
+        except Exception as e:
+            logger.error(f"❌ 检查工作流完成状态失败: {e}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")

@@ -4,8 +4,9 @@ Workflow Execution API
 """
 
 import uuid
+import json
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException, Depends, status, Request
+from fastapi import APIRouter, HTTPException, Depends, status, Request, Query
 from pydantic import BaseModel, Field, ValidationError
 from loguru import logger
 
@@ -17,6 +18,7 @@ from ..models.instance import (
     TaskInstanceStatus, TaskInstanceType
 )
 from ..utils.middleware import get_current_user_context, CurrentUser
+from ..utils.helpers import now_utc
 
 router = APIRouter(prefix="/api/execution", tags=["execution"])
 
@@ -502,20 +504,29 @@ async def get_workflow_task_flow(
         # 获取工作流边缘关系（用于前端流程图显示）
         edges_query = """
         SELECT 
-            e.from_node_id,
-            e.to_node_id,
-            e.condition_expression,
+            nc.from_node_id,
+            nc.to_node_id,
+            nc.condition_config,
             n1.name as from_node_name,
-            n2.name as to_node_name
-        FROM edge e
-        JOIN node n1 ON e.from_node_id = n1.node_base_id
-        JOIN node n2 ON e.to_node_id = n2.node_base_id
-        WHERE e.workflow_base_id = $1
-        AND e.is_deleted = FALSE
-        ORDER BY e.created_at
+            n2.name as to_node_name,
+            n1.node_base_id as from_node_base_id,
+            n2.node_base_id as to_node_base_id
+        FROM node_connection nc
+        JOIN node n1 ON nc.from_node_id = n1.node_id
+        JOIN node n2 ON nc.to_node_id = n2.node_id
+        WHERE nc.workflow_id = $1
+        ORDER BY nc.created_at
         """
         
-        edges = await node_repo.db.fetch_all(edges_query, workflow_instance['workflow_base_id'])
+        # Get the current workflow_id for edge query
+        workflow_query = """
+        SELECT workflow_id FROM workflow 
+        WHERE workflow_base_id = $1 AND is_current_version = TRUE
+        """
+        workflow_result = await node_repo.db.fetch_one(workflow_query, workflow_instance['workflow_base_id'])
+        current_workflow_id = workflow_result['workflow_id'] if workflow_result else None
+        
+        edges = await node_repo.db.fetch_all(edges_query, current_workflow_id) if current_workflow_id else []
         
         # 构建任务流程数据
         task_flow = {
@@ -612,7 +623,7 @@ async def get_workflow_task_flow(
                 "id": f"{edge['from_node_id']}-{edge['to_node_id']}",
                 "source": str(edge['from_node_id']),
                 "target": str(edge['to_node_id']),
-                "label": edge['condition_expression'],
+                "label": str(edge['condition_config']) if edge['condition_config'] else "",
                 "from_node_name": edge['from_node_name'],
                 "to_node_name": edge['to_node_name']
             }
@@ -791,147 +802,48 @@ async def get_task_details(
     task_id: uuid.UUID,
     current_user: CurrentUser = Depends(get_current_user_context)
 ):
-    """获取任务详情（增强版）"""
+    """获取任务详情（使用HumanTaskService优化版本）"""
     try:
-        from ..repositories.instance.task_instance_repository import TaskInstanceRepository
-        from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
-        from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+        logger.info(f"🔍 任务详情API: 获取任务 {task_id}")
         
-        task_repo = TaskInstanceRepository()
-        workflow_repo = WorkflowInstanceRepository()
-        node_repo = NodeInstanceRepository()
+        # 直接使用HumanTaskService的优化get_task_details方法
+        task_details = await human_task_service.get_task_details(task_id, current_user.user_id)
         
-        # 获取任务详细信息，包含完整的上下文
-        task_query = """
-        SELECT 
-            ti.*,
-            p.name as processor_name, 
-            p.type as processor_type,
-            u.username as assigned_user_name,
-            u.email as assigned_user_email,
-            a.agent_name as assigned_agent_name,
-            wi.instance_name as workflow_instance_name,
-            wi.input_data as workflow_input_data,
-            wi.context_data as workflow_context_data,
-            w.name as workflow_name,
-            n.name as node_name,
-            n.type as node_type,
-            n.task_description as node_task_description,
-            ni.input_data as node_input_data,
-            ni.output_data as node_output_data
-        FROM task_instance ti
-        LEFT JOIN processor p ON p.processor_id = ti.processor_id
-        LEFT JOIN "user" u ON u.user_id = ti.assigned_user_id
-        LEFT JOIN agent a ON a.agent_id = ti.assigned_agent_id
-        LEFT JOIN workflow_instance wi ON wi.workflow_instance_id = ti.workflow_instance_id
-        LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
-        LEFT JOIN node_instance ni ON ni.node_instance_id = ti.node_instance_id
-        LEFT JOIN node n ON n.node_id = ni.node_id
-        WHERE ti.task_instance_id = $1 AND ti.is_deleted = FALSE
-        """
-        
-        task = await task_repo.db.fetch_one(task_query, task_id)
-        
-        if not task:
+        if not task_details:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="任务不存在"
             )
         
-        # 权限检查：只有分配给用户的任务或管理员才能查看
-        if (str(task.get('assigned_user_id')) != str(current_user.user_id) and 
-            current_user.role not in ['admin', 'manager']):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="无权访问此任务"
-            )
+        logger.info(f"✅ 任务详情API: 成功获取任务详情")
         
-        # 解析JSON字段
-        input_data = json.loads(task.get('input_data', '{}')) if task.get('input_data') else {}
-        output_data = json.loads(task.get('output_data', '{}')) if task.get('output_data') else {}
-        context_data = json.loads(task.get('context_data', '{}')) if task.get('context_data') else {}
-        workflow_input_data = json.loads(task.get('workflow_input_data', '{}')) if task.get('workflow_input_data') else {}
-        workflow_context_data = json.loads(task.get('workflow_context_data', '{}')) if task.get('workflow_context_data') else {}
-        node_input_data = json.loads(task.get('node_input_data', '{}')) if task.get('node_input_data') else {}
-        node_output_data = json.loads(task.get('node_output_data', '{}')) if task.get('node_output_data') else {}
-        
-        # 构建增强的任务详情
-        enhanced_task = {
-            # 基本任务信息
-            "task_instance_id": str(task['task_instance_id']),
-            "task_title": task.get('task_title', ''),
-            "task_description": task.get('task_description', ''),
-            "task_type": task.get('task_type', ''),
-            "instructions": task.get('instructions', ''),
-            "priority": task.get('priority', 1),
-            "status": task.get('status', ''),
-            "estimated_duration": task.get('estimated_duration'),
-            "actual_duration": task.get('actual_duration'),
-            "result_summary": task.get('result_summary'),
-            "error_message": task.get('error_message'),
+        # 添加调试信息以帮助前端理解数据结构
+        context_debug = {}
+        if 'context_data' in task_details and 'upstream_context' in task_details:
+            context_data = task_details.get('context_data', {})
+            upstream_ctx = task_details['upstream_context']
             
-            # 时间信息
-            "created_at": task['created_at'].isoformat() if task.get('created_at') else None,
-            "assigned_at": task['assigned_at'].isoformat() if task.get('assigned_at') else None,
-            "started_at": task['started_at'].isoformat() if task.get('started_at') else None,
-            "completed_at": task['completed_at'].isoformat() if task.get('completed_at') else None,
-            "updated_at": task['updated_at'].isoformat() if task.get('updated_at') else None,
-            
-            # 分配信息
-            "assigned_user": {
-                "user_id": str(task['assigned_user_id']) if task.get('assigned_user_id') else None,
-                "username": task.get('assigned_user_name'),
-                "email": task.get('assigned_user_email')
-            } if task.get('assigned_user_id') else None,
-            
-            "assigned_agent": {
-                "agent_id": str(task['assigned_agent_id']) if task.get('assigned_agent_id') else None,
-                "agent_name": task.get('assigned_agent_name')
-            } if task.get('assigned_agent_id') else None,
-            
-            # 处理器信息
-            "processor": {
-                "processor_id": str(task['processor_id']) if task.get('processor_id') else None,
-                "name": task.get('processor_name'),
-                "type": task.get('processor_type')
-            },
-            
-            # 工作流上下文
-            "workflow_context": {
-                "workflow_id": str(task['workflow_instance_id']) if task.get('workflow_instance_id') else None,
-                "workflow_name": task.get('workflow_name'),
-                "instance_name": task.get('workflow_instance_name'),
-                "workflow_input_data": workflow_input_data,
-                "workflow_context_data": workflow_context_data
-            },
-            
-            # 节点上下文
-            "node_context": {
-                "node_instance_id": str(task['node_instance_id']) if task.get('node_instance_id') else None,
-                "node_name": task.get('node_name'),
-                "node_type": task.get('node_type'),
-                "node_task_description": task.get('node_task_description'),
-                "node_input_data": node_input_data,
-                "node_output_data": node_output_data
-            },
-            
-            # 任务数据
-            "input_data": input_data,
-            "output_data": output_data,
-            "context_data": context_data,
-            
-            # 用户权限
-            "user_permissions": {
-                "can_start": task.get('status') == 'assigned' and str(task.get('assigned_user_id')) == str(current_user.user_id),
-                "can_submit": task.get('status') == 'in_progress' and str(task.get('assigned_user_id')) == str(current_user.user_id),
-                "can_view_only": str(task.get('assigned_user_id')) != str(current_user.user_id),
-                "is_owner": str(task.get('assigned_user_id')) == str(current_user.user_id)
+            # 显示正确的context_data信息给前端
+            context_debug = {
+                "context_data_type": type(context_data).__name__,
+                "context_data_keys": list(context_data.keys()) if isinstance(context_data, dict) else [],
+                "context_data_content_preview": str(context_data)[:500] + "..." if len(str(context_data)) > 500 else str(context_data),
+                "input_data_type": type(task_details.get('input_data', {})).__name__,
+                "input_data_keys": list(task_details.get('input_data', {}).keys()) if isinstance(task_details.get('input_data'), dict) else [],
+                "task_instance_id": str(task_details.get('task_instance_id', '')),
+                "node_instance_id": str(task_details.get('node_context', {}).get('node_instance_id', '')),
+                "workflow_instance_id": str(task_details.get('workflow_context', {}).get('instance_name', '')),
+                "has_upstream_data": upstream_ctx.get('has_upstream_data', False),
+                "upstream_node_count": upstream_ctx.get('upstream_node_count', 0),
+                "upstream_results_preview": str(upstream_ctx.get('immediate_upstream_results', {}))[:200] + "..." if len(str(upstream_ctx.get('immediate_upstream_results', {}))) > 200 else str(upstream_ctx.get('immediate_upstream_results', {}))
             }
-        }
+        
+        # 将调试信息添加到返回数据中
+        task_details['debug_info'] = context_debug
         
         return {
             "success": True,
-            "data": enhanced_task,
+            "data": task_details,
             "message": "获取任务详情成功"
         }
         
@@ -1223,6 +1135,85 @@ async def cancel_task(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"取消任务失败: {str(e)}"
+        )
+
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(
+    task_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    删除任务实例
+    
+    只允许删除状态为 'completed' 或 'cancelled' 的任务
+    
+    Args:
+        task_id: 任务ID
+        current_user: 当前用户
+        
+    Returns:
+        删除结果
+    """
+    try:
+        logger.info(f"🗑️ 用户 {current_user.username} 请求删除任务: {task_id}")
+        
+        # 1. 检查任务是否存在和权限
+        from ..repositories.instance.task_instance_repository import TaskInstanceRepository
+        task_repo = TaskInstanceRepository()
+        
+        task = await task_repo.get_task_by_id(task_id)
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="任务不存在"
+            )
+        
+        # 2. 检查权限：只有任务分配者可以删除
+        if task.get('assigned_user_id') != current_user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权删除此任务"
+            )
+        
+        # 3. 检查任务状态：只允许删除已完成或已取消的任务
+        task_status = task.get('status', '').lower()
+        if task_status not in ['completed', 'cancelled']:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"只能删除已完成或已取消的任务，当前状态: {task_status}"
+            )
+        
+        # 4. 执行软删除
+        success = await task_repo.delete_task(task_id, soft_delete=True)
+        
+        if success:
+            logger.info(f"✅ 用户 {current_user.username} 成功删除任务: {task.get('task_title', '未知')}")
+            return {
+                "success": True,
+                "data": {
+                    "task_id": str(task_id),
+                    "task_title": task.get('task_title', '未知'),
+                    "previous_status": task_status,
+                    "deleted_at": now_utc().isoformat()
+                },
+                "message": "任务已删除"
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="删除任务失败"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除任务异常: {e}")
+        import traceback
+        logger.error(f"错误堆栈: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"删除任务失败: {str(e)}"
         )
 
 
@@ -2089,4 +2080,161 @@ async def get_workflow_nodes_detail(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取工作流节点详细信息失败: {str(e)}"
+        )
+
+
+# ==================== 级联删除端点 ====================
+
+@router.delete("/instances/{workflow_instance_id}/cascade")
+async def delete_workflow_instance_cascade(
+    workflow_instance_id: uuid.UUID,
+    soft_delete: bool = Query(True, description="是否软删除"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    级联删除工作流实例及其所有相关数据
+    
+    Args:
+        workflow_instance_id: 工作流实例ID
+        soft_delete: 是否软删除（默认True）
+        current_user: 当前用户
+        
+    Returns:
+        级联删除结果统计
+    """
+    try:
+        from ..services.cascade_deletion_service import cascade_deletion_service
+        from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+        
+        workflow_instance_repo = WorkflowInstanceRepository()
+        
+        # 检查工作流实例是否存在和权限
+        existing_instance = await workflow_instance_repo.get_instance_by_id(workflow_instance_id)
+        if not existing_instance:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="工作流实例不存在"
+            )
+        
+        # 检查权限：只有工作流执行者可以删除实例
+        if existing_instance.get('executor_id') != current_user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权删除此工作流实例"
+            )
+        
+        # 执行级联删除
+        deletion_result = await cascade_deletion_service.delete_workflow_instance_cascade(
+            workflow_instance_id, soft_delete
+        )
+        
+        if deletion_result['deleted_workflow']:
+            logger.info(f"用户 {current_user.username} 级联删除了工作流实例: {workflow_instance_id}")
+            return {
+                "success": True,
+                "message": "工作流实例级联删除成功",
+                "data": {
+                    "message": "工作流实例及其所有相关数据已删除",
+                    "deletion_stats": deletion_result
+                }
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="级联删除工作流实例失败"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"级联删除工作流实例异常: {e}")
+        import traceback
+        logger.error(f"错误堆栈: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="级联删除工作流实例失败，请稍后再试"
+        )
+
+
+@router.get("/instances/{workflow_instance_id}/deletion-preview")
+async def get_workflow_instance_deletion_preview(
+    workflow_instance_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    预览工作流实例删除将影响的数据量
+    
+    Args:
+        workflow_instance_id: 工作流实例ID
+        current_user: 当前用户
+        
+    Returns:
+        删除预览数据
+    """
+    try:
+        from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+        
+        workflow_instance_repo = WorkflowInstanceRepository()
+        
+        # 检查工作流实例是否存在和权限
+        existing_instance = await workflow_instance_repo.get_instance_by_id(workflow_instance_id)
+        if not existing_instance:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="工作流实例不存在"
+            )
+        
+        # 检查权限
+        if existing_instance.get('executor_id') != current_user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权查看此工作流实例"
+            )
+        
+        # 获取删除预览
+        nodes_query = """
+            SELECT COUNT(*) as node_count
+            FROM node_instance 
+            WHERE workflow_instance_id = $1 AND is_deleted = FALSE
+        """
+        node_result = await workflow_instance_repo.db.fetch_one(nodes_query, workflow_instance_id)
+        
+        tasks_query = """
+            SELECT COUNT(*) as task_count,
+                   COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_tasks,
+                   COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as in_progress_tasks,
+                   COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_tasks
+            FROM task_instance 
+            WHERE workflow_instance_id = $1 AND is_deleted = FALSE
+        """
+        task_result = await workflow_instance_repo.db.fetch_one(tasks_query, workflow_instance_id)
+        
+        preview = {
+            'workflow_instance_id': str(workflow_instance_id),
+            'instance_name': existing_instance.get('instance_name', '未命名'),
+            'status': existing_instance.get('status'),
+            'total_node_instances': int(node_result.get('node_count', 0)),
+            'total_task_instances': int(task_result.get('task_count', 0)),
+            'task_status_summary': {
+                'completed': int(task_result.get('completed_tasks', 0)),
+                'in_progress': int(task_result.get('in_progress_tasks', 0)),
+                'pending': int(task_result.get('pending_tasks', 0))
+            }
+        }
+        
+        return {
+            "success": True,
+            "message": "删除预览获取成功",
+            "data": preview
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取删除预览异常: {e}")
+        import traceback
+        logger.error(f"错误堆栈: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取删除预览失败，请稍后再试"
         )

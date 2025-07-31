@@ -251,6 +251,22 @@ class NodeConnectionRepository:
             if not workflow:
                 raise ValueError("工作流不存在")
             
+            # 检查连接是否已存在
+            check_query = """
+                SELECT * FROM node_connection 
+                WHERE from_node_id = $1 AND to_node_id = $2 AND workflow_id = $3
+            """
+            existing_connection = await self.db.fetch_one(
+                check_query,
+                from_node['node_id'],
+                to_node['node_id'],
+                workflow['workflow_id']
+            )
+            
+            if existing_connection:
+                logger.info(f"连接已存在，返回现有连接: {from_node['node_id']} -> {to_node['node_id']}")
+                return existing_connection
+            
             # 创建连接
             query = """
                 INSERT INTO node_connection 

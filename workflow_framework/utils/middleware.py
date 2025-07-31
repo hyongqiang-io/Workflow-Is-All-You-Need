@@ -55,7 +55,12 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     
     # 获取用户信息
     auth_service = AuthService()
-    user = await auth_service.get_user_by_id(uuid.UUID(token_data.user_id))
+    try:
+        user_uuid = uuid.UUID(token_data.user_id)
+    except ValueError:
+        raise AuthenticationException("无效的用户ID格式")
+    
+    user = await auth_service.get_user_by_id(user_uuid)
     
     if user is None:
         raise AuthenticationException("用户不存在")

@@ -74,7 +74,7 @@ class NodeService:
             
             # 检查权限 - 只有工作流创建者可以添加节点
             if workflow['creator_id'] != user_id:
-                raise ValidationError("只有工作流创建者可以添加节点", "permission")
+                raise ValueError("只有工作流创建者可以添加节点")
             
             # 创建节点
             node_record = await self.node_repository.create_node(node_data)
@@ -342,7 +342,11 @@ class NodeService:
         try:
             # 检查工作流权限
             workflow = await self.workflow_repository.get_workflow_by_base_id(workflow_base_id)
-            if not workflow or workflow['creator_id'] != user_id:
+            if not workflow:
+                raise ValueError("工作流不存在")
+            
+            # 权限检查
+            if workflow['creator_id'] != user_id:
                 raise ValueError("无权访问此工作流的连接")
             
             # 获取连接列表

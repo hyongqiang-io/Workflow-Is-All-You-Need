@@ -23,6 +23,18 @@ interface Task {
     };
   };
   output_data?: any;
+  context_data?: {
+    workflow?: any;
+    current_node?: any;
+    upstream_outputs?: Array<{
+      node_name: string;
+      node_description?: string;
+      node_instance_id: string;
+      output_data: any;
+      completed_at?: string;
+    }>;
+    context_generated_at?: string;
+  };
   result_summary?: string;
   estimated_duration?: number;
   actual_duration?: number;
@@ -45,6 +57,7 @@ interface TaskState {
   requestHelp: (taskId: string, helpMessage: string) => Promise<void>;
   rejectTask: (taskId: string, reason: string) => Promise<void>;
   cancelTask: (taskId: string, reason?: string) => Promise<void>;
+  deleteTask: (taskId: string) => Promise<void>;
   saveTaskDraft: (taskId: string, draftData: any) => void;
   getTaskDraft: (taskId: string) => any;
   clearTaskDraft: (taskId: string) => void;
@@ -96,6 +109,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         completed_at: task.completed_at || task.completedAt,
         input_data: task.input_data || task.inputData || {},
         output_data: task.output_data || task.outputData,
+        context_data: task.context_data || {},
         result_summary: task.result_summary || task.resultSummary,
         estimated_duration: task.estimated_duration || task.estimatedDuration,
         actual_duration: task.actual_duration || task.actualDuration,
@@ -117,15 +131,40 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   getTaskDetails: async (taskId: string) => {
     set({ loading: true, error: null });
     try {
+      console.log('🔍 TaskStore: 开始获取任务详情', taskId);
       const response: any = await taskAPI.getTaskDetails(taskId);
+      console.log('📡 TaskStore: API响应', response);
+      
       if (response.success && response.data) {
-        set({ currentTask: response.data, loading: false });
+        console.log('✅ TaskStore: 任务详情获取成功');
+        console.log('📊 TaskStore: context_data检查', response.data.context_data);
+        
+        // 更新任务列表中对应的任务（如果存在）
+        const currentTasks = get().tasks;
+        const updatedTasks = currentTasks.map(task => 
+          task.task_instance_id === taskId ? { ...task, ...response.data } : task
+        );
+        
+        set({ 
+          currentTask: response.data, 
+          tasks: updatedTasks,
+          loading: false 
+        });
+      } else if (response && !response.success) {
+        console.error('❌ TaskStore: API返回错误', response.message);
+        set({ 
+          currentTask: null, 
+          loading: false,
+          error: response.message || '获取任务详情失败'
+        });
       } else {
+        console.error('❌ TaskStore: 响应格式异常', response);
         set({ currentTask: null, loading: false });
       }
     } catch (error: any) {
+      console.error('❌ TaskStore: 获取任务详情异常', error);
       set({ 
-        error: error.response?.data?.detail || '获取任务详情失败', 
+        error: error.response?.data?.detail || error.message || '获取任务详情失败', 
         loading: false 
       });
     }
@@ -253,6 +292,53 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     } catch (error) {
       console.error('获取草稿失败:', error);
       return null;
+    }
+  },
+
+  deleteTask: async (taskId: string) => {
+    console.log('🚀 taskStore.deleteTask 开始执行:', taskId);
+    set({ loading: true, error: null });
+    
+    try {
+      const token = localStorage.getItem('token');
+      console.log('🔐 获取到token:', token ? '有token' : '无token');
+      
+      const url = `http://localhost:8001/api/execution/tasks/${taskId}`;
+      console.log('📡 准备发送DELETE请求到:', url);
+      
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      console.log('📨 收到响应，状态码:', response.status);
+      
+      const data = await response.json();
+      console.log('📄 响应数据:', data);
+      
+      if (response.ok && data.success) {
+        console.log('✅ 删除请求成功，开始更新本地任务列表');
+        // 从任务列表中移除已删除的任务
+        const currentTasks = get().tasks;
+        console.log('📝 当前任务数量:', currentTasks.length);
+        const updatedTasks = currentTasks.filter(task => task.task_instance_id !== taskId);
+        console.log('📝 更新后任务数量:', updatedTasks.length);
+        set({ tasks: updatedTasks, loading: false });
+        
+        // 清除相关的草稿
+        get().clearTaskDraft(taskId);
+        console.log('🧹 已清除草稿数据');
+      } else {
+        console.error('❌ 删除请求失败:', data);
+        throw new Error(data.detail || '删除任务失败');
+      }
+    } catch (error: any) {
+      console.error('❌ deleteTask 异常:', error);
+      set({ error: error.message || '删除任务失败', loading: false });
+      throw error;
     }
   },
 
