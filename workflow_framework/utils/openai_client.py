@@ -39,7 +39,10 @@ class OpenAIClient:
             # 构建请求参数
             model_name = model or task_data.get('model', self.model)
             
-            logger.info(f"使用OpenAI模型 {model_name} 处理任务")
+            logger.info(f"🚀 [OPENAI-CLIENT] 开始处理OpenAI任务")
+            logger.info(f"   - 使用模型: {model_name}")
+            logger.info(f"   - Base URL: {self.base_url}")
+            logger.info(f"   - API Key存在: {'是' if self.api_key else '否'}")
             
             # 从task_data中提取messages
             messages = task_data.get('messages', [])

@@ -129,6 +129,7 @@ class HumanTaskService:
                 
                 # ===== 任务数据 =====
                 'input_data': task.get('input_data', {}),
+                'context_data': task.get('context_data', {}),  # 添加原始context_data
                 'output_data': task.get('output_data', {}),
                 'result_summary': task.get('result_summary', ''),
                 'error_message': task.get('error_message', ''),
@@ -156,14 +157,14 @@ class HumanTaskService:
             
             query = """
             SELECT ni.*, n.name as node_name, n.task_description as node_description, 
-                   n.type as node_type, n.task_description
+                   n.type as node_type
             FROM node_instance ni
             JOIN node n ON ni.node_id = n.node_id
-            WHERE ni.node_instance_id = %s
+            WHERE ni.node_instance_id = $1
             """
             
-            result = await node_instance_repo.execute_query(query, [node_instance_id])
-            return result[0] if result else None
+            result = await node_instance_repo.db.fetch_one(query, node_instance_id)
+            return dict(result) if result else None
             
         except Exception as e:
             logger.error(f"获取节点信息失败: {e}")
@@ -188,45 +189,84 @@ class HumanTaskService:
     async def _get_upstream_context(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """获取任务的上游上下文信息"""
         try:
-            input_data = task.get('input_data', {})
+            # 从context_data中获取上游数据（修复：之前错误地从input_data获取）
+            context_data = task.get('context_data', {})
+            logger.info(f"获取上游上下文 - context_data keys: {list(context_data.keys()) if isinstance(context_data, dict) else 'not dict'}")
             
-            # 获取上游节点的直接数据
-            immediate_upstream = input_data.get('immediate_upstream', {})
+            # 获取上游节点输出数据（修复：处理列表格式的upstream_outputs）
+            upstream_outputs = context_data.get('upstream_outputs', [])
+            logger.info(f"upstream_outputs类型: {type(upstream_outputs)}, 数量: {len(upstream_outputs) if isinstance(upstream_outputs, (list, dict)) else 'unknown'}")
             
-            # 获取工作流全局数据
-            workflow_global = input_data.get('workflow_global', {})
-            
-            # 获取节点级别信息
-            node_info = input_data.get('node_info', {})
+            # 获取工作流信息
+            workflow_info = context_data.get('workflow', {})
             
             # 格式化上游数据以便前端展示
             formatted_upstream = {}
-            for node_id, node_data in immediate_upstream.items():
-                if isinstance(node_data, dict):
-                    formatted_upstream[node_id] = {
-                        'node_name': node_data.get('node_name', f'节点_{node_id[:8]}'),
-                        'output_data': node_data.get('output_data', {}),
-                        'completed_at': node_data.get('completed_at', ''),
-                        'summary': self._extract_data_summary(node_data.get('output_data', {}))
-                    }
             
-            return {
+            # 处理列表格式的upstream_outputs
+            if isinstance(upstream_outputs, list):
+                logger.info(f"处理列表格式的upstream_outputs，共{len(upstream_outputs)}个节点")
+                for i, node_data in enumerate(upstream_outputs):
+                    if isinstance(node_data, dict):
+                        node_base_id = node_data.get('node_base_id', f'unknown_{i}')
+                        output_data = node_data.get('output_data', {})
+                        
+                        if output_data:  # 只有当节点有输出数据时才包含
+                            formatted_upstream[node_base_id] = {
+                                'node_name': node_data.get('node_name', f'节点_{node_base_id[:8]}'),
+                                'output_data': output_data,
+                                'completed_at': node_data.get('completed_at', ''),
+                                'status': node_data.get('status', ''),
+                                'node_description': node_data.get('node_description', ''),
+                                'source': node_data.get('source', 'unknown'),
+                                'summary': self._extract_data_summary(output_data)
+                            }
+                            logger.info(f"找到上游节点数据: {node_base_id} - {node_data.get('node_name', '未知节点')} - 输出: {output_data}")
+            
+            # 兼容字典格式（如果有的话）
+            elif isinstance(upstream_outputs, dict):
+                logger.info(f"处理字典格式的upstream_outputs，共{len(upstream_outputs)}个节点")
+                for node_base_id, node_data in upstream_outputs.items():
+                    if isinstance(node_data, dict):
+                        output_data = node_data.get('output_data', {})
+                        if output_data:  # 只有当节点有输出数据时才包含
+                            formatted_upstream[node_base_id] = {
+                                'node_name': node_data.get('node_name', f'节点_{node_base_id[:8]}'),
+                                'output_data': output_data,
+                                'completed_at': node_data.get('completed_at', ''),
+                                'status': node_data.get('status', ''),
+                                'summary': self._extract_data_summary(output_data)
+                            }
+                            logger.info(f"找到上游节点数据: {node_base_id} - {node_data.get('node_name', '未知节点')}")
+            
+            # 从input_data获取补充信息（保持兼容性）
+            input_data = task.get('input_data', {})
+            workflow_global = input_data.get('workflow_global', {})
+            
+            result = {
                 'immediate_upstream_results': formatted_upstream,
-                'upstream_node_count': len(immediate_upstream),
+                'upstream_node_count': len(formatted_upstream),
                 'workflow_global_data': workflow_global,
                 'workflow_execution_path': workflow_global.get('execution_path', []),
-                'workflow_start_time': workflow_global.get('execution_start_time', ''),
-                'has_upstream_data': len(immediate_upstream) > 0
+                'workflow_start_time': workflow_info.get('created_at', ''),
+                'workflow_name': workflow_info.get('name', ''),
+                'has_upstream_data': len(formatted_upstream) > 0
             }
+            
+            logger.info(f"上游上下文结果: has_upstream_data={result['has_upstream_data']}, upstream_node_count={result['upstream_node_count']}")
+            return result
             
         except Exception as e:
             logger.error(f"获取上游上下文失败: {e}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
             return {
                 'immediate_upstream_results': {},
                 'upstream_node_count': 0,
                 'workflow_global_data': {},
                 'workflow_execution_path': [],
                 'workflow_start_time': '',
+                'workflow_name': '',
                 'has_upstream_data': False
             }
     

@@ -1,0 +1,162 @@
+# 日志文件
+*.log
+backend.log
+backend_new.log
+frontend.log
+server.log
+task_events.log
+test_output*.log
+
+# Python 缓存和编译文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+PYMANIFEST
+
+# 测试文件（根据您的删除记录）
+test_*.py
+*_test.py
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# 演示和示例文件
+*_demo.py
+*_example.py
+sample_*.py
+example_*.py
+
+# Markdown 文档（根据您的删除记录）
+*.md
+!README.md
+!LICENSE.md
+
+# 环境变量和配置
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE 和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Node.js (针对 frontend 目录)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+.npm
+.eslintcache
+.stylelintcache
+
+# React build 输出
+frontend/build/
+frontend/dist/
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 临时文件
+*.tmp
+*.temp
+nul
+
+# 系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 备份文件
+*.bak
+*.backup
+*.old
+
+# 压缩文件
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# 特定于项目的忽略
+# 根据您的删除记录添加的规则
+add_*.py
+analyze_*.py
+api_test.py
+apply_*.py
+ascii_*.py
+check_*.py
+complete_*.py
+comprehensive_*.py
+configure_*.py
+create_*.py
+debug_*.py
+enhanced_*.py
+execution_*.py
+final_*.py
+fix_*.py
+live_*.py
+processor_*.py
+quick_*.py
+restart_*.py
+run_*.py
+simple_*.py
+start_*.py
+update_*.py
+
+# SQL 脚本（如果不需要版本控制）
+*.sql
+!setup_database.sql
+
+# 批处理文件
+*.bat
+!fix_and_start_frontend.bat

@@ -247,7 +247,7 @@ const ReactFlowExample: React.FC = () => {
           </Form.Item>
           <Form.Item
             name="description"
-            label="节点描述"
+            label="任务描述"
           >
             <Input.TextArea 
               placeholder="描述这个节点的功能和作用" 

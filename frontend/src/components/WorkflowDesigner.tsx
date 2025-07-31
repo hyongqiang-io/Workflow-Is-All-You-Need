@@ -368,16 +368,35 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
       // 加载节点连接
       try {
         const connectionResponse: any = await nodeAPI.getWorkflowConnections(workflowId);
-        console.log('连接API响应:', connectionResponse);
+        console.log('🔗 连接API响应:', connectionResponse);
+        console.log('📋 响应详情:');
+        console.log('  - success:', connectionResponse?.success);
+        console.log('  - data:', connectionResponse?.data);
+        console.log('  - connections:', connectionResponse?.data?.connections);
         
         let connections = [];
         if (connectionResponse && connectionResponse.success && connectionResponse.data && connectionResponse.data.connections) {
           connections = connectionResponse.data.connections;
+          console.log('✅ 使用标准格式的连接数据');
         } else if (Array.isArray(connectionResponse)) {
           connections = connectionResponse;
+          console.log('✅ 使用数组格式的连接数据');
+        } else {
+          console.log('❌ 未识别的连接数据格式');
         }
         
-        console.log('处理后的连接数据:', connections);
+        console.log('🔄 处理后的连接数据:', connections);
+        console.log('📊 连接数据详情:');
+        connections.forEach((conn: any, index: number) => {
+          console.log(`  连接 ${index + 1}:`, {
+            from_node_base_id: conn.from_node_base_id,
+            to_node_base_id: conn.to_node_base_id,
+            from_node_name: conn.from_node_name,
+            to_node_name: conn.to_node_name,
+            connection_type: conn.connection_type,
+            full_data: conn
+          });
+        });
         
         const flowEdges: Edge[] = connections.map((conn: any, index: number) => ({
           id: conn.connection_id || `e${index}`,
@@ -388,25 +407,39 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
           targetHandle: `${conn.to_node_base_id}-target`,
         }));
         
-        console.log('转换后的ReactFlow边:', flowEdges);
-        setEdges(flowEdges);
-      } catch (connectionError) {
-        console.warn('加载连接数据失败:', connectionError);
-        // 对于新创建的工作流或权限问题，这是正常的，初始化为空连接
-        setEdges([]);
-        // 不显示错误消息，因为这是预期的行为
-        const flowEdges: Edge[] = [];
-        for (let i = 0; i < flowNodes.length - 1; i++) {
-          flowEdges.push({
-            id: `e${i}`,
-            source: flowNodes[i].id,
-            target: flowNodes[i + 1].id,
-            type: 'smoothstep',
-            sourceHandle: `${flowNodes[i].id}-source`,
-            targetHandle: `${flowNodes[i + 1].id}-target`,
+        console.log('⚡ 转换后的ReactFlow边:', flowEdges);
+        console.log('📏 ReactFlow边详情:');
+        flowEdges.forEach((edge: Edge, index: number) => {
+          console.log(`  边 ${index + 1}:`, {
+            id: edge.id,
+            source: edge.source,
+            target: edge.target,
+            sourceHandle: edge.sourceHandle,
+            targetHandle: edge.targetHandle
           });
-        }
+        });
+        
         setEdges(flowEdges);
+      } catch (connectionError: any) {
+        console.warn('加载连接数据失败:', connectionError);
+        console.error('连接错误详情:', connectionError.response?.data);
+        
+        // 错误：删除自动创建默认连接的逻辑，改为设置空连接
+        setEdges([]);
+        
+        // 如果是权限问题，显示相应提示
+        if (connectionError.response?.status === 403) {
+          console.warn('无权访问工作流连接数据');
+        } else if (connectionError.response?.status === 422) {
+          console.warn('连接数据格式问题 - 422错误详情:', connectionError.response?.data?.detail);
+          if (Array.isArray(connectionError.response?.data?.detail)) {
+            connectionError.response.data.detail.forEach((err: any, index: number) => {
+              console.error(`422错误 ${index + 1}:`, err);
+            });
+          }
+        } else {
+          console.warn('其他连接加载错误:', connectionError.message);
+        }
       }
       
     } catch (error) {
@@ -1149,9 +1182,9 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
           
           <Form.Item
             name="description"
-            label="节点描述"
+            label="任务描述"
           >
-            <TextArea rows={3} placeholder="请输入节点描述" />
+            <TextArea rows={3} placeholder="请输入任务描述" />
           </Form.Item>
           
           <Form.Item

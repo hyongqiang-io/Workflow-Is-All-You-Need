@@ -165,9 +165,9 @@ const ReactFlowDemo: React.FC = () => {
           </Form.Item>
           <Form.Item
             name="description"
-            label="节点描述"
+            label="任务描述"
           >
-            <Input.TextArea placeholder="请输入节点描述" rows={3} />
+            <Input.TextArea placeholder="请输入任务描述" rows={3} />
           </Form.Item>
         </Form>
       </Modal>

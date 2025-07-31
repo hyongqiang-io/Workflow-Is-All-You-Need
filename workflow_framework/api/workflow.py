@@ -11,6 +11,7 @@ from loguru import logger
 from ..models.base import BaseResponse
 from ..models.workflow import WorkflowCreate, WorkflowUpdate, WorkflowResponse
 from ..services.workflow_service import WorkflowService
+from ..services.cascade_deletion_service import cascade_deletion_service
 from ..utils.middleware import get_current_active_user, CurrentUser, get_current_user_context
 from ..utils.exceptions import (
     ValidationError, ConflictError, handle_validation_error, handle_conflict_error
@@ -270,6 +271,118 @@ async def delete_workflow(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="删除工作流失败，请稍后再试"
+        )
+
+
+@router.delete("/{workflow_base_id}/cascade", response_model=BaseResponse)
+async def delete_workflow_cascade(
+    workflow_base_id: uuid.UUID,
+    soft_delete: bool = Query(True, description="是否软删除"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    级联删除工作流及其所有相关数据
+    
+    Args:
+        workflow_base_id: 工作流基础ID
+        soft_delete: 是否软删除（默认True）
+        current_user: 当前用户
+        
+    Returns:
+        级联删除结果统计
+    """
+    try:
+        # 检查工作流是否存在和权限
+        existing_workflow = await workflow_service.get_workflow_by_base_id(workflow_base_id)
+        if not existing_workflow:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="工作流不存在"
+            )
+        
+        if existing_workflow.creator_id != current_user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权删除此工作流"
+            )
+        
+        # 执行级联删除
+        deletion_result = await cascade_deletion_service.delete_workflow_base_cascade(
+            workflow_base_id, soft_delete
+        )
+        
+        if deletion_result['deleted_workflow_base']:
+            logger.info(f"用户 {current_user.username} 级联删除了工作流: {workflow_base_id}")
+            return BaseResponse(
+                success=True,
+                message="工作流级联删除成功",
+                data={
+                    "message": "工作流及其所有相关数据已删除",
+                    "deletion_stats": deletion_result
+                }
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="级联删除工作流失败"
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"级联删除工作流异常: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="级联删除工作流失败，请稍后再试"
+        )
+
+
+@router.get("/{workflow_base_id}/deletion-preview", response_model=BaseResponse)
+async def get_workflow_deletion_preview(
+    workflow_base_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    预览工作流删除将影响的数据量
+    
+    Args:
+        workflow_base_id: 工作流基础ID
+        current_user: 当前用户
+        
+    Returns:
+        删除预览数据
+    """
+    try:
+        # 检查工作流是否存在和权限
+        existing_workflow = await workflow_service.get_workflow_by_base_id(workflow_base_id)
+        if not existing_workflow:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="工作流不存在"
+            )
+        
+        if existing_workflow.creator_id != current_user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权查看此工作流"
+            )
+        
+        # 获取删除预览
+        preview = await cascade_deletion_service.get_deletion_preview(workflow_base_id)
+        
+        return BaseResponse(
+            success=True,
+            message="删除预览获取成功",
+            data=preview
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取删除预览异常: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取删除预览失败，请稍后再试"
         )
 
 

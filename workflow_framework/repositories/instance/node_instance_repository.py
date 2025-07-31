@@ -409,3 +409,54 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
         except Exception as e:
             logger.error(f"获取可重试的失败节点实例失败: {e}")
             raise
+    
+    async def delete_node_instance(self, node_instance_id: uuid.UUID, soft_delete: bool = True) -> bool:
+        """删除节点实例"""
+        try:
+            logger.info(f"🗑️ 开始删除节点实例: {node_instance_id} (软删除: {soft_delete})")
+            
+            if soft_delete:
+                result = await self.update(node_instance_id, {
+                    "is_deleted": True,
+                    "updated_at": now_utc()
+                }, "node_instance_id")
+                success = result is not None
+            else:
+                query = "DELETE FROM node_instance WHERE node_instance_id = $1"
+                result = await self.db.execute(query, node_instance_id)
+                success = "1" in result
+            
+            if success:
+                action = "软删除" if soft_delete else "硬删除"
+                logger.info(f"✅ {action}节点实例成功: {node_instance_id}")
+            
+            return success
+        except Exception as e:
+            logger.error(f"删除节点实例失败: {e}")
+            raise
+    
+    async def delete_nodes_by_workflow_instance(self, workflow_instance_id: uuid.UUID, soft_delete: bool = True) -> int:
+        """批量删除指定工作流实例下的所有节点实例"""
+        try:
+            logger.info(f"🗑️ 开始删除工作流实例 {workflow_instance_id} 下的所有节点实例 (软删除: {soft_delete})")
+            
+            if soft_delete:
+                query = """
+                    UPDATE node_instance 
+                    SET is_deleted = TRUE, updated_at = $1
+                    WHERE workflow_instance_id = $2 AND is_deleted = FALSE
+                """
+                result = await self.db.execute(query, now_utc(), workflow_instance_id)
+            else:
+                query = "DELETE FROM node_instance WHERE workflow_instance_id = $1"
+                result = await self.db.execute(query, workflow_instance_id)
+            
+            # 提取影响的行数
+            deleted_count = int(result.split()[-1]) if "DELETE" in result or "UPDATE" in result else 0
+            
+            logger.info(f"✅ 删除工作流实例 {workflow_instance_id} 下的节点实例完成，影响 {deleted_count} 个节点实例")
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"批量删除工作流节点实例失败: {e}")
+            raise

@@ -384,13 +384,17 @@ class ExecutionEngine:
     
     def _determine_task_type(self, processor_type: str) -> TaskInstanceType:
         """根据处理器类型确定任务类型"""
-        if processor_type == "HUMAN":
+        processor_type_upper = processor_type.upper() if processor_type else ""
+        
+        if processor_type_upper == "HUMAN":
             return TaskInstanceType.HUMAN
-        elif processor_type == "AGENT":
+        elif processor_type_upper == "AGENT":
             return TaskInstanceType.AGENT
-        elif processor_type == "MIX":
+        elif processor_type_upper == "MIX" or processor_type_upper == "MIXED":
             return TaskInstanceType.MIXED
         else:
+            # 记录调试信息
+            logger.warning(f"未知的处理器类型: '{processor_type}' (转换后: '{processor_type_upper}')，默认为人工任务")
             return TaskInstanceType.HUMAN  # 默认为人工任务
     
     def _determine_task_priority(self, task_type: TaskInstanceType, node_data: Dict[str, Any]) -> int:
@@ -1799,12 +1803,24 @@ class ExecutionEngine:
     async def _execute_agent_task(self, task: Dict[str, Any]):
         """执行Agent任务"""
         try:
-            # 调用AgentTaskService处理任务
             task_id = task['task_instance_id']
+            logger.info(f"🚀 [EXECUTION-ENGINE] 开始执行Agent任务: {task_id}")
+            logger.info(f"   - 任务标题: {task.get('task_title', 'unknown')}")
+            logger.info(f"   - 任务类型: {task.get('task_type', 'unknown')}")
+            logger.info(f"   - 当前状态: {task.get('status', 'unknown')}")
+            logger.info(f"   - 分配Agent: {task.get('assigned_agent_id', 'none')}")
+            logger.info(f"   - 处理器ID: {task.get('processor_id', 'none')}")
+            
+            # 调用AgentTaskService处理任务
+            logger.info(f"🔄 [EXECUTION-ENGINE] 调用AgentTaskService处理任务")
             await agent_task_service.process_agent_task(task_id)
             
+            logger.info(f"✅ [EXECUTION-ENGINE] Agent任务执行完成: {task_id}")
+            
         except Exception as e:
-            logger.error(f"执行Agent任务 {task['task_instance_id']} 失败: {e}")
+            logger.error(f"❌ [EXECUTION-ENGINE] 执行Agent任务 {task['task_instance_id']} 失败: {e}")
+            import traceback
+            logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
             raise
     
     async def _execute_mixed_task(self, task: Dict[str, Any]):
@@ -1839,46 +1855,109 @@ class ExecutionEngine:
     async def _register_node_completion_monitor(self, workflow_instance_id: uuid.UUID, node_instance_id: uuid.UUID, node_base_id: uuid.UUID):
         """注册节点完成监听器"""
         try:
+            logger.info(f"📋 [监听器注册] 为节点 {node_instance_id} 注册完成监听器")
+            logger.info(f"   - 工作流实例: {workflow_instance_id}")
+            logger.info(f"   - 节点基础ID: {node_base_id}")
+            
             # 启动节点完成监听协程
-            asyncio.create_task(self._monitor_node_completion(workflow_instance_id, node_instance_id, node_base_id))
+            task = asyncio.create_task(self._monitor_node_completion(workflow_instance_id, node_instance_id, node_base_id))
+            logger.info(f"✅ [监听器注册] 节点 {node_instance_id} 监听协程已启动")
             
         except Exception as e:
-            logger.error(f"注册节点完成监听失败: {e}")
+            logger.error(f"❌ [监听器注册] 注册节点完成监听失败: {e}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
     
     async def _monitor_node_completion(self, workflow_instance_id: uuid.UUID, node_instance_id: uuid.UUID, node_base_id: uuid.UUID):
         """监听节点完成"""
         try:
+            logger.info(f"🔍 [节点监听] 开始监听节点完成: {node_instance_id}")
+            
             while True:
                 # 检查节点的所有任务是否完成
                 tasks = await self.task_instance_repo.get_tasks_by_node_instance(node_instance_id)
                 
                 if not tasks:
+                    logger.info(f"⚠️ [节点监听] 节点 {node_instance_id} 没有任务，停止监听")
                     break
                 
-                completed_tasks = [t for t in tasks if t['status'] == 'COMPLETED']
-                failed_tasks = [t for t in tasks if t['status'] == 'FAILED']
+                completed_tasks = [t for t in tasks if t['status'] == TaskInstanceStatus.COMPLETED.value]
+                failed_tasks = [t for t in tasks if t['status'] == TaskInstanceStatus.FAILED.value]
+                
+                logger.info(f"📊 [节点监听] 节点 {node_instance_id} 任务状态:")
+                logger.info(f"   - 总任务数: {len(tasks)}")
+                logger.info(f"   - 已完成: {len(completed_tasks)}")
+                logger.info(f"   - 失败: {len(failed_tasks)}")
+                
+                # 显示每个任务的详细状态
+                for i, task in enumerate(tasks):
+                    task_id = task.get('task_instance_id', 'unknown')
+                    task_status = task.get('status', 'unknown')
+                    task_title = task.get('task_title', 'unknown')
+                    logger.info(f"   - 任务{i+1}: {task_title} (ID: {task_id}) - 状态: {task_status}")
                 
                 if len(completed_tasks) == len(tasks):
                     # 所有任务完成，标记节点完成
+                    logger.info(f"🎉 [节点监听] 节点 {node_instance_id} 所有任务已完成，开始标记节点完成")
                     output_data = await self._aggregate_node_output(completed_tasks)
+                    
+                    # 检查context manager是否可用
+                    if self.context_manager is None:
+                        logger.error(f"❌ [节点监听] context_manager 为 None，无法标记节点完成")
+                        break
+                    
                     await self.context_manager.mark_node_completed(
                         workflow_instance_id, node_base_id, node_instance_id, output_data
                     )
+                    
+                    # 同时更新数据库中的节点实例状态
+                    try:
+                        from datetime import datetime
+                        from ..models.instance import NodeInstanceStatus, NodeInstanceUpdate
+                        from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+                        
+                        node_repo = NodeInstanceRepository()
+                        node_update = NodeInstanceUpdate(
+                            status=NodeInstanceStatus.COMPLETED,
+                            output_data=output_data,
+                            completed_at=datetime.utcnow()
+                        )
+                        await node_repo.update_node_instance(node_instance_id, node_update)
+                        logger.info(f"💾 [节点监听] 节点实例 {node_instance_id} 数据库状态已更新为COMPLETED")
+                    except Exception as e:
+                        logger.error(f"❌ [节点监听] 更新节点实例数据库状态失败: {e}")
+                    
+                    logger.info(f"✅ [节点监听] 节点 {node_instance_id} 已标记为完成，停止监听")
                     break
                 elif len(failed_tasks) > 0:
                     # 有任务失败，标记节点失败
-                    error_info = {'failed_tasks': [t['task_instance_id'] for t in failed_tasks]}
+                    logger.error(f"❌ [节点监听] 节点 {node_instance_id} 有任务失败，标记节点失败")
+                    error_info = {'failed_tasks': [str(t['task_instance_id']) for t in failed_tasks]}
                     await self.context_manager.mark_node_failed(
                         workflow_instance_id, node_base_id, node_instance_id, error_info
                     )
                     break
                 
                 # 等待5秒后再次检查
+                logger.info(f"⏳ [节点监听] 节点 {node_instance_id} 仍有任务未完成，5秒后再次检查")
                 await asyncio.sleep(5)
                 
         except Exception as e:
             logger.error(f"监听节点完成失败: {e}")
     
+    def _make_json_serializable(self, obj):
+        """将对象转换为JSON可序列化的形式"""
+        if isinstance(obj, uuid.UUID):
+            return str(obj)
+        elif isinstance(obj, datetime):
+            return obj.isoformat()
+        elif isinstance(obj, dict):
+            return {k: self._make_json_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._make_json_serializable(item) for item in obj]
+        else:
+            return obj
+
     async def _aggregate_node_output(self, completed_tasks: List[Dict]) -> Dict[str, Any]:
         """聚合节点的输出数据"""
         try:
@@ -1892,20 +1971,21 @@ class ExecutionEngine:
             
             for task in completed_tasks:
                 task_result = {
-                    'task_id': task['task_instance_id'],
+                    'task_id': str(task['task_instance_id']),  # 转换UUID为字符串
                     'task_title': task.get('task_title', ''),
-                    'output_data': task.get('output_data', {}),
+                    'output_data': self._make_json_serializable(task.get('output_data', {})),
                     'result_summary': task.get('result_summary', '')
                 }
                 aggregated['task_results'].append(task_result)
                 
                 # 合并任务输出数据
                 if task.get('output_data'):
-                    combined_output.update(task['output_data'])
+                    serializable_output = self._make_json_serializable(task['output_data'])
+                    combined_output.update(serializable_output)
             
             aggregated['combined_output'] = combined_output
             
-            return aggregated
+            return self._make_json_serializable(aggregated)
             
         except Exception as e:
             logger.error(f"聚合节点输出失败: {e}")
@@ -2504,6 +2584,13 @@ class ExecutionEngine:
                 task_type = self._determine_task_type(processor_type)
                 assigned_user_id = processor.get('user_id')
                 assigned_agent_id = processor.get('agent_id')
+                
+                # 添加调试日志
+                logger.info(f"🔍 [任务创建] 处理器信息:")
+                logger.info(f"   - 处理器名称: {processor.get('name', 'Unknown')}")
+                logger.info(f"   - 处理器类型: '{processor_type}' -> 任务类型: {task_type.value}")
+                logger.info(f"   - 分配用户: {assigned_user_id}")
+                logger.info(f"   - 分配Agent: {assigned_agent_id}")
                 
                 # 创建任务实例
                 task_title = f"{node['name']} - {processor.get('processor_name', processor.get('name', 'Unknown'))}"

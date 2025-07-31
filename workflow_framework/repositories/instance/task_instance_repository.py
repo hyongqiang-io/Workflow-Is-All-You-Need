@@ -17,6 +17,13 @@ from ...models.instance import (
 from ...utils.helpers import now_utc
 
 
+def json_serializer(obj):
+    """JSON序列化器，处理datetime对象"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+
 class TaskInstanceRepository(BaseRepository[TaskInstance]):
     """任务实例数据访问层"""
     
@@ -69,8 +76,8 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 "task_type": task_data.task_type.value,
                 "task_title": task_data.task_title,
                 "task_description": task_data.task_description,
-                "input_data": json.dumps(task_data.input_data or {}, ensure_ascii=False),
-                "context_data": json.dumps(task_data.context_data or {}, ensure_ascii=False),
+                "input_data": json.dumps(task_data.input_data or {}, ensure_ascii=False, default=json_serializer),
+                "context_data": json.dumps(task_data.context_data or {}, ensure_ascii=False, default=json_serializer),
                 "instructions": task_data.instructions,
                 "priority": task_data.priority,
                 "assigned_user_id": task_data.assigned_user_id,
@@ -184,7 +191,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                             logger.warning(f"   ⚠️  计算执行时间失败: {e}")
             
             if update_data.output_data is not None:
-                data["output_data"] = json.dumps(update_data.output_data, ensure_ascii=False)
+                data["output_data"] = json.dumps(update_data.output_data, ensure_ascii=False, default=json_serializer)
                 output_keys = list(update_data.output_data.keys()) if update_data.output_data else []
                 if output_keys:
                     logger.info(f"   📤 输出数据字段: {', '.join(output_keys[:3])}{'...' if len(output_keys) > 3 else ''}")
@@ -398,19 +405,33 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 results = await self.db.fetch_all(query, TaskInstanceType.AGENT.value,
                                                 TaskInstanceType.MIXED.value, 
                                                 TaskInstanceStatus.PENDING.value, limit)
+                                                
+            logger.info(f"   - 查询结果: 找到 {len(results)} 个任务")
             
             # 解析JSON字段
             formatted_results = []
-            for result in results:
+            for i, result in enumerate(results):
                 result = dict(result)
+                task_id = result.get('task_instance_id', 'unknown')
+                task_title = result.get('task_title', 'unknown')
+                task_status = result.get('status', 'unknown')
+                assigned_agent_id = result.get('assigned_agent_id', 'none')
+                processor_id = result.get('processor_id', 'none')
+                
+                logger.info(f"   - 任务{i+1}: {task_title} (ID: {task_id})")
+                logger.info(f"     状态: {task_status}, Agent: {assigned_agent_id}, Processor: {processor_id}")
+                
                 result['input_data'] = json.loads(result.get('input_data', '{}'))
                 if result.get('output_data'):
                     result['output_data'] = json.loads(result['output_data'])
                 formatted_results.append(result)
             
+            logger.info(f"✅ [TASK-REPO] Agent任务查找完成，返回 {len(formatted_results)} 个任务")
             return formatted_results
         except Exception as e:
-            logger.error(f"获取Agent待处理任务失败: {e}")
+            logger.error(f"❌ [TASK-REPO] 获取Agent待处理任务失败: {e}")
+            import traceback
+            logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
             raise
     
     async def assign_task_to_user(self, task_instance_id: uuid.UUID, 

@@ -61,6 +61,69 @@ async def create_node(
         )
 
 
+@router.get("/connections/workflow/{workflow_base_id}", response_model=BaseResponse)
+async def get_workflow_connections(
+    workflow_base_id: uuid.UUID = Path(..., description="工作流基础ID"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    获取工作流的所有节点连接
+    
+    Args:
+        workflow_base_id: 工作流基础ID
+        current_user: 当前用户
+        
+    Returns:
+        连接列表
+    """
+    try:
+        connections = await node_service.get_workflow_connections(
+            workflow_base_id, current_user.user_id
+        )
+        
+        # Ensure all UUID fields are converted to strings for JSON serialization
+        serialized_connections = []
+        for conn in connections:
+            serialized_conn = {}
+            for key, value in conn.items():
+                if isinstance(value, uuid.UUID):
+                    serialized_conn[key] = str(value)
+                else:
+                    serialized_conn[key] = value
+            serialized_connections.append(serialized_conn)
+        
+        return BaseResponse(
+            success=True,
+            message="获取连接列表成功",
+            data={
+                "connections": serialized_connections,
+                "count": len(serialized_connections),
+                "workflow_id": str(workflow_base_id)
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"获取工作流连接列表异常: {e}")
+        import traceback
+        logger.error(f"异常堆栈: {traceback.format_exc()}")
+        
+        if "无权访问" in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权访问此工作流的连接"
+            )
+        elif "不存在" in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="工作流不存在"
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"获取连接列表失败: {str(e)}"
+            )
+
+
 @router.get("/workflow/{workflow_base_id}", response_model=BaseResponse)
 async def get_workflow_nodes(
     workflow_base_id: uuid.UUID = Path(..., description="工作流基础ID"),
@@ -334,55 +397,6 @@ async def create_node_connection(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="创建节点连接失败，请稍后再试"
-            )
-
-
-@router.get("/connections/workflow/{workflow_base_id}", response_model=BaseResponse)
-async def get_workflow_connections(
-    workflow_base_id: uuid.UUID = Path(..., description="工作流基础ID"),
-    current_user: CurrentUser = Depends(get_current_user_context)
-):
-    """
-    获取工作流的所有节点连接
-    
-    Args:
-        workflow_base_id: 工作流基础ID
-        current_user: 当前用户
-        
-    Returns:
-        连接列表
-    """
-    try:
-        connections = await node_service.get_workflow_connections(
-            workflow_base_id, current_user.user_id
-        )
-        
-        return BaseResponse(
-            success=True,
-            message="获取连接列表成功",
-            data={
-                "connections": connections,
-                "count": len(connections),
-                "workflow_id": str(workflow_base_id)
-            }
-        )
-        
-    except Exception as e:
-        logger.error(f"获取工作流连接列表异常: {e}")
-        if "无权访问" in str(e):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="无权访问此工作流的连接"
-            )
-        elif "不存在" in str(e):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="工作流不存在"
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="获取连接列表失败"
             )
 
 

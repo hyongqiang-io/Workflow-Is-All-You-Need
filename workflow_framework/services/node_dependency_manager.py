@@ -36,7 +36,7 @@ class NodeDependencyManager(BaseRepository):
             n.name as upstream_node_name, 
             n.type as upstream_node_type,
             n.task_description as upstream_description
-        FROM edge e
+        FROM node_connection nc
         JOIN node n ON e.from_node_id = n.node_base_id
         WHERE e.to_node_id = %s 
         AND e.workflow_base_id = %s
@@ -72,7 +72,7 @@ class NodeDependencyManager(BaseRepository):
             n.name as downstream_node_name, 
             n.type as downstream_node_type,
             n.task_description as downstream_description
-        FROM edge e
+        FROM node_connection nc
         JOIN node n ON e.to_node_id = n.node_base_id
         WHERE e.from_node_id = %s 
         AND e.workflow_base_id = %s
@@ -254,7 +254,7 @@ class NodeDependencyManager(BaseRepository):
                     e.to_node_id,
                     COUNT(e.from_node_id) as required_upstream,
                     COUNT(CASE WHEN ni_upstream.status = 'COMPLETED' THEN 1 END) as completed_upstream
-                FROM edge e
+                FROM node_connection nc
                 LEFT JOIN node_instance ni_upstream 
                     JOIN node n_upstream ON ni_upstream.node_id = n_upstream.node_id
                     ON (e.from_node_id = n_upstream.node_base_id AND ni_upstream.workflow_instance_id = %s)
@@ -304,7 +304,7 @@ class NodeDependencyManager(BaseRepository):
                 e.to_node_id as depends_on,
                 ARRAY[e.from_node_id] as path,
                 1 as depth
-            FROM edge e
+            FROM node_connection nc
             WHERE e.workflow_base_id = %s
             
             UNION ALL
@@ -315,7 +315,7 @@ class NodeDependencyManager(BaseRepository):
                 e.to_node_id,
                 dp.path || e.from_node_id,
                 dp.depth + 1
-            FROM edge e
+            FROM node_connection nc
             JOIN dependency_path dp ON e.from_node_id = dp.depends_on
             WHERE e.workflow_base_id = %s
             AND e.from_node_id != ALL(dp.path)  -- 检测循环
@@ -371,7 +371,7 @@ class NodeDependencyManager(BaseRepository):
             FROM node n
             WHERE n.workflow_base_id = %s
             AND NOT EXISTS (
-                SELECT 1 FROM edge e 
+                SELECT 1 FROM node_connection nc 
                 WHERE e.to_node_id = n.node_base_id 
                 AND e.workflow_base_id = %s
             )
@@ -382,7 +382,7 @@ class NodeDependencyManager(BaseRepository):
             SELECT 
                 e.to_node_id,
                 nl.level + 1
-            FROM edge e
+            FROM node_connection nc
             JOIN node_levels nl ON e.from_node_id = nl.node_base_id
             WHERE e.workflow_base_id = %s
         )

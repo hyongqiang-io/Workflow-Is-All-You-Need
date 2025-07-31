@@ -113,9 +113,30 @@ class OutputDataProcessor:
                 for node in node_instances:
                     if node.get('output_data'):
                         node_name = node.get('node_instance_name', f"node_{node.get('node_instance_id')}")
-                        node_outputs[node_name] = node['output_data']
+                        node_output_data = node['output_data']
+                        
+                        # 优化：提取主要输出数据
+                        if isinstance(node_output_data, dict):
+                            # 如果有primary_output，优先使用
+                            if 'primary_output' in node_output_data:
+                                node_outputs[node_name] = node_output_data['primary_output']
+                            # 如果有tasks_output且只有一个任务，直接提升
+                            elif 'tasks_output' in node_output_data and len(node_output_data.get('tasks_output', {})) == 1:
+                                task_outputs = list(node_output_data['tasks_output'].values())
+                                node_outputs[node_name] = task_outputs[0] if task_outputs else node_output_data
+                            else:
+                                node_outputs[node_name] = node_output_data
+                        else:
+                            node_outputs[node_name] = node_output_data
+                            
                 if node_outputs:
                     data_output = {"aggregated_node_outputs": node_outputs}
+                    # 如果只有一个节点输出，直接提升到顶层
+                    if len(node_outputs) == 1:
+                        single_output = list(node_outputs.values())[0]
+                        if isinstance(single_output, dict):
+                            data_output.update(single_output)
+                            data_output["primary_node_output"] = single_output
             
             return ExecutionResult(
                 result_type=result_type,
@@ -295,6 +316,9 @@ class OutputDataProcessor:
                     
                     # 基于节点名称和输出数据推断操作
                     node_name = node.get('node_instance_name', 'unknown_node')
+                    output_data = node.get('output_data', {})
+                    
+                    # 分析节点名称
                     if 'clean' in node_name.lower():
                         operations.append("data_cleaning")
                     if 'validate' in node_name.lower():
@@ -306,11 +330,27 @@ class OutputDataProcessor:
                     if 'process' in node_name.lower():
                         operations.append("data_processing")
                     
+                    # 分析输出数据结构以推断更多操作
+                    if isinstance(output_data, dict):
+                        if 'tasks_output' in output_data:
+                            operations.append("task_aggregation")
+                        if 'primary_output' in output_data:
+                            operations.append("output_processing")
+                        if 'all_tasks_completed' in output_data:
+                            operations.append("completion_verification")
+                    
                     if not operations:
                         operations = ["node_execution"]
                     
+                    # 添加数据量信息
+                    data_size_info = ""
+                    if isinstance(output_data, dict):
+                        task_count = output_data.get('task_count', 0)
+                        if task_count > 0:
+                            data_size_info = f" ({task_count} tasks processed)"
+                    
                     transformation_steps.append(DataLineageStep(
-                        node=node_name,
+                        node=node_name + data_size_info,
                         operations=operations,
                         timestamp=node.get('completed_at')
                     ))
