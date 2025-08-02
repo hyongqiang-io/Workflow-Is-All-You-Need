@@ -32,14 +32,14 @@ class NodeDependencyManager(BaseRepository):
         
         query = """
         SELECT DISTINCT 
-            e.from_node_id as upstream_node_id, 
+            nc.from_node_id as upstream_node_id, 
             n.name as upstream_node_name, 
             n.type as upstream_node_type,
             n.task_description as upstream_description
         FROM node_connection nc
-        JOIN node n ON e.from_node_id = n.node_base_id
-        WHERE e.to_node_id = %s 
-        AND e.workflow_base_id = %s
+        JOIN node n ON nc.from_node_id = n.node_base_id
+        WHERE nc.to_node_id = $1 
+        AND nc.workflow_id = $2
         ORDER BY n.name
         """
         
@@ -68,14 +68,14 @@ class NodeDependencyManager(BaseRepository):
         
         query = """
         SELECT DISTINCT 
-            e.to_node_id as downstream_node_id, 
+            nc.to_node_id as downstream_node_id, 
             n.name as downstream_node_name, 
             n.type as downstream_node_type,
             n.task_description as downstream_description
         FROM node_connection nc
-        JOIN node n ON e.to_node_id = n.node_base_id
-        WHERE e.from_node_id = %s 
-        AND e.workflow_base_id = %s
+        JOIN node n ON nc.to_node_id = n.node_base_id
+        WHERE nc.from_node_id = $1 
+        AND nc.workflow_id = $2
         ORDER BY n.name
         """
         

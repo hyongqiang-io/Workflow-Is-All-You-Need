@@ -65,8 +65,8 @@ class NodeDependencyTracker:
             n.node_id as upstream_node_db_id
         FROM node_connection nc
         JOIN node n ON nc.from_node_id = n.node_base_id
-        WHERE nc.to_node_id = %s 
-        AND nc.workflow_id = %s
+        WHERE nc.to_node_id = $1 
+        AND nc.workflow_id = $2
         ORDER BY n.name
         """
         
@@ -110,8 +110,8 @@ class NodeDependencyTracker:
             n.node_id as downstream_node_db_id
         FROM node_connection nc
         JOIN node n ON nc.to_node_id = n.node_base_id
-        WHERE nc.from_node_id = %s 
-        AND nc.workflow_id = %s
+        WHERE nc.from_node_id = $1 
+        AND nc.workflow_id = $2
         ORDER BY n.name
         """
         

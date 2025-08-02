@@ -1,0 +1,40 @@
+[Unit]
+Description=Workflow Framework Backend Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/workflow-app
+Environment=PATH=/opt/workflow-app/venv/bin
+Environment="DATABASE_URL=sqlite:///./data/workflow.db"
+Environment="PYTHONPATH=/opt/workflow-app"
+ExecStart=/opt/workflow-app/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --workers 4
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workflow-backend
+
+# 安全设置
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/workflow-app/data /opt/workflow-app/logs
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+
+# 资源限制
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

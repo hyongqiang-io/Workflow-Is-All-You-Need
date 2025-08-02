@@ -236,7 +236,7 @@ async def get_workflow_status(
         LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
         LEFT JOIN "user" u ON wi.executor_id = u.user_id
         LEFT JOIN node_instance ni ON wi.workflow_instance_id = ni.workflow_instance_id AND ni.is_deleted = FALSE
-        LEFT JOIN node n ON ni.node_id = n.node_id AND n.workflow_base_id = wi.workflow_base_id
+        LEFT JOIN node n ON ni.node_id = n.node_id
         WHERE wi.workflow_instance_id = $1
         AND wi.is_deleted = FALSE
         GROUP BY wi.workflow_instance_id, w.name, u.username
@@ -346,7 +346,7 @@ async def get_workflow_instances(
         LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
         LEFT JOIN "user" u ON wi.executor_id = u.user_id
         LEFT JOIN node_instance ni ON wi.workflow_instance_id = ni.workflow_instance_id AND ni.is_deleted = FALSE
-        LEFT JOIN node n ON ni.node_id = n.node_id AND n.workflow_base_id = wi.workflow_base_id
+        LEFT JOIN node n ON ni.node_id = n.node_id
         WHERE wi.workflow_base_id = $1
         AND wi.is_deleted = FALSE
         GROUP BY wi.workflow_instance_id, w.name, u.username
