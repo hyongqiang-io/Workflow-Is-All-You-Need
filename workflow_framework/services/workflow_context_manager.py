@@ -153,45 +153,51 @@ class WorkflowContextManager:
             
             # 检查节点是否已经完成，避免重复处理
             context = self.workflow_contexts[workflow_instance_id]
-            if node_id in context['completed_nodes']:
-                logger.info(f"⚠️ [节点完成] 节点 {node_id} 已经标记为完成，跳过重复处理")
-                return
-            
-            logger.info(f"🎉 [节点完成] 节点 {node_id} 在工作流 {workflow_instance_id} 中完成")
-            
-            # 更新工作流上下文
-            context['node_outputs'][node_id] = output_data
-            context['execution_path'].append(str(node_id))  # 转换为字符串避免UUID序列化问题
-            context['completed_nodes'].add(node_id)
-            
-            # 从正在执行的节点中移除
-            if node_id in context['current_executing_nodes']:
-                context['current_executing_nodes'].remove(node_id)
-            
-            # 更新完成状态
-            self.node_completion_status[node_instance_id] = 'COMPLETED'
-            
-            logger.info(f"📊 [节点完成] 上下文更新完成:")
-            logger.info(f"  - 已完成节点数: {len(context['completed_nodes'])}")
-            logger.info(f"  - 执行路径: {context['execution_path']}")
-            
-            # 检查并触发下游节点
-            logger.info(f"🔍 [节点完成] 开始检查下游节点触发...")
+            already_completed = node_id in context['completed_nodes']
+            if already_completed:
+                logger.info(f"⚠️ [节点完成] 节点 {node_id} 已经标记为完成，但仍检查工作流完成状态")
+                # 即使节点已完成，也要检查工作流是否全部完成
+                should_check_completion = True
+            else:
+                logger.info(f"🎉 [节点完成] 节点 {node_id} 在工作流 {workflow_instance_id} 中完成")
+                
+                # 更新工作流上下文
+                context['node_outputs'][node_id] = output_data
+                context['execution_path'].append(str(node_id))  # 转换为字符串避免UUID序列化问题
+                context['completed_nodes'].add(node_id)
+                
+                # 从正在执行的节点中移除
+                if node_id in context['current_executing_nodes']:
+                    context['current_executing_nodes'].remove(node_id)
+                
+                # 更新完成状态
+                self.node_completion_status[node_instance_id] = 'COMPLETED'
+                
+                logger.info(f"📊 [节点完成] 上下文更新完成:")
+                logger.info(f"  - 已完成节点数: {len(context['completed_nodes'])}")
+                logger.info(f"  - 执行路径: {context['execution_path']}")
+                
+                # 检查并触发下游节点
+                logger.info(f"🔍 [节点完成] 开始检查下游节点触发...")
+                should_check_completion = False
             
             # 打印当前依赖关系状态
             self.print_dependency_summary(workflow_instance_id)
         
         # 🔓 在锁外执行下游检查和工作流完成检查，避免死锁
         try:
-            # 检查并触发下游节点
-            await self._check_and_trigger_downstream_nodes(
-                workflow_instance_id, node_id
-            )
+            if not already_completed:
+                # 只有新完成的节点才检查并触发下游节点
+                await self._check_and_trigger_downstream_nodes(
+                    workflow_instance_id, node_id
+                )
+                
+                # 延迟检查工作流完成状态，给下游节点一些时间启动
+                await asyncio.sleep(0.1)
+            else:
+                logger.info(f"🔍 [节点完成] 节点已完成，跳过下游检查，直接检查工作流完成状态")
             
-            # 延迟检查工作流完成状态，给下游节点一些时间启动
-            await asyncio.sleep(0.1)
-            
-            # 检查工作流是否全部完成
+            # 无论如何都要检查工作流是否全部完成
             await self._check_workflow_completion(workflow_instance_id)
         except Exception as e:
             logger.error(f"❌ [节点完成] 下游检查失败: {e}")
@@ -508,11 +514,21 @@ class WorkflowContextManager:
         executing_nodes = len(context['current_executing_nodes'])
         pending_nodes = total_nodes - completed_nodes - failed_nodes - executing_nodes
         
+        # 🔍 调试：打印详细的节点信息
+        logger.info(f"🔍 [状态调试] 工作流 {workflow_instance_id} 节点统计:")
+        logger.info(f"   - 注册的依赖节点数: {len(self.node_dependencies)}")
+        logger.info(f"   - 当前工作流节点数: {total_nodes}")
+        logger.info(f"   - 工作流节点IDs: {workflow_nodes}")
+        logger.info(f"   - 已完成节点: {list(context['completed_nodes'])}")
+        logger.info(f"   - 执行中节点: {list(context['current_executing_nodes'])}")
+        logger.info(f"   - 失败节点: {list(context['failed_nodes'])}")
+        
         # 判断工作流整体状态
         if failed_nodes > 0:
             overall_status = 'FAILED'
-        elif completed_nodes == total_nodes:
-            overall_status = 'COMPLETED'
+        elif completed_nodes == total_nodes and total_nodes > 0:
+            # 额外验证：检查数据库中的实际节点状态，防止误判
+            overall_status = await self._verify_workflow_completion(workflow_instance_id, total_nodes, completed_nodes)
         elif executing_nodes > 0 or pending_nodes > 0:
             overall_status = 'RUNNING'
         else:
@@ -528,6 +544,65 @@ class WorkflowContextManager:
             'execution_path': context['execution_path'],
             'execution_start_time': context['execution_start_time']
         }
+    
+    async def _verify_workflow_completion(self, workflow_instance_id: uuid.UUID, 
+                                        expected_total: int, context_completed: int) -> str:
+        """验证工作流完成状态，通过数据库核实"""
+        try:
+            logger.info(f"🔍 [完成验证] 验证工作流 {workflow_instance_id} 完成状态:")
+            logger.info(f"   - 预期总节点数: {expected_total}")
+            logger.info(f"   - 上下文已完成: {context_completed}")
+            
+            # 从数据库查询实际的节点状态
+            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            node_repo = NodeInstanceRepository()
+            
+            # 查询工作流的所有节点实例
+            query = """
+            SELECT ni.node_instance_id, ni.status, ni.node_instance_name as node_name
+            FROM node_instance ni
+            WHERE ni.workflow_instance_id = $1 AND ni.is_deleted = FALSE
+            ORDER BY ni.created_at
+            """
+            
+            db_nodes = await node_repo.db.fetch_all(query, workflow_instance_id)
+            
+            logger.info(f"   - 数据库实际节点数: {len(db_nodes)}")
+            
+            # 统计数据库中的节点状态
+            db_completed = 0
+            db_pending = 0
+            db_running = 0
+            
+            for node in db_nodes:
+                status = node['status']
+                logger.info(f"     - {node.get('node_name', 'Unknown')}: {status}")
+                
+                if status == 'completed':
+                    db_completed += 1
+                elif status in ['pending', 'assigned']:
+                    db_pending += 1
+                elif status in ['running', 'in_progress']:
+                    db_running += 1
+            
+            logger.info(f"   - 数据库统计: 完成={db_completed}, 待处理={db_pending}, 执行中={db_running}")
+            
+            # 判断是否真正完成
+            if len(db_nodes) != expected_total:
+                logger.warning(f"⚠️ [完成验证] 节点数量不匹配: 预期{expected_total}, 实际{len(db_nodes)}")
+                return 'RUNNING'  # 节点数量不匹配，继续运行
+            
+            if db_completed == len(db_nodes) and len(db_nodes) > 0:
+                logger.info(f"✅ [完成验证] 工作流确实已完成: {db_completed}/{len(db_nodes)} 节点完成")
+                return 'COMPLETED'
+            else:
+                logger.info(f"⏳ [完成验证] 工作流仍在运行: {db_completed}/{len(db_nodes)} 节点完成, {db_pending} 待处理, {db_running} 执行中")
+                return 'RUNNING'
+                
+        except Exception as e:
+            logger.error(f"❌ [完成验证] 验证失败: {e}")
+            # 验证失败时保守处理，继续运行
+            return 'RUNNING'
     
     def register_completion_callback(self, callback: callable):
         """注册节点完成回调函数"""
