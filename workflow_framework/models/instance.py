@@ -189,10 +189,8 @@ class TaskInstanceBase(BaseModel):
     """任务实例基础模型"""
     task_title: str = Field(..., min_length=1, max_length=255, description="任务标题")
     task_description: str = Field(default="", description="任务描述")
-    input_data: Optional[Dict[str, Any]] = Field(None, description="输入数据")
-    context_data: Optional[Dict[str, Any]] = Field(None, description="上下文数据")
-    instructions: Optional[str] = Field(None, description="执行指令")
-    priority: int = Field(0, description="优先级")
+    input_data: Optional[str] = Field(None, description="输入数据（文本格式）")
+    context_data: Optional[str] = Field(None, description="上下文数据（文本格式）")
 
 
 class TaskInstance(TaskInstanceBase, BaseEntity):
@@ -208,8 +206,7 @@ class TaskInstance(TaskInstanceBase, BaseEntity):
     assigned_at: Optional[datetime] = Field(None, description="分配时间")
     started_at: Optional[datetime] = Field(None, description="开始时间")
     completed_at: Optional[datetime] = Field(None, description="完成时间")
-    output_data: Optional[Dict[str, Any]] = Field(None, description="输出数据")
-    context_data: Optional[Dict[str, Any]] = Field(None, description="上下文数据")
+    output_data: Optional[str] = Field(None, description="输出数据（文本格式）")
     result_summary: Optional[str] = Field(None, description="结果摘要")
     error_message: Optional[str] = Field(None, description="错误信息")
     estimated_duration: Optional[int] = Field(None, description="预估时长(分钟)")
@@ -230,8 +227,7 @@ class TaskInstanceCreate(TaskInstanceBase, CreateRequest):
 class TaskInstanceUpdate(UpdateRequest):
     """任务实例更新模型"""
     status: Optional[TaskInstanceStatus] = Field(None, description="执行状态")
-    output_data: Optional[Dict[str, Any]] = Field(None, description="输出数据")
-    context_data: Optional[Dict[str, Any]] = Field(None, description="上下文数据")
+    output_data: Optional[str] = Field(None, description="输出数据（文本格式）")
     result_summary: Optional[str] = Field(None, description="结果摘要")
     error_message: Optional[str] = Field(None, description="错误信息")
     actual_duration: Optional[int] = Field(None, description="实际时长(分钟)")
@@ -255,8 +251,7 @@ class TaskInstanceResponse(TaskInstanceBase):
     completed_at: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
-    output_data: Optional[Dict[str, Any]] = None
-    context_data: Optional[Dict[str, Any]] = None
+    output_data: Optional[str] = None
     result_summary: Optional[str] = None
     error_message: Optional[str] = None
     estimated_duration: Optional[int] = None

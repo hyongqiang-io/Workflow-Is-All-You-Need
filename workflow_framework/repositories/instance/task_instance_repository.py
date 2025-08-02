@@ -4,7 +4,6 @@ Task Instance Repository
 """
 
 import uuid
-import json
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from loguru import logger
@@ -15,13 +14,6 @@ from ...models.instance import (
     TaskInstanceStatus, TaskInstanceType
 )
 from ...utils.helpers import now_utc
-
-
-def json_serializer(obj):
-    """JSON序列化器，处理datetime对象"""
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
 
 class TaskInstanceRepository(BaseRepository[TaskInstance]):
@@ -41,7 +33,6 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
             logger.info(f"   节点实例ID: {task_data.node_instance_id}")
             logger.info(f"   工作流实例ID: {task_data.workflow_instance_id}")
             logger.info(f"   处理器ID: {task_data.processor_id}")
-            logger.info(f"   优先级: {task_data.priority}")
             logger.info(f"   预估时长: {task_data.estimated_duration}分钟")
             
             # 记录分配信息
@@ -51,6 +42,9 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 logger.info(f"   🤖 分配给代理: {task_data.assigned_agent_id}")
             else:
                 logger.info(f"   ⏳ 任务未分配，状态为PENDING")
+            
+            # 验证任务分配的一致性
+            self._validate_task_assignment(task_data)
             
             # 智能确定任务状态：如果有分配对象，则状态为ASSIGNED，否则为PENDING
             initial_status = TaskInstanceStatus.PENDING.value
@@ -76,10 +70,8 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 "task_type": task_data.task_type.value,
                 "task_title": task_data.task_title,
                 "task_description": task_data.task_description,
-                "input_data": json.dumps(task_data.input_data or {}, ensure_ascii=False, default=json_serializer),
-                "context_data": json.dumps(task_data.context_data or {}, ensure_ascii=False, default=json_serializer),
-                "instructions": task_data.instructions,
-                "priority": task_data.priority,
+                "input_data": task_data.input_data or "",
+                "context_data": task_data.context_data or "",
                 "assigned_user_id": task_data.assigned_user_id,
                 "assigned_agent_id": task_data.assigned_agent_id,
                 "assigned_at": assigned_at,
@@ -100,15 +92,11 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 logger.info(f"   初始状态: {TaskInstanceStatus.PENDING.value}")
                 logger.info(f"   创建时间: {result.get('created_at')}")
                 
-                # 解析JSON字段
-                result['input_data'] = json.loads(result.get('input_data', '{}'))
-                if result.get('output_data'):
-                    result['output_data'] = json.loads(result['output_data'])
+                # input_data和output_data现在是文本格式，不需要JSON解析
                 
                 # 记录输入数据概要
-                input_keys = list(result['input_data'].keys()) if result['input_data'] else []
-                if input_keys:
-                    logger.info(f"   输入数据字段: {', '.join(input_keys[:5])}{'...' if len(input_keys) > 5 else ''}")
+                if result.get('input_data') and len(result['input_data'].strip()) > 0:
+                    logger.info(f"   输入数据: {result['input_data'][:100]}{'...' if len(result['input_data']) > 100 else ''}")
                 else:
                     logger.info(f"   输入数据: 空")
             else:
@@ -122,6 +110,20 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
             import traceback
             logger.error(f"   异常堆栈: {traceback.format_exc()}")
             raise
+    
+    def _validate_task_assignment(self, task_data: TaskInstanceCreate):
+        """验证任务分配的一致性（最小干预原则）"""
+        # 仅记录警告，不自动修改数据，让上层业务逻辑处理
+        if task_data.task_type == TaskInstanceType.HUMAN and task_data.assigned_agent_id:
+            logger.warning(f"⚠️ HUMAN任务分配给了代理: {task_data.assigned_agent_id}")
+        
+        if task_data.task_type == TaskInstanceType.AGENT and task_data.assigned_user_id:
+            logger.warning(f"⚠️ AGENT任务分配给了用户: {task_data.assigned_user_id}")
+        
+        if task_data.assigned_user_id and task_data.assigned_agent_id:
+            logger.warning(f"⚠️ 任务同时分配给用户和代理")
+        
+        logger.debug(f"✅ 任务创建: 类型={task_data.task_type.value}, 用户={task_data.assigned_user_id}, 代理={task_data.assigned_agent_id}")
     
     async def get_task_by_id(self, task_instance_id: uuid.UUID) -> Optional[Dict[str, Any]]:
         """根据ID获取任务实例"""
@@ -140,10 +142,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
             result = await self.db.fetch_one(query, task_instance_id)
             if result:
                 result = dict(result)
-                result['input_data'] = json.loads(result.get('input_data', '{}'))
-                result['context_data'] = json.loads(result.get('context_data', '{}'))
-                if result.get('output_data'):
-                    result['output_data'] = json.loads(result['output_data'])
+                # input_data, context_data, output_data现在是文本格式，不需要JSON解析
             
             return result
         except Exception as e:
@@ -191,10 +190,9 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                             logger.warning(f"   ⚠️  计算执行时间失败: {e}")
             
             if update_data.output_data is not None:
-                data["output_data"] = json.dumps(update_data.output_data, ensure_ascii=False, default=json_serializer)
-                output_keys = list(update_data.output_data.keys()) if update_data.output_data else []
-                if output_keys:
-                    logger.info(f"   📤 输出数据字段: {', '.join(output_keys[:3])}{'...' if len(output_keys) > 3 else ''}")
+                data["output_data"] = update_data.output_data
+                if update_data.output_data and len(update_data.output_data.strip()) > 0:
+                    logger.info(f"   📤 输出数据: {update_data.output_data[:100]}{'...' if len(update_data.output_data) > 100 else ''}")
                 else:
                     logger.info(f"   📤 输出数据: 空")
                     
@@ -209,6 +207,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
             if update_data.actual_duration is not None:
                 data["actual_duration"] = update_data.actual_duration
                 logger.info(f"   ⏱️  实际持续时间: {update_data.actual_duration}分钟")
+            
             
             # 避免重复设置时间戳（上面已经设置过了）
             if len(data) == 1:  # 只有updated_at
@@ -253,17 +252,15 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 LEFT JOIN "user" u ON u.user_id = ti.assigned_user_id
                 LEFT JOIN agent a ON a.agent_id = ti.assigned_agent_id
                 WHERE ti.node_instance_id = $1 AND ti.is_deleted = FALSE
-                ORDER BY ti.priority DESC, ti.created_at ASC
+                ORDER BY ti.created_at ASC
             """
             results = await self.db.fetch_all(query, node_instance_id)
             
-            # 解析JSON字段
+            # 直接返回结果（input_data和output_data现在是文本格式）
             formatted_results = []
             for result in results:
                 result = dict(result)
-                result['input_data'] = json.loads(result.get('input_data', '{}'))
-                if result.get('output_data'):
-                    result['output_data'] = json.loads(result['output_data'])
+                # input_data和output_data现在是文本格式，不需要JSON解析
                 formatted_results.append(result)
             
             return formatted_results
@@ -286,7 +283,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                     LEFT JOIN "user" u ON u.user_id = ti.assigned_user_id
                     LEFT JOIN agent a ON a.agent_id = ti.assigned_agent_id
                     WHERE ti.workflow_instance_id = $1 AND ti.status = $2 AND ti.is_deleted = FALSE
-                    ORDER BY ti.priority DESC, ti.created_at ASC
+                    ORDER BY ti.created_at ASC
                 """
                 results = await self.db.fetch_all(query, workflow_instance_id, status.value)
             else:
@@ -300,17 +297,15 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                     LEFT JOIN "user" u ON u.user_id = ti.assigned_user_id
                     LEFT JOIN agent a ON a.agent_id = ti.assigned_agent_id
                     WHERE ti.workflow_instance_id = $1 AND ti.is_deleted = FALSE
-                    ORDER BY ti.priority DESC, ti.created_at ASC
+                    ORDER BY ti.created_at ASC
                 """
                 results = await self.db.fetch_all(query, workflow_instance_id)
             
-            # 解析JSON字段
+            # 直接返回结果（input_data和output_data现在是文本格式）
             formatted_results = []
             for result in results:
                 result = dict(result)
-                result['input_data'] = json.loads(result.get('input_data', '{}'))
-                if result.get('output_data'):
-                    result['output_data'] = json.loads(result['output_data'])
+                # input_data和output_data现在是文本格式，不需要JSON解析
                 formatted_results.append(result)
             
             return formatted_results
@@ -335,7 +330,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                     LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
                     WHERE ti.assigned_user_id = $1 AND ti.task_type = $2 
                           AND ti.status = $3 AND ti.is_deleted = FALSE
-                    ORDER BY ti.priority DESC, ti.created_at ASC
+                    ORDER BY ti.created_at ASC
                     LIMIT $4
                 """
                 results = await self.db.fetch_all(query, user_id, TaskInstanceType.HUMAN.value, 
@@ -351,18 +346,16 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                     LEFT JOIN workflow_instance wi ON wi.workflow_instance_id = ti.workflow_instance_id
                     LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
                     WHERE ti.assigned_user_id = $1 AND ti.task_type = $2 AND ti.is_deleted = FALSE
-                    ORDER BY ti.priority DESC, ti.created_at ASC
+                    ORDER BY ti.created_at ASC
                     LIMIT $3
                 """
                 results = await self.db.fetch_all(query, user_id, TaskInstanceType.HUMAN.value, limit)
             
-            # 解析JSON字段
+            # 直接返回结果（input_data和output_data现在是文本格式）
             formatted_results = []
             for result in results:
                 result = dict(result)
-                result['input_data'] = json.loads(result.get('input_data', '{}'))
-                if result.get('output_data'):
-                    result['output_data'] = json.loads(result['output_data'])
+                # input_data和output_data现在是文本格式，不需要JSON解析
                 formatted_results.append(result)
             
             return formatted_results
@@ -384,7 +377,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                     LEFT JOIN agent a ON a.agent_id = ti.assigned_agent_id
                     WHERE ti.assigned_agent_id = $1 AND ti.task_type IN ($2, $3)
                           AND ti.status = $4 AND ti.is_deleted = FALSE
-                    ORDER BY ti.priority DESC, ti.created_at ASC
+                    ORDER BY ti.created_at ASC
                     LIMIT $5
                 """
                 results = await self.db.fetch_all(query, agent_id, TaskInstanceType.AGENT.value,
@@ -399,7 +392,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                     LEFT JOIN processor p ON p.processor_id = ti.processor_id
                     LEFT JOIN agent a ON a.agent_id = ti.assigned_agent_id
                     WHERE ti.task_type IN ($1, $2) AND ti.status = $3 AND ti.is_deleted = FALSE
-                    ORDER BY ti.priority DESC, ti.created_at ASC
+                    ORDER BY ti.created_at ASC
                     LIMIT $4
                 """
                 results = await self.db.fetch_all(query, TaskInstanceType.AGENT.value,
@@ -421,9 +414,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 logger.info(f"   - 任务{i+1}: {task_title} (ID: {task_id})")
                 logger.info(f"     状态: {task_status}, Agent: {assigned_agent_id}, Processor: {processor_id}")
                 
-                result['input_data'] = json.loads(result.get('input_data', '{}'))
-                if result.get('output_data'):
-                    result['output_data'] = json.loads(result['output_data'])
+                # input_data和output_data现在是文本格式，不需要JSON解析
                 formatted_results.append(result)
             
             logger.info(f"✅ [TASK-REPO] Agent任务查找完成，返回 {len(formatted_results)} 个任务")
@@ -650,20 +641,18 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 LEFT JOIN agent a ON a.agent_id = ti.assigned_agent_id
                 LEFT JOIN workflow_instance wi ON wi.workflow_instance_id = ti.workflow_instance_id
                 WHERE {where_clause}
-                ORDER BY ti.priority DESC, ti.created_at DESC
+                ORDER BY ti.created_at DESC
                 LIMIT ${param_count}
             """
             params.append(limit)
             
             results = await self.db.fetch_all(query, *params)
             
-            # 解析JSON字段
+            # 直接返回结果（input_data和output_data现在是文本格式）
             formatted_results = []
             for result in results:
                 result = dict(result)
-                result['input_data'] = json.loads(result.get('input_data', '{}'))
-                if result.get('output_data'):
-                    result['output_data'] = json.loads(result['output_data'])
+                # input_data和output_data现在是文本格式，不需要JSON解析
                 formatted_results.append(result)
             
             return formatted_results

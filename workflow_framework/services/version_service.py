@@ -83,9 +83,14 @@ class VersionService:
             
             logger.info(f"成功创建节点版本: {node_base_id} -> 版本 {new_node['version']}")
             
+            # 验证连接关系完整性
+            new_workflow_id = new_node['workflow_id']
+            await self._validate_connection_integrity(new_workflow_id)
+            
             return {
                 "node_id": new_node_id,
                 "node_base_id": node_base_id,
+                "workflow_id": new_workflow_id,
                 "workflow_base_id": workflow_base_id,
                 "version": new_node['version'],
                 "success": True,
@@ -414,4 +419,126 @@ class VersionService:
             }
         except Exception as e:
             logger.error(f"获取版本统计信息失败: {e}")
+            raise
+    
+    async def _validate_connection_integrity(self, workflow_id: uuid.UUID):
+        """验证工作流中连接关系的完整性"""
+        try:
+            logger.info(f"🔍 [连接验证] 开始验证工作流 {workflow_id} 的连接关系完整性")
+            
+            # 获取所有节点
+            nodes_query = """
+                SELECT node_id, name, type 
+                FROM node 
+                WHERE workflow_id = $1 AND is_current_version = TRUE AND is_deleted = FALSE
+            """
+            nodes = await self.db.fetch_all(nodes_query, workflow_id)
+            node_ids = {node['node_id'] for node in nodes}
+            
+            logger.info(f"  - 工作流节点数: {len(nodes)}")
+            
+            # 获取所有连接
+            connections_query = """
+                SELECT from_node_id, to_node_id, connection_type 
+                FROM node_connection 
+                WHERE workflow_id = $1
+            """
+            connections = await self.db.fetch_all(connections_query, workflow_id)
+            
+            logger.info(f"  - 连接关系数: {len(connections)}")
+            
+            # 验证连接的完整性
+            invalid_connections = []
+            for conn in connections:
+                from_id = conn['from_node_id']
+                to_id = conn['to_node_id']
+                
+                if from_id not in node_ids:
+                    invalid_connections.append(f"源节点 {from_id} 不存在")
+                
+                if to_id not in node_ids:
+                    invalid_connections.append(f"目标节点 {to_id} 不存在")
+            
+            if invalid_connections:
+                error_msg = f"发现 {len(invalid_connections)} 个无效连接: {', '.join(invalid_connections)}"
+                logger.error(f"❌ [连接验证] {error_msg}")
+                raise ValueError(error_msg)
+            
+            logger.info(f"✅ [连接验证] 连接关系完整性验证通过")
+            
+            # 记录连接关系详情
+            logger.info(f"📊 [连接验证] 连接关系详情:")
+            for conn in connections:
+                from_node = next((n for n in nodes if n['node_id'] == conn['from_node_id']), None)
+                to_node = next((n for n in nodes if n['node_id'] == conn['to_node_id']), None)
+                
+                if from_node and to_node:
+                    logger.info(f"  - {from_node['name']} -> {to_node['name']} ({conn['connection_type']})")
+            
+        except Exception as e:
+            logger.error(f"❌ [连接验证] 验证连接关系完整性失败: {e}")
+            raise
+    
+    async def validate_workflow_consistency(self, workflow_id: uuid.UUID) -> Dict[str, Any]:
+        """全面验证工作流的一致性"""
+        try:
+            logger.info(f"🔍 开始验证工作流 {workflow_id} 的一致性")
+            
+            result = {
+                "workflow_id": workflow_id,
+                "is_valid": True,
+                "issues": [],
+                "warnings": [],
+                "statistics": {}
+            }
+            
+            # 1. 验证连接关系完整性
+            try:
+                await self._validate_connection_integrity(workflow_id)
+            except ValueError as e:
+                result["is_valid"] = False
+                result["issues"].append(f"连接关系完整性问题: {str(e)}")
+            
+            # 2. 检查孤立节点
+            orphaned_nodes_query = """
+                SELECT n.node_id, n.name, n.type 
+                FROM node n
+                WHERE n.workflow_id = $1 AND n.is_current_version = TRUE AND n.is_deleted = FALSE
+                AND n.node_id NOT IN (
+                    SELECT DISTINCT from_node_id FROM node_connection WHERE workflow_id = $1
+                    UNION
+                    SELECT DISTINCT to_node_id FROM node_connection WHERE workflow_id = $1
+                )
+                AND n.type NOT IN ('start', 'end')
+            """
+            
+            orphaned_nodes = await self.db.fetch_all(orphaned_nodes_query, workflow_id)
+            if orphaned_nodes:
+                result["warnings"].append(f"发现 {len(orphaned_nodes)} 个孤立节点")
+                for node in orphaned_nodes:
+                    result["warnings"].append(f"  - 孤立节点: {node['name']} ({node['type']})")
+            
+            # 3. 统计信息
+            stats_query = """
+                SELECT 
+                    COUNT(DISTINCT n.node_id) as total_nodes,
+                    COUNT(DISTINCT nc.from_node_id) as total_connections,
+                    COUNT(DISTINCT CASE WHEN n.type = 'start' THEN n.node_id END) as start_nodes,
+                    COUNT(DISTINCT CASE WHEN n.type = 'end' THEN n.node_id END) as end_nodes,
+                    COUNT(DISTINCT CASE WHEN n.type = 'processor' THEN n.node_id END) as processor_nodes
+                FROM node n
+                LEFT JOIN node_connection nc ON nc.workflow_id = n.workflow_id
+                WHERE n.workflow_id = $1 AND n.is_current_version = TRUE AND n.is_deleted = FALSE
+                GROUP BY n.workflow_id
+            """
+            
+            stats = await self.db.fetch_one(stats_query, workflow_id)
+            if stats:
+                result["statistics"] = dict(stats)
+            
+            logger.info(f"✅ 工作流一致性验证完成: {'通过' if result['is_valid'] else '失败'}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"验证工作流一致性失败: {e}")
             raise

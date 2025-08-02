@@ -77,66 +77,55 @@ class HumanTaskService:
             # 获取处理器信息
             processor_info = await self._get_processor_info(task.get('processor_id'))
             
-            # 构建完整的任务详情
+            # 解析上游上下文数据（如果存在）
+            parsed_context_data = self._parse_context_data(task.get('context_data', ''))
+            upstream_context = await self._get_upstream_context(task)
+            
+            # 创建增强的任务描述（结合原始描述和上游上下文）
+            enhanced_description = self._create_enhanced_description(
+                task.get('task_description', ''), 
+                parsed_context_data, 
+                upstream_context
+            )
+            
+            # 返回与所有processor统一的任务结构，但增加前端需要的结构化数据
             task_details = {
-                # ===== 任务基本信息 =====
+                # ===== 核心任务信息（与Agent processor完全一致）=====
                 'task_instance_id': task['task_instance_id'],
-                'task_title': task.get('task_title', '未命名任务'),
+                'task_title': task.get('task_title', ''),
                 'task_description': task.get('task_description', ''),
-                'instructions': task.get('instructions', ''),
-                'status': task.get('status', 'unknown'),
-                'priority': task.get('priority', 0),
-                'priority_label': task.get('priority_label', '普通优先级'),
-                'estimated_duration': task.get('estimated_duration', 0),
-                'actual_duration': task.get('actual_duration'),
-                'current_duration': task.get('current_duration'),
-                'estimated_deadline': task.get('estimated_deadline'),
+                'enhanced_description': enhanced_description,  # 增强版描述，包含上游上下文
+                'input_data': task.get('input_data', ''),      # 统一文本格式
+                'context_data': parsed_context_data,           # 解析后的结构化数据
+                
+                # ===== 前端结构化数据 =====
+                'parsed_context_data': parsed_context_data,    # 解析后的上下文对象
+                'upstream_context': upstream_context,          # 格式化的上游上下文
+                
+                # ===== 任务状态和分配 =====
+                'task_type': task.get('task_type', 'HUMAN'),
+                'status': task.get('status', 'PENDING'),
+                'assigned_user_id': task.get('assigned_user_id'),
+                'processor_id': task.get('processor_id'),
                 
                 # ===== 时间信息 =====
                 'created_at': task.get('created_at'),
                 'assigned_at': task.get('assigned_at'),
                 'started_at': task.get('started_at'),
                 'completed_at': task.get('completed_at'),
+                'estimated_duration': task.get('estimated_duration', 0),
+                'actual_duration': task.get('actual_duration'),
                 
-                # ===== 工作流上下文 =====
-                'workflow_context': {
-                    'workflow_name': workflow_base.get('name', '未知工作流') if workflow_base else '未知工作流',
-                    'workflow_description': workflow_base.get('description', '') if workflow_base else '',
-                    'workflow_version': workflow_base.get('version', 1) if workflow_base else 1,
-                    'instance_name': workflow_instance.get('instance_name', '') if workflow_instance else '',
-                    'instance_description': workflow_instance.get('description', '') if workflow_instance else '',
-                    'workflow_input_data': workflow_instance.get('input_data', {}) if workflow_instance else {},
-                    'workflow_context_data': workflow_instance.get('context_data', {}) if workflow_instance else {}
-                },
-                
-                # ===== 节点上下文 =====
-                'node_context': {
-                    'node_name': node_info.get('node_name', '未知节点') if node_info else '未知节点',
-                    'node_description': node_info.get('node_description', '') if node_info else '',
-                    'node_type': node_info.get('node_type', '') if node_info else '',
-                    'node_instance_id': str(task.get('node_instance_id', '')) if task.get('node_instance_id') else ''
-                },
-                
-                # ===== 处理器信息 =====
-                'processor_context': {
-                    'processor_name': processor_info.get('name', '未知处理器') if processor_info else '未知处理器',
-                    'processor_type': processor_info.get('type', 'human') if processor_info else 'human',
-                    'processor_description': processor_info.get('description', '') if processor_info else ''
-                },
-                
-                # ===== 上游节点数据 =====
-                'upstream_context': await self._get_upstream_context(task),
-                
-                # ===== 任务数据 =====
-                'input_data': task.get('input_data', {}),
-                'context_data': task.get('context_data', {}),  # 添加原始context_data
-                'output_data': task.get('output_data', {}),
+                # ===== 执行结果 =====
+                'output_data': task.get('output_data', ''),
                 'result_summary': task.get('result_summary', ''),
                 'error_message': task.get('error_message', ''),
+                'retry_count': task.get('retry_count', 0),
                 
-                # ===== 其他信息 =====
-                'assigned_user_id': task.get('assigned_user_id'),
-                'retry_count': task.get('retry_count', 0)
+                # ===== 附加信息（仅为人类用户提供更好的UI体验）=====
+                'workflow_name': workflow_base.get('name', '') if workflow_base else '',
+                'node_name': node_info.get('node_name', '') if node_info else '',
+                'processor_name': processor_info.get('name', '') if processor_info else '',
             }
             
             logger.info(f"获取任务详情: {task_details['task_title']} (ID: {task_id})")
@@ -189,8 +178,9 @@ class HumanTaskService:
     async def _get_upstream_context(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """获取任务的上游上下文信息"""
         try:
-            # 从context_data中获取上游数据（修复：之前错误地从input_data获取）
-            context_data = task.get('context_data', {})
+            # 从context_data中获取上游数据（需要先解析JSON字符串）
+            raw_context_data = task.get('context_data', '')
+            context_data = self._parse_context_data(raw_context_data)
             logger.info(f"获取上游上下文 - context_data keys: {list(context_data.keys()) if isinstance(context_data, dict) else 'not dict'}")
             
             # 获取上游节点输出数据（修复：处理列表格式的upstream_outputs）
@@ -396,11 +386,14 @@ class HumanTaskService:
                     logger.error(f"原始时间数据: {repr(task['started_at'])}")
                     actual_duration = None
             
+            # 转换结果数据为字符串格式（与现有任务字段对齐）
+            output_data_str = self._format_data_to_string(result_data)
+            
             # 更新任务状态为已完成
             logger.info(f"📝 准备更新任务状态为已完成...")
             update_data = TaskInstanceUpdate(
                 status=TaskInstanceStatus.COMPLETED,
-                output_data=result_data,
+                output_data=output_data_str,
                 result_summary=result_summary or "人工任务完成",
                 actual_duration=actual_duration
             )
@@ -1502,7 +1495,16 @@ class HumanTaskService:
             if not assignee:
                 raise ValueError("被分配用户不存在")
             
-            # 分配任务
+            # 获取任务信息验证类型
+            task = await self.task_repo.get_task_by_id(task_id)
+            if not task:
+                raise ValueError("任务不存在")
+            
+            # 验证任务类型：只有HUMAN和MIXED类型可以分配给用户
+            if task.get('task_type') not in [TaskInstanceType.HUMAN.value, TaskInstanceType.MIXED.value]:
+                raise ValueError(f"任务类型 {task.get('task_type')} 不能分配给用户")
+            
+            # 使用现有的分配方法（保持与现有架构一致）
             result = await self.task_repo.assign_task_to_user(task_id, user_id)
             
             if result:
@@ -1617,3 +1619,146 @@ class HumanTaskService:
         except Exception as e:
             logger.error(f"❌ 更新节点实例状态失败: {e}")
             raise
+    
+    def _format_data_to_string(self, data) -> str:
+        """将任意数据格式化为纯文本字符串"""
+        if data is None:
+            return "无结果数据"
+        
+        if isinstance(data, str):
+            return data.strip()
+        
+        if isinstance(data, dict):
+            # 尝试提取有意义的文本内容
+            text_fields = ['result', 'content', 'message', 'answer', 'output', 'description', 'summary']
+            for field in text_fields:
+                if field in data and data[field]:
+                    return str(data[field]).strip()
+            
+            # 如果没有标准字段，将字典转换为可读文本
+            parts = []
+            for key, value in data.items():
+                if value is not None and str(value).strip():
+                    parts.append(f"{key}: {value}")
+            return "; ".join(parts) if parts else "任务完成"
+        
+        if isinstance(data, list):
+            # 将列表转换为文本
+            if all(isinstance(item, str) for item in data):
+                return "; ".join(data)
+            else:
+                return "; ".join(str(item) for item in data)
+        
+        return str(data).strip()
+    
+    def _parse_context_data(self, context_data_str: str) -> dict:
+        """解析context_data JSON字符串为字典对象"""
+        if not context_data_str or not context_data_str.strip():
+            return {}
+        
+        try:
+            import json
+            parsed_data = json.loads(context_data_str)
+            logger.debug(f"成功解析context_data: {len(context_data_str)} 字符")
+            return parsed_data if isinstance(parsed_data, dict) else {}
+        except json.JSONDecodeError as e:
+            logger.warning(f"解析context_data JSON失败: {e}")
+            return {}
+        except Exception as e:
+            logger.warning(f"处理context_data时出错: {e}")
+            return {}
+    
+    def _create_enhanced_description(self, original_description: str, 
+                                   parsed_context: dict, 
+                                   upstream_context: dict) -> str:
+        """创建增强的任务描述，结合原始描述和上游上下文"""
+        if not original_description:
+            original_description = "请完成此任务"
+        
+        enhanced_parts = [original_description]
+        
+        # 添加工作流上下文信息
+        if parsed_context.get('workflow'):
+            workflow_info = parsed_context['workflow']
+            if workflow_info.get('name'):
+                enhanced_parts.append(f"\n📋 **工作流**: {workflow_info['name']}")
+                if workflow_info.get('instance_name'):
+                    enhanced_parts.append(f"   实例: {workflow_info['instance_name']}")
+        
+        # 添加上游节点输出信息
+        upstream_outputs = parsed_context.get('upstream_outputs', [])
+        if upstream_outputs:
+            enhanced_parts.append(f"\n🔗 **上游节点输出** ({len(upstream_outputs)}个):")
+            for i, output in enumerate(upstream_outputs[:3], 1):  # 最多显示3个
+                node_name = output.get('node_name', f'节点{i}')
+                if output.get('output_data'):
+                    # 尝试解析输出数据
+                    try:
+                        import json
+                        output_data = json.loads(output['output_data']) if isinstance(output['output_data'], str) else output['output_data']
+                        if isinstance(output_data, dict):
+                            # 获取最重要的字段显示
+                            key_fields = ['result', 'answer', 'output', 'content', 'message']
+                            display_value = None
+                            for field in key_fields:
+                                if field in output_data:
+                                    display_value = str(output_data[field])[:100]
+                                    break
+                            if not display_value and output_data:
+                                # 取第一个非空值
+                                for key, value in output_data.items():
+                                    if value and str(value).strip():
+                                        display_value = f"{key}: {str(value)[:100]}"
+                                        break
+                            if display_value:
+                                enhanced_parts.append(f"   {i}. **{node_name}**: {display_value}")
+                            else:
+                                enhanced_parts.append(f"   {i}. **{node_name}**: 已完成")
+                        else:
+                            enhanced_parts.append(f"   {i}. **{node_name}**: {str(output_data)[:100]}")
+                    except:
+                        enhanced_parts.append(f"   {i}. **{node_name}**: {str(output.get('output_data', ''))[:100]}")
+                else:
+                    enhanced_parts.append(f"   {i}. **{node_name}**: 已完成")
+            
+            if len(upstream_outputs) > 3:
+                enhanced_parts.append(f"   ... 还有 {len(upstream_outputs) - 3} 个上游节点")
+        
+        # 添加当前节点信息
+        if parsed_context.get('current_node'):
+            current_node = parsed_context['current_node']
+            if current_node.get('name'):
+                enhanced_parts.append(f"\n🎯 **当前节点**: {current_node['name']}")
+                if current_node.get('description'):
+                    enhanced_parts.append(f"   说明: {current_node['description']}")
+        
+        return '\n'.join(enhanced_parts)
+    
+    def _parse_context_data(self, context_data: str) -> dict:
+        """解析上下文数据字符串为结构化对象"""
+        try:
+            if not context_data:
+                return {}
+            
+            # 如果已经是字典，直接返回
+            if isinstance(context_data, dict):
+                return context_data
+            
+            # 尝试解析JSON字符串
+            if isinstance(context_data, str):
+                import json
+                try:
+                    parsed = json.loads(context_data)
+                    logger.info(f"成功解析context_data，包含键: {list(parsed.keys()) if isinstance(parsed, dict) else 'not dict'}")
+                    return parsed if isinstance(parsed, dict) else {}
+                except json.JSONDecodeError as e:
+                    logger.warning(f"无法解析context_data为JSON: {e}")
+                    return {}
+            
+            logger.warning(f"不支持的context_data类型: {type(context_data)}")
+            return {}
+            
+        except Exception as e:
+            logger.error(f"解析context_data失败: {e}")
+            return {}
+    

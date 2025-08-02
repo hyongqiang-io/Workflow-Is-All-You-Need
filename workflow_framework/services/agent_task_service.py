@@ -119,8 +119,7 @@ class AgentTaskService:
             logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
             raise
     
-    async def submit_task_to_agent(self, task_id: uuid.UUID, 
-                                 priority: int = 1) -> Dict[str, Any]:
+    async def submit_task_to_agent(self, task_id: uuid.UUID) -> Dict[str, Any]:
         """将任务提交给Agent处理"""
         try:
             # 获取任务信息
@@ -138,7 +137,6 @@ class AgentTaskService:
             # 将任务加入处理队列
             queue_item = {
                 'task_id': task_id,
-                'priority': priority,
                 'submitted_at': now_utc()
             }
             
@@ -219,13 +217,13 @@ class AgentTaskService:
             logger.info(f"   - Base URL: {agent.get('base_url', 'none')}")
             logger.info(f"   - API Key存在: {'是' if agent.get('api_key') else '否'}")
             
-            # 准备AI任务数据（与人类任务一致的内容，但整理成AI可接收的形式）
-            input_data = task.get('input_data', {})
+            # 准备AI任务数据（现在input_data是文本格式）
+            input_data = task.get('input_data', '')
             logger.info(f"📊 [AGENT-PROCESS] 准备任务数据:")
-            logger.info(f"   - 输入数据大小: {len(str(input_data))} 字符")
+            logger.info(f"   - 输入数据大小: {len(input_data)} 字符")
             logger.info(f"   - 输入数据类型: {type(input_data)}")
-            if isinstance(input_data, dict):
-                logger.info(f"   - 输入数据键: {list(input_data.keys())}")
+            if input_data and len(input_data) > 0:
+                logger.info(f"   - 输入数据预览: {input_data[:100]}...")
             
             # 构建系统 Prompt（使用任务的详细描述）
             logger.info(f"🔨 [AGENT-PROCESS] 构建系统Prompt")
@@ -252,7 +250,6 @@ class AgentTaskService:
                 'user_message': user_message,
                 'task_metadata': {
                     'task_title': task['task_title'],
-                    'priority': task.get('priority', 1),
                     'estimated_duration': task.get('estimated_duration', 30)
                 }
             }
@@ -279,12 +276,17 @@ class AgentTaskService:
             logger.info(f"   - 结束时间: {end_time.isoformat()}")
             logger.info(f"   - 实际用时: {actual_duration} 分钟")
             
-            # 更新任务状态为已完成
+            # 更新任务状态为已完成（将结果转换为文本格式）
             logger.info(f"💾 [AGENT-PROCESS] 更新任务状态为COMPLETED")
+            
+            # 将结果转换为文本格式存储
+            output_text = result['result'] if isinstance(result, dict) and 'result' in result else str(result)
+            result_summary = output_text[:500] + '...' if len(output_text) > 500 else output_text  # 摘要为前500字符
+            
             complete_update = TaskInstanceUpdate(
                 status=TaskInstanceStatus.COMPLETED,
-                output_data=result,
-                result_summary=result.get('summary', 'Agent任务处理完成'),
+                output_data=output_text,
+                result_summary=result_summary,
                 actual_duration=actual_duration
             )
             
@@ -300,38 +302,13 @@ class AgentTaskService:
             logger.info(f"🎯 [AGENT-PROCESS] === AGENT输出结果 ===")
             logger.info(f"   📝 任务标题: {task['task_title']}")
             logger.info(f"   ⏱️  处理时长: {actual_duration}分钟")
-            logger.info(f"   📊 结果概览:")
+            logger.info(f"   📊 结果内容:")
             
+            # 显示文本结果
+            logger.info(f"      📄 输出内容: {output_text[:300]}{'...' if len(output_text) > 300 else ''}")
+            
+            # 显示模型使用信息
             if isinstance(result, dict):
-                # 显示结构化结果
-                analysis_result = result.get('analysis_result', 'N/A')
-                if analysis_result and analysis_result != 'N/A':
-                    logger.info(f"      💡 分析结果: {analysis_result[:200]}{'...' if len(str(analysis_result)) > 200 else ''}")
-                
-                key_findings = result.get('key_findings', [])
-                if key_findings:
-                    logger.info(f"      🔍 关键发现 ({len(key_findings)}个):")
-                    for i, finding in enumerate(key_findings[:3]):
-                        logger.info(f"         {i+1}. {finding}")
-                    if len(key_findings) > 3:
-                        logger.info(f"         ... 还有{len(key_findings)-3}个发现")
-                
-                recommendations = result.get('recommendations', [])
-                if recommendations:
-                    logger.info(f"      💡 建议 ({len(recommendations)}个):")
-                    for i, rec in enumerate(recommendations[:3]):
-                        logger.info(f"         {i+1}. {rec}")
-                    if len(recommendations) > 3:
-                        logger.info(f"         ... 还有{len(recommendations)-3}个建议")
-                
-                confidence_score = result.get('confidence_score', 0)
-                if confidence_score:
-                    logger.info(f"      📈 置信度: {confidence_score}")
-                
-                summary = result.get('summary', 'N/A')
-                if summary and summary != 'N/A':
-                    logger.info(f"      📋 总结: {summary}")
-                
                 model_used = result.get('model_used', 'N/A')
                 if model_used and model_used != 'N/A':
                     logger.info(f"      🤖 使用模型: {model_used}")
@@ -339,9 +316,6 @@ class AgentTaskService:
                 token_usage = result.get('token_usage', {})
                 if token_usage:
                     logger.info(f"      💰 Token使用: {token_usage}")
-            else:
-                # 非结构化结果
-                logger.info(f"      📄 输出内容: {str(result)[:300]}{'...' if len(str(result)) > 300 else ''}")
             
             logger.info(f"🎉 [AGENT-PROCESS] Agent任务处理完成: {task['task_title']}")
             
@@ -349,7 +323,7 @@ class AgentTaskService:
             completion_result = {
                 'task_id': task_id,
                 'status': TaskInstanceStatus.COMPLETED.value,
-                'result': result,
+                'result': output_text,  # 使用文本格式的结果
                 'duration': actual_duration,
                 'message': 'Agent任务处理完成'
             }
@@ -466,36 +440,18 @@ class AgentTaskService:
                 raise
             
             if openai_result['success']:
-                # 从OpenAI格式的回复中提取结构化结果
+                # 从OpenAI格式的回复中提取文本结果
                 ai_response = openai_result['result']
                 response_content = ai_response.get('content', '')
                 
-                # 尝试解析JSON结果
-                try:
-                    parsed_result = json.loads(response_content)
-                    
-                    result = {
-                        'analysis_result': parsed_result.get('analysis_result', response_content),
-                        'key_findings': parsed_result.get('key_findings', []),
-                        'recommendations': parsed_result.get('recommendations', []),
-                        'confidence_score': parsed_result.get('confidence_score', 0.85),
-                        'summary': parsed_result.get('summary', 'AI任务处理完成'),
-                        'model_used': openai_result.get('model', agent.get('model')),
-                        'token_usage': openai_result.get('usage', {})
-                    }
-                except json.JSONDecodeError:
-                    # 如果不是JSON格式，则直接使用文本结果
-                    result = {
-                        'analysis_result': response_content,
-                        'key_findings': [],
-                        'recommendations': [],
-                        'confidence_score': 0.80,
-                        'summary': 'AI任务处理完成',
-                        'model_used': openai_result.get('model', agent.get('model')),
-                        'token_usage': openai_result.get('usage', {})
-                    }
+                # 直接返回文本结果，不要求特定格式
+                result = {
+                    'result': response_content,  # Agent的原始输出
+                    'model_used': openai_result.get('model', agent.get('model')),
+                    'token_usage': openai_result.get('usage', {})
+                }
                 
-                logger.info(f"OpenAI规范处理完成，置信度: {result['confidence_score']}")
+                logger.info(f"OpenAI规范处理完成，返回文本结果")
                 return result
             else:
                 # 处理失败，抛出异常
@@ -544,7 +500,6 @@ class AgentTaskService:
                     if task['status'] == TaskInstanceStatus.PENDING.value:
                         queue_item = {
                             'task_id': task['task_instance_id'],
-                            'priority': task.get('priority', 1),
                             'submitted_at': now_utc()
                         }
                         await self.processing_queue.put(queue_item)
@@ -622,7 +577,7 @@ class AgentTaskService:
             await self.task_repo.update_task(task_id, reset_update)
             
             # 重新提交到处理队列
-            await self.submit_task_to_agent(task_id, priority=2)  # 重试任务使用较高优先级
+            await self.submit_task_to_agent(task_id)
             
             logger.info(f"重试失败任务: {task_id}")
             return {
@@ -664,27 +619,16 @@ class AgentTaskService:
             raise
     
     def _build_system_prompt(self, task: Dict[str, Any]) -> str:
-        """构建系统Prompt（使用任务的详细描述）"""
+        """构建系统Prompt（仅包含任务描述）"""
         try:
-            # 基础系统prompt
-            system_prompt = f"""你是一个专业的AI助手，负责完成以下任务：
+            task_description = task.get('task_description', '无任务描述')
+            
+            # 简化的系统prompt，只提供任务描述
+            system_prompt = f"""你是一个专业的AI助手。请完成以下任务：
 
-任务标题：{task.get('task_title', '未命名任务')}
+{task_description}
 
-任务描述：
-{task.get('task_description', '无描述')}
-
-具体指令：
-{task.get('instructions', '无具体指令')}
-
-工作要求：
-1. 仔细分析提供的上游数据和上下文信息
-2. 基于数据进行深入分析和处理
-3. 提供结构化、准确的结果
-4. 确保输出格式符合要求
-5. 如有不确定的地方，请明确指出
-
-请以专业、准确、有条理的方式完成任务。"""
+请根据提供的上下文信息，以自然、准确的方式完成任务。"""
 
             return system_prompt.strip()
             
@@ -692,63 +636,52 @@ class AgentTaskService:
             logger.error(f"构建系统prompt失败: {e}")
             return "你是一个专业的AI助手，请帮助完成分配的任务。"
     
-    def _preprocess_upstream_context(self, input_data: Dict[str, Any]) -> str:
-        """预处理上游上下文信息（整理成补充信息）"""
+    def _preprocess_upstream_context(self, input_data: str) -> str:
+        """预处理上游上下文信息（仅包含工作流描述、节点名称、任务title、节点输出内容）"""
         try:
             context_parts = []
             
-            # 处理上游节点数据
-            immediate_upstream = input_data.get('immediate_upstream', {})
+            # 尝试解析JSON字符串
+            try:
+                if input_data and input_data.strip():
+                    data_dict = json.loads(input_data)
+                else:
+                    data_dict = {}
+            except json.JSONDecodeError:
+                logger.warning(f"无法解析输入数据为JSON: {input_data[:100]}...")
+                return "上下文信息格式错误，请基于任务描述进行处理。"
+            
+            # 1. 工作流描述
+            workflow_global = data_dict.get('workflow_global', {})
+            if workflow_global:
+                workflow_description = workflow_global.get('workflow_description', '')
+                if workflow_description:
+                    context_parts.append(f"工作流描述：{workflow_description}")
+            
+            # 2. 上游节点信息（节点名称、任务title、节点输出内容）
+            immediate_upstream = data_dict.get('immediate_upstream', {})
             if immediate_upstream:
-                context_parts.append("## 上游节点提供的数据：")
+                context_parts.append("\n上游节点信息：")
                 
                 for node_id, node_data in immediate_upstream.items():
                     node_name = node_data.get('node_name', f'节点_{node_id[:8]}')
+                    task_title = node_data.get('task_title', '')
                     output_data = node_data.get('output_data', {})
-                    completed_at = node_data.get('completed_at', '')
                     
-                    context_parts.append(f"\n### {node_name}")
-                    if completed_at:
-                        context_parts.append(f"完成时间: {completed_at}")
+                    context_parts.append(f"\n节点：{node_name}")
+                    if task_title:
+                        context_parts.append(f"任务：{task_title}")
                     
-                    # 格式化输出数据
+                    # 输出内容（简化展示）
                     if output_data:
-                        context_parts.append("数据内容:")
-                        for key, value in output_data.items():
-                            if isinstance(value, (dict, list)):
-                                context_parts.append(f"- {key}: {self._format_complex_data(value)}")
-                            else:
-                                context_parts.append(f"- {key}: {value}")
+                        context_parts.append("输出内容：")
+                        if isinstance(output_data, dict):
+                            for key, value in output_data.items():
+                                context_parts.append(f"- {key}: {self._format_simple_output(value)}")
+                        else:
+                            context_parts.append(f"- {self._format_simple_output(output_data)}")
                     else:
-                        context_parts.append("- 无输出数据")
-            
-            # 处理工作流全局信息
-            workflow_global = input_data.get('workflow_global', {})
-            if workflow_global:
-                context_parts.append("\n## 工作流全局信息：")
-                
-                execution_path = workflow_global.get('execution_path', [])
-                if execution_path:
-                    context_parts.append(f"执行路径: {' → '.join(execution_path)}")
-                
-                global_data = workflow_global.get('global_data', {})
-                if global_data:
-                    context_parts.append("全局数据:")
-                    for key, value in global_data.items():
-                        context_parts.append(f"- {key}: {value}")
-                
-                start_time = workflow_global.get('execution_start_time', '')
-                if start_time:
-                    context_parts.append(f"工作流开始时间: {start_time}")
-            
-            # 处理节点信息
-            node_info = input_data.get('node_info', {})
-            if node_info:
-                context_parts.append("\n## 当前节点信息：")
-                for key, value in node_info.items():
-                    if key == 'node_instance_id':
-                        continue  # 跳过技术性ID
-                    context_parts.append(f"- {key}: {value}")
+                        context_parts.append("- 无输出内容")
             
             return "\n".join(context_parts) if context_parts else "无上游上下文数据。"
             
@@ -756,64 +689,55 @@ class AgentTaskService:
             logger.error(f"预处理上游上下文失败: {e}")
             return "上下文信息处理失败，请基于任务描述进行处理。"
     
-    def _format_complex_data(self, data) -> str:
-        """格式化复杂数据结构"""
+    def _format_simple_output(self, data) -> str:
+        """格式化输出数据为简单文本形式"""
         try:
             if isinstance(data, dict):
+                # 对于字典，尝试找到最重要的字段
+                if 'result' in data:
+                    return str(data['result'])
+                elif 'content' in data:
+                    return str(data['content'])
+                elif 'value' in data:
+                    return str(data['value'])
+                elif len(data) == 1:
+                    # 如果只有一个键值对，直接返回值
+                    return str(list(data.values())[0])
+                else:
+                    # 返回简化的字典表示
+                    return str(data)
+            elif isinstance(data, list):
                 if len(data) <= 3:
                     return str(data)
                 else:
-                    keys = list(data.keys())[:3]
-                    return f"包含 {len(data)} 项数据，主要字段: {', '.join(keys)}..."
-            elif isinstance(data, list):
-                if len(data) <= 5:
-                    return str(data)
-                else:
-                    return f"列表包含 {len(data)} 项数据"
+                    return f"包含{len(data)}个项目的列表"
             else:
                 return str(data)
         except:
-            return "复杂数据结构"
+            return "数据"
     
     def _build_user_message(self, task: Dict[str, Any], context_info: str) -> str:
-        """构建用户消息（作为任务输入）"""
+        """构建用户消息（包含任务标题和上游节点信息）"""
         try:
             message_parts = []
             
-            # 任务基本信息
+            # 任务标题
+            logger.info(f"上下文信息: {context_info}")
             task_title = task.get('task_title', '未命名任务')
-            message_parts.append(f"请帮我完成以下任务：{task_title}")
+            message_parts.append(f"任务：{task_title}")
             
-            # 添加上下文信息
+            # 添加上下文信息（上游节点信息）
             if context_info and context_info.strip() != "无上游上下文数据。":
-                message_parts.append("\n以下是可用的上下文信息，请充分利用：")
+                message_parts.append("\n上下文信息：")
                 message_parts.append(context_info)
-            
-            # 添加特殊要求（如果有）
-            priority = task.get('priority', 1)
-            if priority >= 3:
-                message_parts.append("\n注意：这是一个高优先级任务，请优先处理。")
-            
-            estimated_duration = task.get('estimated_duration', 0)
-            if estimated_duration > 0:
-                message_parts.append(f"\n预估处理时间：{estimated_duration} 分钟。")
-            
-            # 输出格式要求
-            message_parts.append("""
-请按照以下JSON格式返回结果：
-{
-  "analysis_result": "你的分析结果",
-  "key_findings": ["关键发现1", "关键发现2"],
-  "recommendations": ["建议1", "建议2"],
-  "confidence_score": 0.85,
-  "summary": "结果总结"
-}""")
+            else:
+                message_parts.append("\n当前没有上游节点数据。")
             
             return "\n".join(message_parts)
             
         except Exception as e:
             logger.error(f"构建用户消息失败: {e}")
-            return f"请完成任务：{task.get('task_title', '未知任务')}"
+            return f"任务：{task.get('task_title', '未知任务')}"
 
 
 # 全局Agent任务服务实例

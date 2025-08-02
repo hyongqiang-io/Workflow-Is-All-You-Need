@@ -4,6 +4,7 @@ Workflow Execution Engine Service
 """
 
 import uuid
+import json
 import asyncio
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -30,6 +31,13 @@ from .node_dependency_tracker import NodeDependencyTracker
 # 保持向下兼容
 from .workflow_context_manager import WorkflowContextManager
 from .node_dependency_manager import NodeDependencyManager
+
+
+def _json_serializer(obj):
+    """自定义JSON序列化函数，处理datetime对象"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
 
 class ExecutionEngine:
@@ -315,10 +323,13 @@ class ExecutionEngine:
                         # 创建任务实例
                         task_title = f"{node['name']} - {processor.get('processor_name', processor.get('name', 'Unknown'))}"
                         task_description = node.get('task_description') or node.get('description') or f"执行节点 {node['name']} 的任务"
-                        instructions = node.get('instructions') or processor.get('instructions') or f"请处理节点 {node['name']} 的相关任务"
                         
-                        # 收集任务上下文数据
-                        context_data = await self._collect_task_context_data(workflow_instance_id, node_instance_id)
+                        # 收集任务上下文数据（使用WorkflowContextManager）
+                        context_data = await self.context_manager.get_task_context_data(workflow_instance_id, node_instance_id)
+                        
+                        # 将上下文数据转换为文本格式
+                        context_text = json.dumps(context_data, ensure_ascii=False, indent=2, default=_json_serializer) if context_data else ""
+                        input_text = json.dumps(node.get('input_data', {}), ensure_ascii=False, indent=2, default=_json_serializer)
                         
                         task_data = TaskInstanceCreate(
                             node_instance_id=node_instance_id,  # 使用真实的节点实例ID
@@ -327,10 +338,8 @@ class ExecutionEngine:
                             task_type=task_type,
                             task_title=task_title,
                             task_description=task_description,
-                            input_data=node.get('input_data', {}),
-                            context_data=context_data,
-                            instructions=instructions,
-                            priority=1,
+                            input_data=input_text,
+                            context_data=context_text,
                             assigned_user_id=assigned_user_id,
                             assigned_agent_id=assigned_agent_id,
                             estimated_duration=30
@@ -398,22 +407,10 @@ class ExecutionEngine:
             return TaskInstanceType.HUMAN  # 默认为人工任务
     
     def _determine_task_priority(self, task_type: TaskInstanceType, node_data: Dict[str, Any]) -> int:
-        """根据任务类型和节点配置确定任务优先级"""
+        """确定任务优先级（已废弃，保留方法避免调用错误）"""
         try:
-            # 从节点数据中获取优先级配置，如果没有则使用默认值
-            node_priority = node_data.get('priority', None)
-            if node_priority is not None:
-                return max(1, min(5, int(node_priority)))  # 限制在1-5之间
-            
-            # 根据任务类型设置默认优先级
-            if task_type == TaskInstanceType.HUMAN:
-                return 2  # 人工任务优先级稍高
-            elif task_type == TaskInstanceType.AGENT:
-                return 1  # Agent任务优先级正常
-            elif task_type == TaskInstanceType.MIXED:
-                return 3  # 混合任务优先级最高
-            else:
-                return 1  # 默认优先级
+            # 优先级字段已废弃，返回默认值
+            return 1
                 
         except Exception as e:
             logger.warning(f"确定任务优先级失败，使用默认值: {e}")
@@ -631,14 +628,12 @@ class ExecutionEngine:
                 # 获取任务详细信息用于通知
                 task_title = task.get('task_title', '未命名任务')
                 workflow_name = task.get('workflow_name', '未命名工作流')
-                priority = task.get('priority', 1)
                 estimated_duration = task.get('estimated_duration', 30)
                 
                 logger.info(f"📋 人工任务分配详情:")
                 logger.info(f"   - 任务标题: {task_title}")
                 logger.info(f"   - 工作流: {workflow_name}")
                 logger.info(f"   - 分配给用户: {assigned_user_id}")
-                logger.info(f"   - 优先级: {priority}")
                 logger.info(f"   - 预估时长: {estimated_duration}分钟")
                 logger.info(f"   - 任务描述: {task.get('task_description', '无描述')[:100]}...")
                 
@@ -658,7 +653,6 @@ class ExecutionEngine:
                 print(f"   任务ID: {task_id}")
                 print(f"   任务标题: {task_title}")
                 print(f"   工作流: {workflow_name}")
-                print(f"   优先级: {priority}")
                 print(f"   时间: {now_utc().strftime('%Y-%m-%d %H:%M:%S')}")
                 print("=" * 60)
                 
@@ -685,7 +679,7 @@ class ExecutionEngine:
             self.task_callbacks[task_id] = callback_future
             
             # 提交任务到AgentTaskService进行处理
-            result = await agent_task_service.submit_task_to_agent(task_id, priority=1)
+            result = await agent_task_service.submit_task_to_agent(task_id)
             
             if result['status'] == 'queued':
                 logger.info(f"Agent任务 {task_id} 已提交到服务队列")
@@ -1141,21 +1135,56 @@ class ExecutionEngine:
             for i, created_node in enumerate(created_nodes, 1):
                 logger.info(f"  正在注册节点 {i}/{len(created_nodes)} 的依赖: {created_node['node_data']['name']}")
                 try:
-                    upstream_nodes = await self.dependency_manager.get_immediate_upstream_nodes(
-                        workflow_base_id, created_node['node_base_id']
+                    # 直接从数据库查询连接关系，使用正确的workflow_id
+                    from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+                    workflow_instance_repo = WorkflowInstanceRepository()
+                    workflow_instance = await workflow_instance_repo.get_instance_by_id(workflow_instance_id)
+                    current_workflow_id = workflow_instance['workflow_id'] if workflow_instance else None
+                    
+                    logger.info(f"    🔍 查询节点 {created_node['node_data']['name']} 的依赖关系:")
+                    logger.info(f"      - node_id: {created_node['node_data']['node_id']}")
+                    logger.info(f"      - workflow_id: {current_workflow_id}")
+                    
+                    # 查询上游连接关系
+                    upstream_query = """
+                    SELECT DISTINCT 
+                        nc.from_node_id as upstream_node_id,
+                        n.name as upstream_node_name,
+                        n.type as upstream_node_type
+                    FROM node_connection nc
+                    JOIN node n ON nc.from_node_id = n.node_id
+                    WHERE nc.to_node_id = $1 
+                    AND nc.workflow_id = $2
+                    ORDER BY n.name
+                    """
+                    
+                    upstream_connections = await self.dependency_manager.db.fetch_all(
+                        upstream_query, 
+                        created_node['node_data']['node_id'],  # 使用node_id查询
+                        current_workflow_id  # 使用workflow_id查询
                     )
-                    upstream_node_ids = [n['upstream_node_id'] for n in upstream_nodes]
+                    
+                    logger.info(f"    🔍 查询到 {len(upstream_connections)} 个上游节点连接:")
+                    upstream_node_ids = []
+                    for upstream in upstream_connections:
+                        upstream_node_id = upstream['upstream_node_id']
+                        upstream_node_ids.append(upstream_node_id)
+                        logger.info(f"      - 上游节点: {upstream.get('upstream_node_name', 'Unknown')} (node_id: {upstream_node_id})")
+                    
+                    logger.info(f"    📋 最终依赖列表 (node_id): {upstream_node_ids}")
                     
                     await self.context_manager.register_node_dependencies(
                         created_node['node_instance_id'],
-                        created_node['node_base_id'],
+                        created_node['node_data']['node_id'],  # 使用node_id而不是node_base_id
                         workflow_instance_id,
-                        upstream_node_ids
+                        upstream_node_ids  # 上游节点的node_id列表
                     )
                     
-                    logger.info(f"  ✅ 节点依赖注册成功: {len(upstream_node_ids)} 个上游节点")
+                    logger.info(f"  ✅ 节点依赖注册成功: {len(upstream_node_ids)} 个上游节点 (使用node_id)")
                 except Exception as e:
                     logger.error(f"  ❌ 节点依赖注册失败: {e}")
+                    import traceback
+                    logger.error(f"    异常详情: {traceback.format_exc()}")
             
             # 3. 不再为所有处理器节点立即创建任务 - 改为延迟创建机制
             logger.info(f"阶段3: 启用延迟任务创建机制，只为START节点创建任务")
@@ -1173,6 +1202,10 @@ class ExecutionEngine:
                 logger.error(f"❌ 延迟任务创建机制启动失败: {e}")
             
             logger.info(f"✅ 节点实例和依赖关系创建完成: {len(created_nodes)} 个节点")
+            
+            # 打印依赖关系总结
+            logger.info(f"📊 [依赖总结] 打印工作流 {workflow_instance_id} 的完整依赖关系:")
+            self.context_manager.print_dependency_summary(workflow_instance_id)
             
         except Exception as e:
             logger.error(f"❌ 创建带依赖的节点实例失败: {e}")
@@ -1215,11 +1248,9 @@ class ExecutionEngine:
                     logger.info(f"      处理器类型: {processor_type}")
                     logger.info(f"      任务类型: {task_type.value}")
                     
-                    # 根据任务类型和节点配置确定优先级和超时设置
-                    priority = self._determine_task_priority(task_type, node_data)
+                    # 根据任务类型和节点配置确定超时设置
                     estimated_duration = self._determine_task_duration(task_type, node_data)
                     
-                    logger.info(f"      计算得出优先级: {priority}")
                     logger.info(f"      预估持续时间: {estimated_duration}分钟")
                     
                     # 确定任务分配
@@ -1239,15 +1270,15 @@ class ExecutionEngine:
                     # 确保task_description有值
                     task_description = node_data.get('task_description') or node_data.get('description') or f"执行节点 {node_data['name']} 的任务"
                     
-                    # 确保instructions有值  
-                    instructions = node_data.get('instructions') or processor.get('instructions') or f"请处理节点 {node_data['name']} 的相关任务"
-                    
                     logger.info(f"      📝 任务描述: {task_description[:50]}{'...' if len(task_description) > 50 else ''}")
-                    logger.info(f"      📋 执行指令: {instructions[:50]}{'...' if len(instructions) > 50 else ''}")
                     
                     # 收集任务上下文数据
                     logger.info(f"      🔍 收集任务上下文数据...")
-                    context_data = await self._collect_task_context_data(workflow_instance_id, created_node['node_instance_id'])
+                    context_data = await self.context_manager.get_task_context_data(workflow_instance_id, created_node['node_instance_id'])
+                    
+                    # 将上下文数据转换为文本格式
+                    context_text = json.dumps(context_data, ensure_ascii=False, indent=2, default=_json_serializer) if context_data else ""
+                    input_text = json.dumps(node_data.get('input_data', {}), ensure_ascii=False, indent=2, default=_json_serializer)
                     
                     task_data = TaskInstanceCreate(
                         node_instance_id=created_node['node_instance_id'],
@@ -1256,10 +1287,8 @@ class ExecutionEngine:
                         task_type=task_type,
                         task_title=task_title,
                         task_description=task_description,
-                        input_data=node_data.get('input_data', {}),
-                        context_data=context_data,
-                        instructions=instructions,
-                        priority=priority,
+                        input_data=input_text,
+                        context_data=context_text,
                         assigned_user_id=assigned_user_id,
                         assigned_agent_id=assigned_agent_id,
                         estimated_duration=estimated_duration
@@ -1447,6 +1476,9 @@ class ExecutionEngine:
                     node_type = node.get('node_type', '未知')
                     logger.info(f"  - Pending节点: {node_name} (类型: {node_type})")
                 
+                # 确保已完成的START节点已通知上下文管理器
+                await self._ensure_completed_start_nodes_notified(workflow_instance_id)
+                
                 # 检查这些节点的依赖是否已满足，如果满足则触发执行
                 logger.info(f"检查pending节点的依赖关系")
                 await self._check_and_trigger_ready_nodes(workflow_instance_id, pending_nodes)
@@ -1455,6 +1487,75 @@ class ExecutionEngine:
                 
         except Exception as e:
             logger.error(f"恢复工作流执行失败: {e}")
+            import traceback
+            logger.error(f"异常堆栈: {traceback.format_exc()}")
+    
+    async def _ensure_completed_start_nodes_notified(self, workflow_instance_id: uuid.UUID):
+        """确保已完成的START节点已通知上下文管理器"""
+        try:
+            logger.info(f"🔍 [START节点修复] 检查已完成的START节点是否已通知上下文管理器")
+            
+            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            node_instance_repo = NodeInstanceRepository()
+            
+            # 查找已完成的START节点
+            completed_start_query = """
+            SELECT ni.*, n.type as node_type, n.name as node_name, n.node_id
+            FROM node_instance ni
+            JOIN node n ON ni.node_id = n.node_id
+            WHERE ni.workflow_instance_id = $1
+            AND LOWER(n.type) = 'start'
+            AND ni.status IN ('completed', 'COMPLETED')
+            AND ni.is_deleted = FALSE
+            AND n.is_deleted = FALSE
+            ORDER BY ni.completed_at ASC
+            """
+            
+            completed_start_nodes = await node_instance_repo.db.fetch_all(completed_start_query, workflow_instance_id)
+            logger.info(f"  - 找到 {len(completed_start_nodes)} 个已完成的START节点")
+            
+            if not completed_start_nodes:
+                logger.info(f"  ❌ 没有找到已完成的START节点")
+                return
+            
+            for start_node in completed_start_nodes:
+                node_instance_id = start_node['node_instance_id']
+                node_id = start_node['node_id']
+                node_name = start_node.get('node_name', '未知')
+                output_data = start_node.get('output_data', {})
+                
+                logger.info(f"  📋 处理START节点: {node_name}")
+                logger.info(f"    - node_instance_id: {node_instance_id}")
+                logger.info(f"    - node_id: {node_id}")
+                
+                # 检查上下文管理器中是否已经记录了这个节点的完成状态
+                dependency_info = self.context_manager.get_node_dependency_info(node_instance_id)
+                if dependency_info:
+                    logger.info(f"    - 节点依赖信息存在，检查是否已在completed_nodes中")
+                    workflow_context = self.context_manager.workflow_contexts.get(workflow_instance_id, {})
+                    completed_nodes = workflow_context.get('completed_nodes', set())
+                    
+                    if node_id not in completed_nodes:
+                        logger.info(f"  🔧 [START节点修复] START节点 {node_name} 已完成但未通知上下文管理器，正在修复...")
+                        
+                        # 手动通知上下文管理器
+                        await self.context_manager.mark_node_completed(
+                            workflow_instance_id, 
+                            node_id, 
+                            node_instance_id, 
+                            output_data
+                        )
+                        
+                        logger.info(f"  ✅ [START节点修复] 已通知上下文管理器START节点 {node_name} 的完成状态")
+                    else:
+                        logger.info(f"  ✅ START节点 {node_name} 已在上下文管理器中标记为完成")
+                else:
+                    logger.warning(f"  ⚠️ START节点 {node_name} 的依赖信息不存在，可能需要重新注册")
+            
+            logger.info(f"✅ [START节点修复] 已完成的START节点通知检查完成")
+            
+        except Exception as e:
+            logger.error(f"❌ [START节点修复] 确保START节点通知失败: {e}")
             import traceback
             logger.error(f"异常堆栈: {traceback.format_exc()}")
     
@@ -1479,91 +1580,7 @@ class ExecutionEngine:
             import traceback
             logger.error(f"异常堆栈: {traceback.format_exc()}")
     
-    async def _collect_task_context_data(self, workflow_instance_id: uuid.UUID, node_instance_id: uuid.UUID) -> Dict[str, Any]:
-        """收集任务执行所需的上下文数据"""
-        try:
-            context_data = {}
-            
-            # 1. 获取工作流实例信息
-            workflow_instance = await self.workflow_instance_repo.get_instance_by_id(workflow_instance_id)
-            if workflow_instance:
-                context_data['workflow'] = {
-                    'name': workflow_instance.get('workflow_name'),
-                    'instance_name': workflow_instance.get('instance_name'),
-                    'status': workflow_instance.get('status'),
-                    'input_data': workflow_instance.get('input_data', {}),
-                    'created_at': workflow_instance.get('created_at')
-                }
-            
-            # 2. 获取上游节点的输出数据
-            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
-            node_instance_repo = NodeInstanceRepository()
-            
-            # 查询上游已完成节点的输出
-            upstream_query = """
-            SELECT 
-                ni.node_instance_id,
-                n.name as node_name,
-                ni.output_data,
-                ni.status,
-                ni.completed_at
-            FROM node_connection nc
-            JOIN node_instance ni ON nc.from_node_id = ni.node_id
-            JOIN node n ON ni.node_id = n.node_id
-            WHERE nc.to_node_id = (
-                SELECT node_id FROM node_instance WHERE node_instance_id = $1
-            )
-            AND ni.workflow_instance_id = $2
-            AND ni.status = 'completed'
-            AND ni.is_deleted = FALSE
-            ORDER BY ni.completed_at ASC
-            """
-            
-            upstream_nodes = await node_instance_repo.db.fetch_all(upstream_query, node_instance_id, workflow_instance_id)
-            
-            if upstream_nodes:
-                context_data['upstream_outputs'] = []
-                for node in upstream_nodes:
-                    context_data['upstream_outputs'].append({
-                        'node_name': node['node_name'],
-                        'node_instance_id': str(node['node_instance_id']),
-                        'output_data': node['output_data'] or {},
-                        'completed_at': node['completed_at'].isoformat() if node['completed_at'] else None
-                    })
-            
-            # 3. 获取当前节点信息
-            current_node_query = """
-            SELECT 
-                ni.node_instance_id,
-                n.name as node_name,
-                n.type as node_type,
-                n.task_description,
-                ni.input_data,
-                ni.status
-            FROM node_instance ni
-            JOIN node n ON ni.node_id = n.node_id
-            WHERE ni.node_instance_id = $1
-            """
-            
-            current_node = await node_instance_repo.db.fetch_one(current_node_query, node_instance_id)
-            if current_node:
-                context_data['current_node'] = {
-                    'name': current_node['node_name'],
-                    'type': current_node['node_type'],
-                    'description': current_node['task_description'],
-                    'input_data': current_node['input_data'] or {},
-                    'status': current_node['status']
-                }
-            
-            # 4. 添加时间戳
-            context_data['context_generated_at'] = datetime.utcnow().isoformat()
-            
-            logger.info(f"为节点 {node_instance_id} 收集上下文数据: {len(context_data)} 个顶级字段")
-            return context_data
-            
-        except Exception as e:
-            logger.error(f"收集任务上下文数据失败: {e}")
-            return {}
+    # _collect_task_context_data 方法已被 WorkflowContextManager.get_task_context_data 替换
 
     async def _check_node_dependencies_satisfied(self, workflow_instance_id: uuid.UUID, node_instance_id: uuid.UUID) -> bool:
         """检查节点的依赖是否已满足"""
@@ -1572,7 +1589,7 @@ class ExecutionEngine:
             from ..repositories.instance.node_instance_repository import NodeInstanceRepository
             node_instance_repo = NodeInstanceRepository()
             
-            # 使用 node_connection 表查询上游节点的状态
+            # 使用 node_connection 表查询上游节点的状态  
             dependency_query = """
             SELECT COUNT(*) as total_dependencies,
                    COUNT(CASE WHEN upstream_ni.status = 'completed' THEN 1 END) as completed_dependencies
@@ -1638,8 +1655,23 @@ class ExecutionEngine:
             await node_instance_repo.update_node_instance(node_instance_id, completed_data)
             logger.info(f"  ✅ 节点状态更新为 COMPLETED 成功")
             
-            # 获取下游节点并启动执行
-            logger.info(f"  步骤3: 触发下游节点执行")
+            # 步骤3: 通知上下文管理器节点完成
+            logger.info(f"  步骤3: 通知上下文管理器START节点完成")
+            node_instance_data = await node_instance_repo.get_instance_by_id(node_instance_id)
+            if node_instance_data and self.context_manager:
+                node_id = node_instance_data['node_id']
+                output_data = completed_data.output_data
+                
+                logger.info(f"    - 通知上下文管理器: node_id={node_id}")
+                await self.context_manager.mark_node_completed(
+                    workflow_instance_id, node_id, node_instance_id, output_data
+                )
+                logger.info(f"    ✅ 上下文管理器通知完成")
+            else:
+                logger.warning(f"    ⚠️ 无法通知上下文管理器: node_instance_data={node_instance_data is not None}, context_manager={self.context_manager is not None}")
+            
+            # 获取下游节点并启动执行（这个方法可能是重复的，上下文管理器已经处理了）
+            logger.info(f"  步骤4: 触发下游节点执行（通过_trigger_downstream_nodes）")
             await self._trigger_downstream_nodes(workflow_instance_id, start_node)
             logger.info(f"  ✅ 下游节点触发完成")
             
@@ -1678,43 +1710,65 @@ class ExecutionEngine:
     async def _execute_node_when_ready(self, workflow_instance_id: uuid.UUID, node_instance_id: uuid.UUID):
         """当节点准备好时执行节点"""
         try:
+            logger.info(f"🚀 [节点执行] 开始执行节点: {node_instance_id}")
+            logger.info(f"  - 工作流实例: {workflow_instance_id}")
+            
             # 检查节点是否准备好执行
-            if not self.context_manager.is_node_ready_to_execute(node_instance_id):
-                logger.warning(f"节点 {node_instance_id} 尚未准备好执行")
+            is_ready = self.context_manager.is_node_ready_to_execute(node_instance_id)
+            logger.info(f"  - 节点就绪状态检查: {is_ready}")
+            
+            if not is_ready:
+                logger.warning(f"❌ [节点执行] 节点 {node_instance_id} 尚未准备好执行")
                 return
             
             # 获取节点信息
             dep_info = self.context_manager.get_node_dependency_info(node_instance_id)
+            logger.info(f"  - 依赖信息获取: {'成功' if dep_info else '失败'}")
+            
             if not dep_info:
-                logger.error(f"无法获取节点 {node_instance_id} 的依赖信息")
+                logger.error(f"❌ [节点执行] 无法获取节点 {node_instance_id} 的依赖信息")
                 return
             
-            node_base_id = dep_info['node_base_id']
+            node_id = dep_info.get('node_id')  # 使用node_id而不是node_base_id
+            logger.info(f"  - 节点ID: {node_id}")
+            logger.info(f"  - 依赖数量: {dep_info.get('dependency_count', 0)}")
+            logger.info(f"  - 已完成上游: {len(dep_info.get('completed_upstream', set()))}")
             
             # 标记节点开始执行
+            logger.info(f"📍 [节点执行] 标记节点开始执行...")
             await self.context_manager.mark_node_executing(
-                workflow_instance_id, node_base_id, node_instance_id
+                workflow_instance_id, node_id, node_instance_id  # 使用node_id
             )
             
             # 获取节点的上游上下文
+            logger.info(f"🔍 [节点执行] 收集上游上下文数据...")
             upstream_context = await self.context_manager.get_node_upstream_context(
                 workflow_instance_id, node_instance_id
             )
+            logger.info(f"  - 上游结果数量: {len(upstream_context.get('immediate_upstream_results', {}))}")
             
             # 更新节点的任务实例，添加上下文数据
+            logger.info(f"📝 [节点执行] 更新任务上下文数据...")
             await self._update_node_tasks_with_context(node_instance_id, upstream_context)
             
             # 执行节点的任务
-            await self._execute_node_tasks(workflow_instance_id, node_instance_id, node_base_id)
+            logger.info(f"⚡ [节点执行] 开始执行节点任务...")
+            await self._execute_node_tasks(workflow_instance_id, node_instance_id, node_id)  # 使用node_id
+            
+            logger.info(f"✅ [节点执行] 节点 {node_instance_id} 执行流程完成")
             
         except Exception as e:
-            logger.error(f"执行节点 {node_instance_id} 失败: {e}")
+            logger.error(f"❌ [节点执行] 执行节点 {node_instance_id} 失败: {e}")
+            import traceback
+            logger.error(f"  异常详情: {traceback.format_exc()}")
+            
             # 标记节点失败
             dep_info = self.context_manager.get_node_dependency_info(node_instance_id)
             if dep_info:
+                node_id = dep_info.get('node_id', dep_info.get('node_base_id'))  # 兼容处理
                 await self.context_manager.mark_node_failed(
                     workflow_instance_id, 
-                    dep_info['node_base_id'], 
+                    node_id, 
                     node_instance_id,
                     {'error': str(e)}
                 )
@@ -1736,11 +1790,23 @@ class ExecutionEngine:
                     }
                 }
                 
-                # 更新任务的输入数据
-                update_data = TaskInstanceUpdate(
-                    input_data=task_context,
-                    status=TaskInstanceStatus.ASSIGNED if task.get('assigned_user_id') or task.get('assigned_agent_id') else TaskInstanceStatus.PENDING
-                )
+                # 更新任务的输入数据（但不改变已完成或失败任务的状态）
+                current_status = task.get('status', 'PENDING')
+                
+                # 只有PENDING状态的任务才需要更新状态
+                if current_status == 'PENDING':
+                    new_status = TaskInstanceStatus.ASSIGNED if task.get('assigned_user_id') or task.get('assigned_agent_id') else TaskInstanceStatus.PENDING
+                    update_data = TaskInstanceUpdate(
+                        input_data=task_context,
+                        status=new_status
+                    )
+                    logger.debug(f"任务 {task['task_instance_id']} 状态更新: {current_status} → {new_status.value}")
+                else:
+                    # 已完成/失败/进行中的任务只更新上下文，不改变状态
+                    update_data = TaskInstanceUpdate(
+                        input_data=task_context
+                    )
+                    logger.debug(f"任务 {task['task_instance_id']} 状态保持: {current_status}（仅更新上下文）")
                 
                 await self.task_instance_repo.update_task(task['task_instance_id'], update_data)
                 logger.debug(f"更新任务 {task['task_instance_id']} 的上下文数据")
@@ -1783,9 +1849,13 @@ class ExecutionEngine:
     async def _complete_node_without_tasks(self, workflow_instance_id: uuid.UUID, node_base_id: uuid.UUID, node_instance_id: uuid.UUID):
         """完成没有任务的节点（如START、END节点）"""
         try:
+            from datetime import datetime as dt
+            from ..models.instance import NodeInstanceStatus, NodeInstanceUpdate
+            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            
             # 标记节点完成
             output_data = {
-                'completed_at': datetime.utcnow().isoformat(),
+                'completed_at': dt.utcnow().isoformat(),
                 'node_type': 'system',
                 'message': '系统节点自动完成'
             }
@@ -1794,7 +1864,20 @@ class ExecutionEngine:
                 workflow_instance_id, node_base_id, node_instance_id, output_data
             )
             
-            logger.info(f"系统节点 {node_base_id} 自动完成")
+            # 同时更新数据库中的节点实例状态
+            try:
+                node_repo = NodeInstanceRepository()
+                node_update = NodeInstanceUpdate(
+                    status=NodeInstanceStatus.COMPLETED,
+                    output_data=output_data,
+                    completed_at=dt.utcnow()
+                )
+                await node_repo.update_node_instance(node_instance_id, node_update)
+                logger.info(f"💾 [系统节点] 节点实例 {node_instance_id} 数据库状态已更新为COMPLETED")
+            except Exception as e:
+                logger.error(f"❌ [系统节点] 更新节点实例数据库状态失败: {e}")
+            
+            logger.info(f"✅ 系统节点 {node_base_id} 自动完成")
             
         except Exception as e:
             logger.error(f"完成系统节点失败: {e}")
@@ -1906,9 +1989,22 @@ class ExecutionEngine:
                         logger.error(f"❌ [节点监听] context_manager 为 None，无法标记节点完成")
                         break
                     
-                    await self.context_manager.mark_node_completed(
-                        workflow_instance_id, node_base_id, node_instance_id, output_data
-                    )
+                    # 获取node_id用于依赖匹配，因为依赖关系是基于node_id注册的
+                    from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+                    node_repo = NodeInstanceRepository()
+                    node_instance_data = await node_repo.get_instance_by_id(node_instance_id)
+                    node_id = node_instance_data['node_id'] if node_instance_data else None
+                    
+                    if node_id:
+                        logger.info(f"🎯 [节点监听] 标记节点完成: node_id={node_id}, node_base_id={node_base_id}")
+                        await self.context_manager.mark_node_completed(
+                            workflow_instance_id, node_id, node_instance_id, output_data
+                        )
+                    else:
+                        logger.error(f"❌ [节点监听] 无法获取node_id，使用node_base_id作为备用")
+                        await self.context_manager.mark_node_completed(
+                            workflow_instance_id, node_base_id, node_instance_id, output_data
+                        )
                     
                     # 同时更新数据库中的节点实例状态
                     try:
@@ -1969,19 +2065,21 @@ class ExecutionEngine:
             
             combined_output = {}
             
-            for task in completed_tasks:
+            for task_index, task in enumerate(completed_tasks):
                 task_result = {
                     'task_id': str(task['task_instance_id']),  # 转换UUID为字符串
                     'task_title': task.get('task_title', ''),
-                    'output_data': self._make_json_serializable(task.get('output_data', {})),
+                    'output_data': task.get('output_data', ''),  # 现在是文本格式
                     'result_summary': task.get('result_summary', '')
                 }
                 aggregated['task_results'].append(task_result)
                 
-                # 合并任务输出数据
+                # 合并任务输出数据（现在是文本格式）
                 if task.get('output_data'):
-                    serializable_output = self._make_json_serializable(task['output_data'])
-                    combined_output.update(serializable_output)
+                    output_data = task['output_data']
+                    # 为每个任务创建一个键值对
+                    task_key = f"task_{task_index + 1}_output"
+                    combined_output[task_key] = str(output_data)
             
             aggregated['combined_output'] = combined_output
             
@@ -2075,7 +2173,6 @@ class ExecutionEngine:
                     print(f"  {i}. {task['task_title']}")
                     print(f"     用户: {task.get('assigned_user_id')}")
                     print(f"     状态: {task['status']}")
-                    print(f"     优先级: {task.get('priority', 1)}")
                 print("=" * 50)
             
         except Exception as e:
@@ -2403,7 +2500,7 @@ class ExecutionEngine:
             # 获取所有已完成的任务实例及其输出  
             task_context_query = '''
             SELECT ti.task_instance_id, ti.output_data, ti.task_title, ti.result_summary,
-                   ni.node_name, n.type as node_type
+                   n.name as node_name, n.type as node_type
             FROM task_instance ti
             JOIN node_instance ni ON ti.node_instance_id = ni.node_instance_id
             JOIN node n ON ni.node_id = n.node_id
@@ -2595,26 +2692,19 @@ class ExecutionEngine:
                 # 创建任务实例
                 task_title = f"{node['name']} - {processor.get('processor_name', processor.get('name', 'Unknown'))}"
                 task_description = node.get('task_description') or node.get('description') or f"执行节点 {node['name']} 的任务"
-                instructions = node.get('instructions') or processor.get('instructions') or f"请处理节点 {node['name']} 的相关任务"
                 
                 task_data = TaskInstanceCreate(
                     workflow_instance_id=workflow_instance_id,
                     node_instance_id=node_instance_id,
-                    node_base_id=node['node_base_id'],
                     processor_id=processor.get('processor_id'),
                     task_type=task_type,
                     task_title=task_title,
                     task_description=task_description,
-                    instructions=instructions,
                     assigned_user_id=assigned_user_id,
                     assigned_agent_id=assigned_agent_id,
-                    status=TaskInstanceStatus.ASSIGNED if assigned_user_id else TaskInstanceStatus.PENDING,
-                    priority=processor.get('priority', 1),
                     estimated_duration=processor.get('estimated_duration', 30),
-                    input_data={},
-                    output_data={},
-                    error_message=None,
-                    retry_count=0
+                    input_data="{}",  # 空的JSON字符串
+                    context_data=""   # 空字符串
                 )
                 
                 task_instance = await self.task_instance_repo.create_task(task_data)

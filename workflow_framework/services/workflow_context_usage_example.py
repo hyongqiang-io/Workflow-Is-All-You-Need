@@ -9,10 +9,8 @@ from typing import Dict, Any, List
 import logging
 
 # 导入新架构组件
-from .workflow_context_manager_v2 import (
-    WorkflowContextManagerV2, 
-    ManagerMode,
-    get_context_manager_v2
+from .workflow_context_manager import (
+    WorkflowContextManager
 )
 from .workflow_instance_context import WorkflowExecutionStatus
 from .node_dependency_tracker import DependencyType
@@ -26,8 +24,8 @@ class WorkflowExample:
     """工作流使用示例"""
     
     def __init__(self):
-        # 获取上下文管理器实例（增强模式）
-        self.context_manager = get_context_manager_v2(ManagerMode.ENHANCED)
+        # 获取上下文管理器实例
+        self.context_manager = WorkflowContextManager()
         
         # 注册回调函数
         self._setup_callbacks()
@@ -182,9 +180,8 @@ class WorkflowExample:
         """运行兼容性接口示例"""
         logger.info("=== 开始兼容性接口示例 ===")
         
-        # 使用兼容模式创建管理器
-        from .workflow_context_manager_v2 import WorkflowContextManagerV2
-        compat_manager = WorkflowContextManagerV2(mode=ManagerMode.COMPATIBLE)
+        # 使用当前的上下文管理器
+        compat_manager = WorkflowContextManager()
         
         # 获取兼容性接口
         compat_interface = compat_manager.get_compatibility_interface()

@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # 后端服务
+  backend:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile.backend
+    container_name: workflow-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///./data/workflow.db
+      - SECRET_KEY=${SECRET_KEY:-your-default-secret-key}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CORS_ORIGINS=["http://localhost:3000","https://${DOMAIN:-localhost}"]
+    volumes:
+      - backend_data:/app/data
+      - backend_logs:/app/logs
+    networks:
+      - workflow-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/api/test/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # 前端服务
+  frontend:
+    build:
+      context: ../..
+      dockerfile: deployment/docker/Dockerfile.frontend
+    container_name: workflow-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    networks:
+      - workflow-network
+    volumes:
+      - ./ssl:/etc/nginx/ssl:ro
+
+  # 数据库备份服务
+  backup:
+    image: alpine:latest
+    container_name: workflow-backup
+    restart: unless-stopped
+    volumes:
+      - backend_data:/data:ro
+      - ./backups:/backups
+    environment:
+      - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-0 2 * * *}
+    command: >
+      sh -c "
+        apk add --no-cache dcron &&
+        echo '${BACKUP_SCHEDULE:-0 2 * * *} cp /data/workflow.db /backups/workflow_$$(date +\%Y\%m\%d_\%H\%M\%S).db && find /backups -name \"workflow_*.db\" -mtime +7 -delete' | crontab - &&
+        crond -f
+      "
+
+volumes:
+  backend_data:
+    driver: local
+  backend_logs:
+    driver: local
+
+networks:
+  workflow-network:
+    driver: bridge
