@@ -135,8 +135,6 @@ const Todo: React.FC = () => {
 
   const handleViewDetails = async (task: any) => {
     console.log('🔍 前端: 查看任务详情', task.task_instance_id);
-    setCurrentTask(task);
-    setDetailModalVisible(true);
     
     // 调用API获取完整的任务详情（包含context_data）
     try {
@@ -149,11 +147,38 @@ const Todo: React.FC = () => {
       if (updatedTask) {
         console.log('🔄 前端: 更新当前任务数据');
         console.log('📊 前端: 最新context_data', updatedTask.context_data);
-        setCurrentTask(updatedTask);
+        
+        // 解析context_data字符串为对象（如果是字符串）
+        let parsedTask = { ...updatedTask };
+        if (typeof updatedTask.context_data === 'string' && (updatedTask.context_data as string).trim()) {
+          try {
+            parsedTask.context_data = JSON.parse(updatedTask.context_data as string);
+            console.log('✅ 前端: context_data解析成功', parsedTask.context_data);
+          } catch (parseError) {
+            console.warn('⚠️ 前端: context_data解析失败，保持原始格式', parseError);
+          }
+        }
+        
+        // 解析input_data字符串为对象（如果是字符串）
+        if (typeof updatedTask.input_data === 'string' && (updatedTask.input_data as string).trim()) {
+          try {
+            parsedTask.input_data = JSON.parse(updatedTask.input_data as string);
+            console.log('✅ 前端: input_data解析成功', parsedTask.input_data);
+          } catch (parseError) {
+            console.warn('⚠️ 前端: input_data解析失败，保持原始格式', parseError);
+          }
+        }
+        
+        setCurrentTask(parsedTask);
+      } else {
+        setCurrentTask(task);
       }
     } catch (error) {
       console.error('❌ 前端: 获取任务详情失败', error);
+      setCurrentTask(task);
     }
+    
+    setDetailModalVisible(true);
   };
 
   const handleSubmitConfirm = async () => {
@@ -474,18 +499,20 @@ const Todo: React.FC = () => {
             {/* 上下文信息 */}
             {(currentTask.context_data || currentTask.input_data) && (
               <Card size="small" title="执行上下文" style={{ marginBottom: '16px' }}>
-                {/* 添加详细调试信息 */}
-                <div style={{ background: '#f0f0f0', padding: '8px', marginBottom: '12px', fontSize: '12px' }}>
-                  <div><strong>Debug Info:</strong></div>
-                  <div>context_data type: <code>{typeof currentTask.context_data}</code></div>
-                  <div>context_data keys: <code>{currentTask.context_data ? JSON.stringify(Object.keys(currentTask.context_data)) : '[]'}</code></div>
-                  <div>context_data content preview: <code>{JSON.stringify(currentTask.context_data).substring(0, 200)}...</code></div>
-                  <div>input_data type: <code>{typeof currentTask.input_data}</code></div>
-                  <div>input_data keys: <code>{currentTask.input_data ? JSON.stringify(Object.keys(currentTask.input_data)) : '[]'}</code></div>
-                  <div>task_instance_id: <code>{currentTask.task_instance_id}</code></div>
-                  <div>node_instance_id: <code>{currentTask.node_instance_id}</code></div>
-                  <div>workflow_instance_id: <code>{currentTask.workflow_instance_id}</code></div>
-                  <div>最后更新时间: <code>{new Date().toLocaleString()}</code></div>
+                {/* 简化的调试信息 */}
+                <div style={{ background: '#f6f6f6', padding: '8px', marginBottom: '12px', fontSize: '12px', borderRadius: '4px' }}>
+                  <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                    <div><Text strong>任务标识:</Text> {currentTask.task_instance_id}</div>
+                    <div><Text strong>节点标识:</Text> {currentTask.node_instance_id}</div>
+                    <div><Text strong>工作流标识:</Text> {currentTask.workflow_instance_id}</div>
+                    <div><Text strong>更新时间:</Text> {new Date().toLocaleString()}</div>
+                    {currentTask.context_data && (
+                      <div>
+                        <Text strong>上下文状态:</Text>{' '}
+                        <Tag color="green">已加载 ({typeof currentTask.context_data === 'object' ? Object.keys(currentTask.context_data).length : 0} 个字段)</Tag>
+                      </div>
+                    )}
+                  </Space>
                 </div>
                 <Collapse size="small">
                   {/* 新的context_data字段 */}
@@ -511,48 +538,162 @@ const Todo: React.FC = () => {
                       )}
                       
                       {currentTask.context_data.upstream_outputs && currentTask.context_data.upstream_outputs.length > 0 && (
-                        <Panel header="上游节点输出" key="upstream_outputs">
-                          {currentTask.context_data.upstream_outputs.map((upstreamNode: any, index: number) => (
-                            <div key={index} style={{ marginBottom: '12px', paddingBottom: '12px', borderBottom: index < currentTask.context_data.upstream_outputs.length - 1 ? '1px solid #f0f0f0' : 'none' }}>
-                              <div style={{ marginBottom: '8px' }}>
-                                <Text strong>{upstreamNode.node_name}</Text>
-                                <span style={{ marginLeft: '8px', fontSize: '12px', color: '#666' }}>
-                                  完成时间: {upstreamNode.completed_at ? new Date(upstreamNode.completed_at).toLocaleString() : '未知'}
-                                </span>
-                              </div>
-                              {upstreamNode.node_description && (
-                                <div style={{ marginBottom: '8px', fontSize: '13px', color: '#555', background: '#f9f9f9', padding: '4px 8px', borderRadius: '3px' }}>
-                                  <Text type="secondary">节点描述: {upstreamNode.node_description}</Text>
-                                </div>
-                              )}
-                              {upstreamNode.output_data && Object.keys(upstreamNode.output_data).length > 0 ? (
-                                <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', maxHeight: '150px', overflow: 'auto' }}>
-                                  {JSON.stringify(upstreamNode.output_data, null, 2)}
-                                </pre>
-                              ) : (
-                                <Text type="secondary">该节点无输出数据</Text>
-                              )}
+                        <Panel 
+                          header={
+                            <div>
+                              <Text strong>上游节点输出</Text>
+                              <Tag color="blue" style={{ marginLeft: '8px' }}>
+                                {currentTask.context_data.upstream_outputs.length} 个节点
+                              </Tag>
                             </div>
+                          } 
+                          key="upstream_outputs"
+                        >
+                          {currentTask.context_data.upstream_outputs.map((upstreamNode: any, index: number) => (
+                            <Card 
+                              key={index} 
+                              size="small" 
+                              style={{ marginBottom: '12px' }}
+                              title={
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <Text strong style={{ color: '#1890ff' }}>{upstreamNode.node_name || `节点 ${index + 1}`}</Text>
+                                  <Tag color="green">已完成</Tag>
+                                </div>
+                              }
+                              extra={
+                                upstreamNode.completed_at && (
+                                  <Text type="secondary" style={{ fontSize: '12px' }}>
+                                    {new Date(upstreamNode.completed_at).toLocaleString()}
+                                  </Text>
+                                )
+                              }
+                            >
+                              {upstreamNode.node_description && (
+                                <Alert
+                                  message="节点描述"
+                                  description={upstreamNode.node_description}
+                                  type="info"
+                                  showIcon={false}
+                                  style={{ marginBottom: '12px', fontSize: '12px' }}
+                                />
+                              )}
+                              
+                              {upstreamNode.output_data && Object.keys(upstreamNode.output_data).length > 0 ? (
+                                <div>
+                                  <Text strong style={{ color: '#52c41a' }}>输出数据:</Text>
+                                  <div style={{ marginTop: '8px' }}>
+                                    {(() => {
+                                      try {
+                                        const outputData = typeof upstreamNode.output_data === 'string' 
+                                          ? JSON.parse(upstreamNode.output_data) 
+                                          : upstreamNode.output_data;
+                                        
+                                        // 如果输出数据有result字段，特别显示
+                                        if (outputData.result) {
+                                          return (
+                                            <div>
+                                              <Alert
+                                                message="任务结果"
+                                                description={outputData.result}
+                                                type="success"
+                                                showIcon
+                                                style={{ marginBottom: '8px' }}
+                                              />
+                                              {Object.keys(outputData).length > 1 && (
+                                                <details>
+                                                  <summary style={{ cursor: 'pointer', color: '#1890ff' }}>查看完整输出数据</summary>
+                                                  <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', marginTop: '8px', maxHeight: '150px', overflow: 'auto' }}>
+                                                    {JSON.stringify(outputData, null, 2)}
+                                                  </pre>
+                                                </details>
+                                              )}
+                                            </div>
+                                          );
+                                        } else {
+                                          return (
+                                            <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', maxHeight: '150px', overflow: 'auto' }}>
+                                              {JSON.stringify(outputData, null, 2)}
+                                            </pre>
+                                          );
+                                        }
+                                      } catch (e) {
+                                        return (
+                                          <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', maxHeight: '150px', overflow: 'auto' }}>
+                                            {JSON.stringify(upstreamNode.output_data, null, 2)}
+                                          </pre>
+                                        );
+                                      }
+                                    })()}
+                                  </div>
+                                </div>
+                              ) : (
+                                <Alert
+                                  message="该节点无输出数据"
+                                  type="warning"
+                                  showIcon={false}
+                                  style={{ fontSize: '12px' }}
+                                />
+                              )}
+                            </Card>
                           ))}
                         </Panel>
                       )}
                       
                       {currentTask.context_data.current_node && (
-                        <Panel header="当前节点信息" key="current_node_info">
-                          <div>
-                            <p><Text strong>节点名称:</Text> {currentTask.context_data.current_node.name}</p>
-                            <p><Text strong>节点类型:</Text> {currentTask.context_data.current_node.type}</p>
-                            <p><Text strong>任务描述:</Text> {currentTask.context_data.current_node.description}</p>
-                            <p><Text strong>状态:</Text> {currentTask.context_data.current_node.status}</p>
-                            {currentTask.context_data.current_node.input_data && Object.keys(currentTask.context_data.current_node.input_data).length > 0 && (
-                              <div>
-                                <Text strong>节点输入数据:</Text>
-                                <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', marginTop: '4px', maxHeight: '150px', overflow: 'auto' }}>
-                                  {JSON.stringify(currentTask.context_data.current_node.input_data, null, 2)}
-                                </pre>
+                        <Panel 
+                          header={
+                            <div>
+                              <Text strong>当前节点信息</Text>
+                              <Tag color="processing" style={{ marginLeft: '8px' }}>正在执行</Tag>
+                            </div>
+                          } 
+                          key="current_node_info"
+                        >
+                          <Card size="small" style={{ background: '#fafafa' }}>
+                            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                <div>
+                                  <Text type="secondary">节点名称</Text>
+                                  <div><Text strong style={{ color: '#1890ff' }}>{currentTask.context_data.current_node.name}</Text></div>
+                                </div>
+                                <div>
+                                  <Text type="secondary">节点类型</Text>
+                                  <div>
+                                    <Tag color={currentTask.context_data.current_node.type === 'human' ? 'blue' : 'purple'}>
+                                      {currentTask.context_data.current_node.type === 'human' ? '人工任务' : currentTask.context_data.current_node.type}
+                                    </Tag>
+                                  </div>
+                                </div>
+                                <div>
+                                  <Text type="secondary">执行状态</Text>
+                                  <div>
+                                    <Tag color="processing">{currentTask.context_data.current_node.status}</Tag>
+                                  </div>
+                                </div>
                               </div>
-                            )}
-                          </div>
+                              
+                              {currentTask.context_data.current_node.description && (
+                                <div>
+                                  <Text type="secondary">任务描述</Text>
+                                  <Alert
+                                    message={currentTask.context_data.current_node.description}
+                                    type="info"
+                                    showIcon={false}
+                                    style={{ marginTop: '4px' }}
+                                  />
+                                </div>
+                              )}
+                              
+                              {currentTask.context_data.current_node.input_data && Object.keys(currentTask.context_data.current_node.input_data).length > 0 && (
+                                <div>
+                                  <Text type="secondary">节点输入数据</Text>
+                                  <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', marginTop: '4px', maxHeight: '150px', overflow: 'auto' }}>
+                                    {JSON.stringify(currentTask.context_data.current_node.input_data, null, 2)}
+                                  </pre>
+                                </div>
+                              )}
+                            </Space>
+                          </Card>
                         </Panel>
                       )}
                     </>
@@ -586,36 +727,104 @@ const Todo: React.FC = () => {
                    (!currentTask.input_data.immediate_upstream || Object.keys(currentTask.input_data.immediate_upstream).length === 0) &&
                    (!currentTask.input_data.workflow_global || Object.keys(currentTask.input_data.workflow_global).length === 0)
                  )) && (
-                  <Alert
-                    message="无上下文数据"
-                    description="这个任务没有可用的上下文数据，可能是工作流的起始任务或数据收集失败。"
-                    type="info"
-                    showIcon
-                  />
+                  <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+                    <div style={{ fontSize: '48px', marginBottom: '16px' }}>📋</div>
+                    <Alert
+                      message="无上下文数据"
+                      description={
+                        <div>
+                          <p>这个任务没有可用的上下文数据，可能的原因：</p>
+                          <ul style={{ textAlign: 'left', marginTop: '8px' }}>
+                            <li>这是工作流的起始任务，无需依赖上游数据</li>
+                            <li>上游节点尚未完成或未产生输出数据</li>
+                            <li>数据传递过程中出现问题</li>
+                          </ul>
+                          <p style={{ marginTop: '12px', color: '#666' }}>
+                            您可以根据任务描述独立完成此任务。
+                          </p>
+                        </div>
+                      }
+                      type="info"
+                      showIcon
+                      style={{ textAlign: 'left' }}
+                    />
+                  </div>
                 )}
               </Card>
             )}
 
             {/* 任务结果 */}
-            {currentTask.output_data && (
-              <Card size="small" title="任务结果">
-                <div>
-                  {currentTask.result_summary && (
-                    <div style={{ marginBottom: '12px' }}>
-                      <Text strong>结果摘要: </Text>
-                      <Paragraph>{currentTask.result_summary}</Paragraph>
+            {(currentTask.output_data || currentTask.result_summary) && (
+              <Card 
+                size="small" 
+                title={
+                  <div>
+                    <Text strong>任务结果</Text>
+                    <Tag color="success" style={{ marginLeft: '8px' }}>已完成</Tag>
+                  </div>
+                }
+                style={{ marginBottom: '16px' }}
+              >
+                {currentTask.result_summary && (
+                  <Alert
+                    message="任务完成总结"
+                    description={currentTask.result_summary}
+                    type="success"
+                    showIcon
+                    style={{ marginBottom: '16px' }}
+                  />
+                )}
+                
+                {currentTask.output_data && (
+                  <div>
+                    <Text strong style={{ color: '#52c41a' }}>详细输出数据:</Text>
+                    <div style={{ marginTop: '8px' }}>
+                      {(() => {
+                        try {
+                          const outputData = typeof currentTask.output_data === 'string' 
+                            ? JSON.parse(currentTask.output_data) 
+                            : currentTask.output_data;
+                          
+                          // 如果有result字段，重点显示
+                          if (outputData.result) {
+                            return (
+                              <div>
+                                <Card size="small" style={{ background: '#f6ffed', border: '1px solid #b7eb8f' }}>
+                                  <Text strong style={{ color: '#52c41a' }}>主要结果：</Text>
+                                  <Paragraph style={{ marginTop: '8px', marginBottom: '0' }}>
+                                    {outputData.result}
+                                  </Paragraph>
+                                </Card>
+                                {Object.keys(outputData).length > 1 && (
+                                  <details style={{ marginTop: '12px' }}>
+                                    <summary style={{ cursor: 'pointer', color: '#1890ff', fontWeight: 'bold' }}>
+                                      查看完整输出数据 ({Object.keys(outputData).length} 个字段)
+                                    </summary>
+                                    <pre style={{ background: '#f5f5f5', padding: '12px', borderRadius: '4px', marginTop: '8px', maxHeight: '200px', overflow: 'auto' }}>
+                                      {JSON.stringify(outputData, null, 2)}
+                                    </pre>
+                                  </details>
+                                )}
+                              </div>
+                            );
+                          } else {
+                            return (
+                              <pre style={{ background: '#f5f5f5', padding: '12px', borderRadius: '4px', maxHeight: '200px', overflow: 'auto' }}>
+                                {JSON.stringify(outputData, null, 2)}
+                              </pre>
+                            );
+                          }
+                        } catch (e) {
+                          return (
+                            <pre style={{ background: '#f5f5f5', padding: '12px', borderRadius: '4px', maxHeight: '200px', overflow: 'auto' }}>
+                              {JSON.stringify(currentTask.output_data, null, 2)}
+                            </pre>
+                          );
+                        }
+                      })()}
                     </div>
-                  )}
-                  
-                  {currentTask.output_data && (
-                    <div>
-                      <Text strong>输出数据: </Text>
-                      <pre style={{ background: '#f5f5f5', padding: '12px', borderRadius: '4px', maxHeight: '200px', overflow: 'auto' }}>
-                        {JSON.stringify(currentTask.output_data, null, 2)}
-                      </pre>
-                    </div>
-                  )}
-                </div>
+                  </div>
+                )}
               </Card>
             )}
           </div>

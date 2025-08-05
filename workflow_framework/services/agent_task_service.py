@@ -5,10 +5,13 @@ Agent Task Processing Service
 
 import uuid
 import json
+import sys
 import asyncio
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from loguru import logger
+logger.remove()
+logger.add(sys.stderr,level="DEBUG")
 
 from ..repositories.instance.task_instance_repository import TaskInstanceRepository
 from ..repositories.agent.agent_repository import AgentRepository
@@ -37,7 +40,7 @@ class AgentTaskService:
     def register_completion_callback(self, callback):
         """注册任务完成回调"""
         self.completion_callbacks.append(callback)
-        logger.info(f"注册任务完成回调: {callback}")
+        logger.trace(f"注册任务完成回调: {callback}")
     
     async def _notify_task_completion(self, task_id: uuid.UUID, result: Dict[str, Any]):
         """通知任务完成"""
@@ -68,7 +71,7 @@ class AgentTaskService:
             return
         
         self.is_running = True
-        logger.info("Agent任务处理服务启动")
+        logger.trace("Agent任务处理服务启动")
         
         # 启动任务处理协程
         for i in range(self.max_concurrent_tasks):
@@ -80,36 +83,53 @@ class AgentTaskService:
     async def stop_service(self):
         """停止Agent任务处理服务"""
         self.is_running = False
-        logger.info("Agent任务处理服务停止")
+        logger.trace("Agent任务处理服务停止")
+    
+    async def _has_active_workflows(self) -> bool:
+        """检查是否有活跃的工作流"""
+        try:
+            from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+            workflow_repo = WorkflowInstanceRepository()
+            
+            # 查询运行中的工作流
+            active_workflows = await workflow_repo.db.fetch_all("""
+                SELECT workflow_instance_id, status 
+                FROM workflow_instance 
+                WHERE status IN ('RUNNING', 'PENDING') 
+                AND is_deleted = FALSE
+                LIMIT 1
+            """)
+            
+            return len(active_workflows) > 0
+        except Exception as e:
+            logger.error(f"检查活跃工作流失败: {e}")
+            return True  # 出错时假设有活跃工作流，继续监控
     
     async def get_pending_agent_tasks(self, agent_id: Optional[uuid.UUID] = None, 
                                     limit: int = 50) -> List[Dict[str, Any]]:
         """获取待处理的Agent任务"""
         try:
-            logger.info(f"🔍 [AGENT-SERVICE] 开始获取待处理Agent任务")
-            logger.info(f"   - Agent ID: {agent_id if agent_id else '所有Agent'}")  
-            logger.info(f"   - 限制数量: {limit}")
+            logger.trace(f"🔍 [AGENT-SERVICE] 开始获取待处理Agent任务")
+            logger.trace(f"   - Agent ID: {agent_id if agent_id else '所有Agent'}")  
+            logger.trace(f"   - 限制数量: {limit}")
             
             tasks = await self.task_repo.get_agent_tasks_for_processing(agent_id, limit)
             
-            logger.info(f"📋 [AGENT-SERVICE] 获取待处理Agent任务完成")
-            logger.info(f"   - 找到任务数量: {len(tasks)}")
+            logger.trace(f"📋 [AGENT-SERVICE] 获取待处理Agent任务完成")
+            logger.trace(f"   - 找到任务数量: {len(tasks)}")
             
             if tasks:
-                logger.info(f"   - 任务详情:")
+                logger.trace(f"   - 任务详情:")
                 for i, task in enumerate(tasks[:3]):  # 只显示前3个任务
                     task_id = task.get('task_instance_id', 'unknown')
                     task_title = task.get('task_title', 'unknown')
                     task_status = task.get('status', 'unknown')
-                    logger.info(f"     {i+1}. {task_title} (ID: {task_id}, 状态: {task_status})")
+                    logger.trace(f"     {i+1}. {task_title} (ID: {task_id}, 状态: {task_status})")
                 if len(tasks) > 3:
-                    logger.info(f"     ... 还有 {len(tasks) - 3} 个任务")
+                    logger.trace(f"     ... 还有 {len(tasks) - 3} 个任务")
             else:
-                logger.warning(f"⚠️ [AGENT-SERVICE] 没有找到待处理的Agent任务")
-                logger.info(f"   - 可能原因:")
-                logger.info(f"     1. 没有创建Agent类型的任务")
-                logger.info(f"     2. Agent任务状态不是PENDING")
-                logger.info(f"     3. Agent任务没有正确分配assigned_agent_id")
+                # 减少日志频率，避免刷屏
+                pass  # 在监控器中会统一处理空检查的日志
                 
             return tasks
             
@@ -142,7 +162,7 @@ class AgentTaskService:
             
             await self.processing_queue.put(queue_item)
             
-            logger.info(f"任务 {task_id} 已提交给Agent处理队列")
+            logger.trace(f"任务 {task_id} 已提交给Agent处理队列")
             return {
                 'task_id': task_id,
                 'status': 'queued',
@@ -156,7 +176,7 @@ class AgentTaskService:
     async def process_agent_task(self, task_id: uuid.UUID) -> Dict[str, Any]:
         """处理单个Agent任务"""
         try:
-            logger.info(f"🚀 [AGENT-PROCESS] 开始处理Agent任务: {task_id}")
+            logger.trace(f"🚀 [AGENT-PROCESS] 开始处理Agent任务: {task_id}")
             
             # 获取任务详情
             task = await self.task_repo.get_task_by_id(task_id)
@@ -164,26 +184,26 @@ class AgentTaskService:
                 logger.error(f"❌ [AGENT-PROCESS] 任务不存在: {task_id}")
                 raise ValueError("任务不存在")
             
-            logger.info(f"📋 [AGENT-PROCESS] 任务详情获取成功:")
-            logger.info(f"   - 任务标题: {task['task_title']}")
-            logger.info(f"   - 任务类型: {task.get('task_type', 'unknown')}")
-            logger.info(f"   - 当前状态: {task.get('status', 'unknown')}")
-            logger.info(f"   - 处理器ID: {task.get('processor_id', 'none')}")
-            logger.info(f"   - 分配Agent ID: {task.get('assigned_agent_id', 'none')}")
-            logger.info(f"   - 优先级: {task.get('priority', 0)}")
+            logger.trace(f"📋 [AGENT-PROCESS] 任务详情获取成功:")
+            logger.trace(f"   - 任务标题: {task['task_title']}")
+            logger.trace(f"   - 任务类型: {task.get('task_type', 'unknown')}")
+            logger.trace(f"   - 当前状态: {task.get('status', 'unknown')}")
+            logger.trace(f"   - 处理器ID: {task.get('processor_id', 'none')}")
+            logger.trace(f"   - 分配Agent ID: {task.get('assigned_agent_id', 'none')}")
+            logger.trace(f"   - 优先级: {task.get('priority', 0)}")
             
             # 更新任务状态为进行中
-            logger.info(f"⏳ [AGENT-PROCESS] 更新任务状态为IN_PROGRESS")
+            logger.trace(f"⏳ [AGENT-PROCESS] 更新任务状态为IN_PROGRESS")
             update_data = TaskInstanceUpdate(status=TaskInstanceStatus.IN_PROGRESS)
             await self.task_repo.update_task(task_id, update_data)
-            logger.info(f"✅ [AGENT-PROCESS] 任务状态更新成功")
+            logger.trace(f"✅ [AGENT-PROCESS] 任务状态更新成功")
             
             start_time = datetime.now()
-            logger.info(f"⏰ [AGENT-PROCESS] 任务开始时间: {start_time.isoformat()}")
+            logger.trace(f"⏰ [AGENT-PROCESS] 任务开始时间: {start_time.isoformat()}")
             
             # 获取Agent信息
             agent_id = task.get('assigned_agent_id')
-            logger.info(f"🔍 [AGENT-PROCESS] 检查Agent分配: {agent_id}")
+            logger.trace(f"🔍 [AGENT-PROCESS] 检查Agent分配: {agent_id}")
             
             # 如果任务没有直接分配Agent，尝试从processor获取
             if not agent_id:
@@ -197,7 +217,7 @@ class AgentTaskService:
                     processor = await processor_repo.get_processor_with_details(processor_id)
                     if processor and processor.get('agent_id'):
                         agent_id = processor['agent_id']
-                        logger.info(f"✅ [AGENT-PROCESS] 从processor获取到Agent ID: {agent_id}")
+                        logger.trace(f"✅ [AGENT-PROCESS] 从processor获取到Agent ID: {agent_id}")
                     else:
                         logger.error(f"❌ [AGENT-PROCESS] Processor未关联Agent: {processor_id}")
                         raise ValueError(f"Processor {processor_id} 未关联Agent")
@@ -205,44 +225,101 @@ class AgentTaskService:
                     logger.error(f"❌ [AGENT-PROCESS] 任务既没有assigned_agent_id也没有processor_id")
                     raise ValueError("任务未分配Agent")
             
-            logger.info(f"🤖 [AGENT-PROCESS] 获取Agent详情: {agent_id}")
+            logger.trace(f"🤖 [AGENT-PROCESS] 获取Agent详情: {agent_id}")
             agent = await self.agent_repo.get_agent_by_id(agent_id)
             if not agent:
                 logger.error(f"❌ [AGENT-PROCESS] Agent不存在: {agent_id}")
                 raise ValueError(f"Agent不存在: {agent_id}")
             
-            logger.info(f"✅ [AGENT-PROCESS] Agent详情获取成功:")
-            logger.info(f"   - Agent名称: {agent.get('agent_name', 'unknown')}")
-            logger.info(f"   - 模型: {agent.get('model_name', 'unknown')}")
-            logger.info(f"   - Base URL: {agent.get('base_url', 'none')}")
-            logger.info(f"   - API Key存在: {'是' if agent.get('api_key') else '否'}")
+            logger.trace(f"✅ [AGENT-PROCESS] Agent详情获取成功:")
+            logger.trace(f"   - Agent名称: {agent.get('agent_name', 'unknown')}")
+            logger.trace(f"   - 模型: {agent.get('model_name', 'unknown')}")
+            logger.trace(f"   - Base URL: {agent.get('base_url', 'none')}")
+            logger.trace(f"   - API Key存在: {'是' if agent.get('api_key') else '否'}")
+
+            # 详细调试任务数据字段
+            logger.trace(f"🔍 [AGENT-PROCESS] 详细调试任务数据字段:")
+            logger.trace(f"   - 任务字典所有键: {list(task.keys())}")
+            for key, value in task.items():
+                if key in ['input_data', 'context_data', 'output_data']:
+                    logger.trace(f"   - {key}: 类型={type(value)}, 长度={len(str(value)) if value else 0}, 值='{str(value)[:100]}{'...' if value and len(str(value)) > 100 else ''}'")
+                elif key in ['task_title', 'task_description', 'status']:
+                    logger.trace(f"   - {key}: '{value}'")
             
-            # 准备AI任务数据（现在input_data是文本格式）
-            input_data = task.get('input_data', '')
-            logger.info(f"📊 [AGENT-PROCESS] 准备任务数据:")
-            logger.info(f"   - 输入数据大小: {len(input_data)} 字符")
-            logger.info(f"   - 输入数据类型: {type(input_data)}")
-            if input_data and len(input_data) > 0:
-                logger.info(f"   - 输入数据预览: {input_data[:100]}...")
+            # 准备AI任务数据 - 多数据源智能选择
+            logger.trace(f"full task:{task}")
+            task_input_data = task.get('input_data', '')
+            task_context_data = task.get('context_data', '')
+            
+            # 尝试从节点实例获取数据（这是UI显示的数据源）
+            node_input_data = ""
+            node_instance_id = task.get('node_instance_id')
+            if node_instance_id:
+                try:
+                    from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+                    node_repo = NodeInstanceRepository()
+                    node_instance = await node_repo.get_instance_by_id(node_instance_id)
+                    if node_instance and node_instance.get('input_data'):
+                        node_input_data = node_instance['input_data']
+                        logger.trace(f"   - 从节点实例获取输入数据: {len(node_input_data)} 字符")
+                except Exception as e:
+                    logger.warning(f"   - 获取节点实例数据失败: {e}")
+            
+            # 整合所有可用数据源
+            data_sources = [
+                ("node_input_data", node_input_data),
+                ("task_context_data", task_context_data), 
+                ("task_input_data", task_input_data)
+            ]
+            
+            logger.trace(f"📊 [AGENT-PROCESS] 多数据源分析:")
+            for source_name, source_data in data_sources:
+                data_str = str(source_data) if source_data is not None else ""
+                logger.trace(f"   - {source_name}: 大小={len(data_str)} 字符, 类型={type(source_data)}")
+                if data_str and len(data_str) > 0:
+                    logger.trace(f"     预览: {data_str[:100]}{'...' if len(data_str) > 100 else ''}")
+            
+            # 智能选择最佳数据源：优先选择内容最丰富的
+            actual_data = ""
+            data_source = "none"
+            
+            for source_name, source_data in data_sources:
+                # 将数据转换为字符串进行处理
+                data_str = str(source_data) if source_data is not None else ""
+                if data_str and data_str.strip() and data_str.strip() != '{}' and data_str.strip() != 'None':
+                    actual_data = data_str
+                    data_source = source_name
+                    logger.trace(f"   ✅ 选择{source_name}作为数据源")
+                    break
+            
+            if not actual_data:
+                logger.warning(f"   ❌ 所有数据源都为空")
+                
+            logger.trace(f"   - 实际使用数据源: {data_source}")
+            logger.trace(f"   - 实际数据大小: {len(actual_data)} 字符")
+            if actual_data and len(actual_data) > 0:
+                logger.trace(f"   - 实际数据预览: {actual_data[:200]}...")
             
             # 构建系统 Prompt（使用任务的详细描述）
-            logger.info(f"🔨 [AGENT-PROCESS] 构建系统Prompt")
+            logger.trace(f"🔨 [AGENT-PROCESS] 构建系统Prompt")
             system_prompt = self._build_system_prompt(task)
-            logger.info(f"   - 系统Prompt长度: {len(system_prompt)} 字符")
-            logger.info(f"   - 系统Prompt预览: {system_prompt[:200]}...")
+            logger.trace(f"   - 系统Prompt长度: {len(system_prompt)} 字符")
+            logger.trace(f"   - 系统Prompt预览: {system_prompt[:200]}...")
             
             # 预处理上游上下文（整理成补充信息）
-            logger.info(f"🔄 [AGENT-PROCESS] 预处理上游上下文")
-            context_info = self._preprocess_upstream_context(input_data)
-            logger.info(f"   - 上下文信息长度: {len(context_info)} 字符")
-            logger.info(f"   - 上下文信息预览: {context_info[:200]}...")
+            logger.trace(f"🔄 [AGENT-PROCESS] 预处理上游上下文")
+            logger.trace(f"   - 传入预处理的actual_data: {actual_data[:500] if actual_data else 'None'}...")
+            context_info = self._preprocess_upstream_context(actual_data)
+            logger.trace(f"   - 上下文信息长度: {len(context_info)} 字符")
+            logger.trace(f"   - 上下文信息预览: {context_info[:200]}...")
+            logger.trace(f"   - 上下文信息完整内容: '{context_info}'")
             
             # 构建用户消息（作为任务输入）
-            logger.info(f"✉️ [AGENT-PROCESS] 构建用户消息")
+            logger.trace(f"✉️ [AGENT-PROCESS] 构建用户消息")
             user_message = self._build_user_message(task, context_info)
-            logger.info(f"   - 用户消息长度: {len(user_message)} 字符")
-            logger.info(f"   - 用户消息预览: {user_message[:200]}...")
-            
+            logger.trace(f"   - 用户消息长度: {len(user_message)} 字符")
+            logger.trace(f"   - 用户消息预览: {user_message[:200]}...")
+        
             # 整理成AI Client可接收的数据结构
             ai_client_data = {
                 'task_id': str(task_id),
@@ -254,30 +331,30 @@ class AgentTaskService:
                 }
             }
             
-            logger.info(f"📦 [AGENT-PROCESS] AI Client数据准备完成:")
-            logger.info(f"   - 任务ID: {ai_client_data['task_id']}")
-            logger.info(f"   - 系统Prompt: {len(ai_client_data['system_prompt'])} 字符")
-            logger.info(f"   - 用户消息: {len(ai_client_data['user_message'])} 字符")
-            logger.info(f"   - 元数据: {ai_client_data['task_metadata']}")
+            logger.trace(f"📦 [AGENT-PROCESS] AI Client数据准备完成:")
+            logger.trace(f"   - 任务ID: {ai_client_data['task_id']}")
+            logger.trace(f"   - 系统Prompt: {len(ai_client_data['system_prompt'])} 字符")
+            logger.trace(f"   - 用户消息: {len(ai_client_data['user_message'])} 字符")
+            logger.trace(f"   - 元数据: {ai_client_data['task_metadata']}")
             
             # 调用Agent处理
-            logger.info(f"🚀 [AGENT-PROCESS] 开始调用Agent API")
+            logger.trace(f"🚀 [AGENT-PROCESS] 开始调用Agent API")
             result = await self._call_agent_api(agent, ai_client_data)
-            logger.info(f"✅ [AGENT-PROCESS] Agent API调用成功")
-            logger.info(f"   - 结果类型: {type(result)}")
-            logger.info(f"   - 结果键: {list(result.keys()) if isinstance(result, dict) else 'N/A'}")
+            logger.trace(f"✅ [AGENT-PROCESS] Agent API调用成功")
+            logger.trace(f"   - 结果类型: {type(result)}")
+            logger.trace(f"   - 结果键: {list(result.keys()) if isinstance(result, dict) else 'N/A'}")
             
             # 计算执行时间
             end_time = datetime.now()
             actual_duration = int((end_time - start_time).total_seconds() / 60)
             
-            logger.info(f"⏰ [AGENT-PROCESS] 任务执行完成:")
-            logger.info(f"   - 开始时间: {start_time.isoformat()}")
-            logger.info(f"   - 结束时间: {end_time.isoformat()}")
-            logger.info(f"   - 实际用时: {actual_duration} 分钟")
+            logger.trace(f"⏰ [AGENT-PROCESS] 任务执行完成:")
+            logger.trace(f"   - 开始时间: {start_time.isoformat()}")
+            logger.trace(f"   - 结束时间: {end_time.isoformat()}")
+            logger.trace(f"   - 实际用时: {actual_duration} 分钟")
             
             # 更新任务状态为已完成（将结果转换为文本格式）
-            logger.info(f"💾 [AGENT-PROCESS] 更新任务状态为COMPLETED")
+            logger.trace(f"💾 [AGENT-PROCESS] 更新任务状态为COMPLETED")
             
             # 将结果转换为文本格式存储
             output_text = result['result'] if isinstance(result, dict) and 'result' in result else str(result)
@@ -291,33 +368,33 @@ class AgentTaskService:
             )
             
             updated_task = await self.task_repo.update_task(task_id, complete_update)
-            logger.info(f"✅ [AGENT-PROCESS] 任务状态更新为COMPLETED成功")
+            logger.trace(f"✅ [AGENT-PROCESS] 任务状态更新为COMPLETED成功")
             
             if updated_task:
-                logger.info(f"📋 [AGENT-PROCESS] 更新后任务状态: {updated_task.get('status', 'unknown')}")
+                logger.trace(f"📋 [AGENT-PROCESS] 更新后任务状态: {updated_task.get('status', 'unknown')}")
             else:
                 logger.warning(f"⚠️ [AGENT-PROCESS] 任务更新返回空结果")
             
             # 显示Agent输出结果
-            logger.info(f"🎯 [AGENT-PROCESS] === AGENT输出结果 ===")
-            logger.info(f"   📝 任务标题: {task['task_title']}")
-            logger.info(f"   ⏱️  处理时长: {actual_duration}分钟")
-            logger.info(f"   📊 结果内容:")
+            logger.trace(f"🎯 [AGENT-PROCESS] === AGENT输出结果 ===")
+            logger.trace(f"   📝 任务标题: {task['task_title']}")
+            logger.trace(f"   ⏱️  处理时长: {actual_duration}分钟")
+            logger.trace(f"   📊 结果内容:")
             
             # 显示文本结果
-            logger.info(f"      📄 输出内容: {output_text[:300]}{'...' if len(output_text) > 300 else ''}")
+            logger.trace(f"      📄 输出内容: {output_text[:300]}{'...' if len(output_text) > 300 else ''}")
             
             # 显示模型使用信息
             if isinstance(result, dict):
                 model_used = result.get('model_used', 'N/A')
                 if model_used and model_used != 'N/A':
-                    logger.info(f"      🤖 使用模型: {model_used}")
+                    logger.trace(f"      🤖 使用模型: {model_used}")
                 
                 token_usage = result.get('token_usage', {})
                 if token_usage:
-                    logger.info(f"      💰 Token使用: {token_usage}")
+                    logger.trace(f"      💰 Token使用: {token_usage}")
             
-            logger.info(f"🎉 [AGENT-PROCESS] Agent任务处理完成: {task['task_title']}")
+            logger.trace(f"🎉 [AGENT-PROCESS] Agent任务处理完成: {task['task_title']}")
             
             # 通知任务完成回调
             completion_result = {
@@ -350,20 +427,20 @@ class AgentTaskService:
                             ai_client_data: Dict[str, Any]) -> Dict[str, Any]:
         """调用Agent API处理任务（仅使用OpenAI规范）"""
         try:
-            logger.info(f"🔌 [AGENT-API] 开始调用Agent API")
-            logger.info(f"   - Agent: {agent.get('agent_name', 'unknown')}")
-            logger.info(f"   - 模型: {agent.get('model_name', 'unknown')}")
-            logger.info(f"   - Base URL: {agent.get('base_url', 'none')}")
-            logger.info(f"   - 任务ID: {ai_client_data.get('task_id', 'unknown')}")
+            logger.trace(f"🔌 [AGENT-API] 开始调用Agent API")
+            logger.trace(f"   - Agent: {agent.get('agent_name', 'unknown')}")
+            logger.trace(f"   - 模型: {agent.get('model_name', 'unknown')}")
+            logger.trace(f"   - Base URL: {agent.get('base_url', 'none')}")
+            logger.trace(f"   - 任务ID: {ai_client_data.get('task_id', 'unknown')}")
             
             # 统一使用OpenAI规范格式处理所有AI任务
             result = await self._process_with_openai_format(agent, ai_client_data)
             
-            logger.info(f"✅ [AGENT-API] Agent API调用成功")
-            logger.info(f"   - 返回结果类型: {type(result)}")
+            logger.trace(f"✅ [AGENT-API] Agent API调用成功")
+            logger.trace(f"   - 返回结果类型: {type(result)}")
             if isinstance(result, dict):
-                logger.info(f"   - 结果包含的键: {list(result.keys())}")
-                logger.info(f"   - 置信度: {result.get('confidence_score', 'N/A')}")
+                logger.trace(f"   - 结果包含的键: {list(result.keys())}")
+                logger.trace(f"   - 置信度: {result.get('confidence_score', 'N/A')}")
                 
             return result
                 
@@ -378,10 +455,10 @@ class AgentTaskService:
         """使用OpenAI规范格式处理任务"""
         try:
             task_title = ai_client_data['task_metadata']['task_title']
-            logger.info(f"🚀 [OPENAI-FORMAT] 使用OpenAI规范处理任务: {task_title}")
+            logger.trace(f"🚀 [OPENAI-FORMAT] 使用OpenAI规范处理任务: {task_title}")
             
             # 构建符合OpenAI API规范的请求数据
-            logger.info(f"🛠️ [OPENAI-FORMAT] 构建 OpenAI API 请求数据")
+            logger.trace(f"🛠️ [OPENAI-FORMAT] 构建 OpenAI API 请求数据")
             
             # 从 agent 的 parameters 中获取参数
             agent_params = agent.get('parameters') or {}
@@ -390,11 +467,11 @@ class AgentTaskService:
             max_tokens = agent_params.get('max_tokens', 2000)
             
             # 添加调试日志
-            logger.info(f"🔧 [OPENAI-FORMAT] Agent参数:")
-            logger.info(f"   - model_name: {model_name}")
-            logger.info(f"   - agent_params: {agent_params}")
-            logger.info(f"   - temperature: {temperature}")
-            logger.info(f"   - max_tokens: {max_tokens}")
+            logger.trace(f"🔧 [OPENAI-FORMAT] Agent参数:")
+            logger.trace(f"   - model_name: {model_name}")
+            logger.trace(f"   - agent_params: {agent_params}")
+            logger.trace(f"   - temperature: {temperature}")
+            logger.trace(f"   - max_tokens: {max_tokens}")
             
             openai_request = {
                 'messages': [
@@ -412,18 +489,21 @@ class AgentTaskService:
                 'max_tokens': max_tokens
             }
             
-            logger.info(f"   - 模型: {model_name}")
-            logger.info(f"   - 温度: {temperature}")
-            logger.info(f"   - 最大token: {max_tokens}")
-            logger.info(f"   - 消息数量: {len(openai_request['messages'])}")
-            logger.info(f"   - 系统消息长度: {len(openai_request['messages'][0]['content'])}")
-            logger.info(f"   - 用户消息长度: {len(openai_request['messages'][1]['content'])}")
+            logger.trace(f"   - 模型: {model_name}")
+            logger.trace(f"   - 温度: {temperature}")
+            logger.trace(f"   - 最大token: {max_tokens}")
+            logger.trace(f"   - 消息数量: {len(openai_request['messages'])}")
+            logger.trace(f"   - 系统消息长度: {len(openai_request['messages'][0]['content'])}")
+            logger.trace(f"   - 用户消息长度: {len(openai_request['messages'][1]['content'])}")
             
             # 调用OpenAI客户端处理任务
-            logger.info(f"🔄 [OPENAI-FORMAT] 调用OpenAI客户端")
-            logger.info(f"   - 使用模型: {openai_request['model']}")
-            logger.info(f"   - Base URL: {agent.get('base_url', 'default')}")
-            logger.info(f"   - API Key存在: {'是' if agent.get('api_key') else '否'}")
+            logger.trace(f"🔄 [OPENAI-FORMAT] 调用OpenAI客户端")
+            logger.trace(f"   - 使用模型: {openai_request['model']}")
+            logger.trace(f"   - Base URL: {agent.get('base_url', 'default')}")
+            logger.trace(f"   - API Key存在: {'是' if agent.get('api_key') else '否'}")
+            logger.trace(f" 系统消息：{openai_request['messages'][0]['content']}")
+            logger.trace(f" 用户消息：{openai_request['messages'][1]['content']}")
+            
             
             # 设置超时时间（防止卡死）
             try:
@@ -431,7 +511,7 @@ class AgentTaskService:
                     openai_client.process_task(openai_request),
                     timeout=300  # 5分钟超时
                 )
-                logger.info(f"✅ [OPENAI-FORMAT] OpenAI客户端调用成功")
+                logger.trace(f"✅ [OPENAI-FORMAT] OpenAI客户端调用成功")
             except asyncio.TimeoutError:
                 logger.error(f"⏰ [OPENAI-FORMAT] OpenAI API调用超时（5分钟）")
                 raise RuntimeError("OpenAI API调用超时")
@@ -451,7 +531,7 @@ class AgentTaskService:
                     'token_usage': openai_result.get('usage', {})
                 }
                 
-                logger.info(f"OpenAI规范处理完成，返回文本结果")
+                logger.trace(f"OpenAI规范处理完成，返回文本结果")
                 return result
             else:
                 # 处理失败，抛出异常
@@ -474,7 +554,7 @@ class AgentTaskService:
                 )
                 
                 task_id = queue_item['task_id']
-                logger.info(f"从队列取出Agent任务: {task_id}")
+                logger.trace(f"从队列取出Agent任务: {task_id}")
                 
                 # 处理任务
                 await self.process_agent_task(task_id)
@@ -486,29 +566,62 @@ class AgentTaskService:
                 await asyncio.sleep(1)
     
     async def _monitor_pending_tasks(self):
-        """监控待处理任务的协程"""
+        """监控待处理任务的协程（智能调度版本）"""
+        consecutive_empty_checks = 0
+        base_sleep_interval = 15  # 基础检查间隔（秒）- 优化为更频繁
+        max_sleep_interval = 120  # 最大检查间隔（2分钟）- 减少最大延迟
+        
         while self.is_running:
             try:
-                # 每30秒检查一次待处理任务
-                await asyncio.sleep(30)
+                # 动态调整检查间隔
+                if consecutive_empty_checks == 0:
+                    sleep_interval = base_sleep_interval
+                elif consecutive_empty_checks <= 3:
+                    sleep_interval = base_sleep_interval * 2  # 60秒
+                elif consecutive_empty_checks <= 6:
+                    sleep_interval = base_sleep_interval * 4  # 120秒
+                else:
+                    sleep_interval = max_sleep_interval  # 300秒
+                
+                await asyncio.sleep(sleep_interval)
                 
                 # 获取待处理的Agent任务
                 pending_tasks = await self.get_pending_agent_tasks(limit=10)
                 
-                # 将待处理任务加入队列
-                for task in pending_tasks:
-                    if task['status'] == TaskInstanceStatus.PENDING.value:
-                        queue_item = {
-                            'task_id': task['task_instance_id'],
-                            'submitted_at': now_utc()
-                        }
-                        await self.processing_queue.put(queue_item)
-                        
-                        logger.info(f"自动加入Agent任务到处理队列: {task['task_instance_id']}")
+                if pending_tasks:
+                    # 有待处理任务，重置计数器
+                    consecutive_empty_checks = 0
+                    
+                    # 将待处理任务加入队列
+                    for task in pending_tasks:
+                        if task['status'] == TaskInstanceStatus.PENDING.value:
+                            queue_item = {
+                                'task_id': task['task_instance_id'],
+                                'submitted_at': now_utc()
+                            }
+                            await self.processing_queue.put(queue_item)
+                            
+                            logger.trace(f"自动加入Agent任务到处理队列: {task['task_instance_id']}")
+                else:
+                    # 没有待处理任务，增加空检查计数
+                    consecutive_empty_checks += 1
+                    
+                    # 检查是否有活跃的工作流
+                    has_active_workflows = await self._has_active_workflows()
+                    
+                    # 如果没有活跃工作流，进一步延长检查间隔
+                    if not has_active_workflows and consecutive_empty_checks > 10:
+                        sleep_interval = min(sleep_interval * 2, 600)  # 最长10分钟
+                    
+                    # 每隔一定次数才输出一次警告，避免日志刷屏
+                    if consecutive_empty_checks in [1, 5, 10, 20] or consecutive_empty_checks % 50 == 0:
+                        status_msg = "无活跃工作流" if not has_active_workflows else "有活跃工作流"
+                        logger.trace(f"🔍 [AGENT-MONITOR] 连续 {consecutive_empty_checks} 次未找到待处理任务，{status_msg}，检查间隔已调整为 {sleep_interval} 秒")
                 
             except Exception as e:
                 logger.error(f"监控待处理任务失败: {e}")
                 await asyncio.sleep(10)
+                consecutive_empty_checks = 0  # 重置计数器
     
     async def get_agent_task_statistics(self, agent_id: Optional[uuid.UUID] = None) -> Dict[str, Any]:
         """获取Agent任务统计"""
@@ -552,7 +665,7 @@ class AgentTaskService:
             if len(all_tasks) > 0:
                 stats['success_rate'] = (completed_count / len(all_tasks)) * 100
             
-            logger.info(f"生成Agent任务统计，成功率: {stats['success_rate']:.1f}%")
+            logger.trace(f"生成Agent任务统计，成功率: {stats['success_rate']:.1f}%")
             return stats
             
         except Exception as e:
@@ -579,7 +692,7 @@ class AgentTaskService:
             # 重新提交到处理队列
             await self.submit_task_to_agent(task_id)
             
-            logger.info(f"重试失败任务: {task_id}")
+            logger.trace(f"重试失败任务: {task_id}")
             return {
                 'task_id': task_id,
                 'status': 'retry_queued',
@@ -607,7 +720,7 @@ class AgentTaskService:
             )
             await self.task_repo.update_task(task_id, cancel_update)
             
-            logger.info(f"取消Agent任务: {task_id}")
+            logger.trace(f"取消Agent任务: {task_id}")
             return {
                 'task_id': task_id,
                 'status': TaskInstanceStatus.CANCELLED.value,
@@ -639,17 +752,50 @@ class AgentTaskService:
     def _preprocess_upstream_context(self, input_data: str) -> str:
         """预处理上游上下文信息（仅包含工作流描述、节点名称、任务title、节点输出内容）"""
         try:
+            logger.debug(f"🔍 [上下文预处理] ===== 开始预处理上游上下文 =====")
+            logger.debug(f"  - 输入数据类型: {type(input_data)}")
+            
+            # 安全地计算长度和预览
+            input_str = str(input_data) if input_data is not None else ""
+            logger.debug(f"  - 输入数据长度: {len(input_str)}")
+            logger.debug(f"  - 输入数据是否为空: {not input_data}")
+            logger.debug(f"  - 输入数据预览: {input_str[:200]}{'...' if len(input_str) > 200 else ''}")
+            logger.debug(f"  - 输入数据完整内容: '{input_data}'")
+            
             context_parts = []
             
-            # 尝试解析JSON字符串
+            # 智能处理输入数据：支持字典、JSON字符串和普通字符串
+            data_dict = {}
             try:
-                if input_data and input_data.strip():
-                    data_dict = json.loads(input_data)
+                if input_data:
+                    # 首先检查是否已经是字典类型
+                    if isinstance(input_data, dict):
+                        data_dict = input_data
+                        logger.debug(f"  - 输入数据已是字典类型，直接使用")
+                        logger.debug(f"  - 字典顶级键: {list(data_dict.keys())}")
+                    elif isinstance(input_data, str) and input_data.strip():
+                        # 尝试解析JSON字符串
+                        try:
+                            data_dict = json.loads(input_data)
+                            logger.debug(f"  - JSON解析成功，数据类型: {type(data_dict)}")
+                            logger.debug(f"  - JSON解析后顶级键: {list(data_dict.keys()) if isinstance(data_dict, dict) else 'Not a dict'}")
+                        except json.JSONDecodeError:
+                            # 如果不是有效JSON，将整个字符串作为简单上下文
+                            logger.debug(f"  - 输入不是有效JSON，作为普通文本处理")
+                            context_parts.append(f"上下文信息：{input_data}")
+                            return "\n".join(context_parts)
+                    else:
+                        # 其他类型转为字符串处理
+                        input_str = str(input_data)
+                        logger.debug(f"  - 其他类型数据转为字符串: {input_str[:100]}...")
+                        context_parts.append(f"上下文信息：{input_str}")
+                        return "\n".join(context_parts)
                 else:
                     data_dict = {}
-            except json.JSONDecodeError:
-                logger.warning(f"无法解析输入数据为JSON: {input_data[:100]}...")
-                return "上下文信息格式错误，请基于任务描述进行处理。"
+                    logger.debug(f"  - 输入数据为空，使用空字典")
+            except Exception as e:
+                logger.error(f"处理输入数据失败: {e}")
+                return "上下文信息处理失败，请基于任务描述进行处理。"
             
             # 1. 工作流描述
             workflow_global = data_dict.get('workflow_global', {})
@@ -659,34 +805,120 @@ class AgentTaskService:
                     context_parts.append(f"工作流描述：{workflow_description}")
             
             # 2. 上游节点信息（节点名称、任务title、节点输出内容）
+            logger.debug(f"🔍 [上下文预处理] 输入数据结构: {data_dict}")
+            
+            # 兼容不同的上游数据字段名
             immediate_upstream = data_dict.get('immediate_upstream', {})
+            upstream_outputs = data_dict.get('upstream_outputs', [])
+            
+            logger.debug(f"🔍 [上下文预处理] immediate_upstream类型: {type(immediate_upstream)}, 内容: {immediate_upstream}")
+            logger.debug(f"🔍 [上下文预处理] upstream_outputs类型: {type(upstream_outputs)}, 内容: {upstream_outputs}")
+            
+            # 处理immediate_upstream格式（旧格式）
             if immediate_upstream:
                 context_parts.append("\n上游节点信息：")
                 
                 for node_id, node_data in immediate_upstream.items():
+                    logger.trace(f"📋 [上下文预处理] 处理节点 {node_id[:8]}...")
+                    logger.trace(f"  - 原始数据类型: {type(node_data)}")
+                    logger.trace(f"  - 原始数据内容: {node_data}")
+                    
+                    # 检查node_data是否已经是字典类型
+                    if isinstance(node_data, str):
+                        try:
+                            node_data = json.loads(node_data)
+                            logger.trace(f"  - 解析后数据: {node_data}")
+                        except json.JSONDecodeError:
+                            logger.warning(f"  ❌ 无法解析节点数据: {node_data[:100]}...")
+                            continue
+                    elif not isinstance(node_data, dict):
+                        logger.warning(f"  ❌ 节点数据类型不正确: {type(node_data)}")
+                        continue
+                    
                     node_name = node_data.get('node_name', f'节点_{node_id[:8]}')
-                    task_title = node_data.get('task_title', '')
-                    output_data = node_data.get('output_data', {})
+                    
+                    # 检查多种可能的输出字段 - 修复逻辑，确保正确提取数据
+                    output_data = None
+                    if 'task_result' in node_data:
+                        output_data = node_data['task_result']
+                    elif 'output_data' in node_data:
+                        output_data = node_data['output_data']
+                    elif 'result' in node_data:
+                        output_data = node_data['result']
+                    elif 'task_description' in node_data:
+                        output_data = node_data['task_description']
+                    
+                    logger.trace(f"  - 节点名称: {node_name}")
+                    logger.trace(f"  - 输出数据: {output_data}")
+                    logger.trace(f"  - 输出数据类型: {type(output_data)}")
+                    logger.trace(f"  - 节点完整数据: {node_data}")
                     
                     context_parts.append(f"\n节点：{node_name}")
-                    if task_title:
-                        context_parts.append(f"任务：{task_title}")
-                    
+                   
                     # 输出内容（简化展示）
-                    if output_data:
-                        context_parts.append("输出内容：")
+                    if output_data is not None:
                         if isinstance(output_data, dict):
+                            # 对于字典类型，尝试提取最重要的数据
+                            context_parts.append("输出数据：")
                             for key, value in output_data.items():
-                                context_parts.append(f"- {key}: {self._format_simple_output(value)}")
+                                formatted_value = self._format_simple_output(value)
+                                context_parts.append(f"- {key}: {formatted_value}")
+                                logger.trace(f"  - 添加字段 {key}: {formatted_value[:100]}...")
                         else:
-                            context_parts.append(f"- {self._format_simple_output(output_data)}")
+                            # 对于简单类型，直接显示
+                            formatted_output = self._format_simple_output(output_data)
+                            context_parts.append(f"输出数据：{formatted_output}")
+                            logger.trace(f"  - 添加输出: {formatted_output}")
+                            
+                            # 如果是数字，额外提示
+                            try:
+                                num_value = float(output_data)
+                                context_parts.append(f"（这是一个数值：{num_value}）")
+                                logger.trace(f"  - 识别为数值: {num_value}")
+                            except (ValueError, TypeError):
+                                logger.trace(f"  - 非数值类型: {type(output_data)}")
+                                pass
                     else:
                         context_parts.append("- 无输出内容")
+                        logger.trace(f"  - 该节点无输出内容")
             
-            return "\n".join(context_parts) if context_parts else "无上游上下文数据。"
+            # 处理upstream_outputs格式（新格式）
+            elif upstream_outputs and isinstance(upstream_outputs, list):
+                context_parts.append("\n上游节点信息：")
+                
+                for i, upstream_node in enumerate(upstream_outputs):
+                    logger.trace(f"📋 [上下文预处理] 处理上游节点 {i+1}...")
+                    logger.trace(f"  - 节点数据: {upstream_node}")
+                    
+                    if isinstance(upstream_node, dict):
+                        node_name = upstream_node.get('node_name', f'上游节点_{i+1}')
+                        output_data = upstream_node.get('output_data', '')
+                        
+                        context_parts.append(f"\n节点：{node_name}")
+                        
+                        if output_data:
+                            formatted_output = self._format_simple_output(output_data)
+                            context_parts.append(f"输出数据：{formatted_output}")
+                            logger.trace(f"  - 添加输出: {formatted_output[:100]}...")
+                        else:
+                            context_parts.append("- 无输出内容")
+                            logger.trace(f"  - 该节点无输出内容")
+                    else:
+                        logger.warning(f"  ❌ 上游节点数据格式不正确: {upstream_node}")
+            else:
+                logger.debug(f"🔍 [上下文预处理] 没有找到上游节点信息")
+            
+            final_context = "\n".join(context_parts) if context_parts else "无上游上下文数据。"
+            logger.trace(f"🎯 [上下文预处理] context_parts长度: {len(context_parts)}")
+            logger.trace(f"🎯 [上下文预处理] context_parts内容: {context_parts}")
+            logger.trace(f"🎯 [上下文预处理] 最终生成的上下文长度: {len(final_context)}")
+            logger.trace(f"🎯 [上下文预处理] 最终生成的上下文: {final_context}")
+            return final_context
             
         except Exception as e:
-            logger.error(f"预处理上游上下文失败: {e}")
+            logger.error(f"❌ [上下文预处理] 预处理上游上下文失败: {e}")
+            import traceback
+            logger.error(f"❌ [上下文预处理] 错误堆栈: {traceback.format_exc()}")
             return "上下文信息处理失败，请基于任务描述进行处理。"
     
     def _format_simple_output(self, data) -> str:
@@ -722,16 +954,32 @@ class AgentTaskService:
             message_parts = []
             
             # 任务标题
-            logger.info(f"上下文信息: {context_info}")
+            logger.trace(f"上下文信息: {context_info}")
             task_title = task.get('task_title', '未命名任务')
             message_parts.append(f"任务：{task_title}")
             
             # 添加上下文信息（上游节点信息）
-            if context_info and context_info.strip() != "无上游上下文数据。":
+            # 检查是否有有效的上下文信息
+            invalid_context_messages = [
+                "无上游上下文数据。",
+                "上下文信息处理失败，请基于任务描述进行处理。",
+                "上下文信息格式错误，请基于任务描述进行处理。"
+            ]
+            
+            logger.debug(f"🔍 [消息构建] 检查上下文信息有效性...")
+            logger.debug(f"  - context_info存在: {bool(context_info)}")
+            logger.debug(f"  - context_info长度: {len(context_info) if context_info else 0}")
+            logger.debug(f"  - context_info内容: '{context_info}'")
+            logger.debug(f"  - context_info.strip(): '{context_info.strip() if context_info else ''}'")
+            logger.debug(f"  - 是否在无效消息列表中: {context_info.strip() in invalid_context_messages if context_info else False}")
+            
+            if context_info and context_info.strip() and context_info.strip() not in invalid_context_messages:
                 message_parts.append("\n上下文信息：")
                 message_parts.append(context_info)
+                logger.debug(f"✅ [消息构建] 添加了有效的上下文信息，长度: {len(context_info)}")
             else:
                 message_parts.append("\n当前没有上游节点数据。")
+                logger.warning(f"⚠️ [消息构建] 上下文信息无效或为空: '{context_info}'")
             
             return "\n".join(message_parts)
             

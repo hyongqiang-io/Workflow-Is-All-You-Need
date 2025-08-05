@@ -189,6 +189,13 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                         except Exception as e:
                             logger.warning(f"   ⚠️  计算执行时间失败: {e}")
             
+            if update_data.input_data is not None:
+                data["input_data"] = update_data.input_data
+                if update_data.input_data and len(update_data.input_data.strip()) > 0:
+                    logger.info(f"   📥 输入数据: {update_data.input_data[:100]}{'...' if len(update_data.input_data) > 100 else ''}")
+                else:
+                    logger.info(f"   📥 输入数据: 空")
+                    
             if update_data.output_data is not None:
                 data["output_data"] = update_data.output_data
                 if update_data.output_data and len(update_data.output_data.strip()) > 0:

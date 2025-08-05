@@ -8,7 +8,7 @@ import asyncio
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 from loguru import logger
-
+import sys
 from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
 from ..repositories.instance.task_instance_repository import TaskInstanceRepository
 from ..models.instance import (
@@ -26,7 +26,7 @@ class MonitoringService:
         
         # 监控配置
         self.is_monitoring = False
-        self.monitor_interval = 60  # 监控间隔（秒）
+        self.monitor_interval = 15  # 监控间隔（秒）- 优化为更频繁
         self.alert_thresholds = {
             'workflow_timeout_minutes': 60,  # 工作流超时阈值
             'task_timeout_minutes': 30,      # 任务超时阈值
@@ -75,6 +75,7 @@ class MonitoringService:
         asyncio.create_task(self._collect_metrics())
         asyncio.create_task(self._check_timeouts())
         asyncio.create_task(self._performance_analysis())
+        asyncio.create_task(self._real_time_status_sync())  # 新增实时状态同步
     
     async def stop_monitoring(self):
         """停止监控服务"""
@@ -297,9 +298,16 @@ class MonitoringService:
             # 获取运行中的工作流实例
             running_instances = await self.workflow_instance_repo.get_running_instances(100)
             
-            timeout_threshold = datetime.now() - timedelta(
-                minutes=self.alert_thresholds['workflow_timeout_minutes']
-            )
+            # 确保超时阈值是数值类型
+            timeout_minutes = self.alert_thresholds['workflow_timeout_minutes']
+            if isinstance(timeout_minutes, str):
+                try:
+                    timeout_minutes = int(timeout_minutes)
+                except ValueError:
+                    logger.warning(f"无法转换workflow_timeout_minutes为整数: {timeout_minutes}，使用默认值60")
+                    timeout_minutes = 60
+            
+            timeout_threshold = datetime.now() - timedelta(minutes=timeout_minutes)
             
             for instance in running_instances:
                 started_at = instance.get('started_at')
@@ -378,6 +386,56 @@ class MonitoringService:
             
         except Exception as e:
             logger.error(f"分析瓶颈失败: {e}")
+    
+    async def _real_time_status_sync(self):
+        """实时状态同步 - 每5秒主动检查运行中工作流的状态变化"""
+        while self.is_monitoring:
+            try:
+                # 获取所有运行中的工作流
+                running_workflows = await self.workflow_instance_repo.db.fetch_all("""
+                    SELECT workflow_instance_id, instance_name, status, updated_at
+                    FROM workflow_instance 
+                    WHERE status IN ('RUNNING', 'PENDING')
+                    AND is_deleted = FALSE
+                    ORDER BY updated_at DESC
+                """)
+                
+                if running_workflows:
+                    logger.trace(f"🔄 [实时同步] 检查 {len(running_workflows)} 个运行中的工作流状态")
+                    
+                    for workflow in running_workflows:
+                        workflow_id = workflow['workflow_instance_id']
+                        
+                        # 检查节点实例状态是否有变化
+                        nodes_status = await self.workflow_instance_repo.db.fetch_all("""
+                            SELECT node_instance_id, status, updated_at
+                            FROM node_instance 
+                            WHERE workflow_instance_id = $1 
+                            AND is_deleted = FALSE
+                            ORDER BY updated_at DESC
+                        """, workflow_id)
+                        
+                        completed_nodes = sum(1 for n in nodes_status if n['status'] == 'completed')
+                        total_nodes = len(nodes_status)
+                        
+                        # 如果所有节点都完成了，但工作流状态还是RUNNING，立即更新
+                        if total_nodes > 0 and completed_nodes == total_nodes and workflow['status'] == 'RUNNING':
+                            logger.info(f"🎯 [实时同步] 发现完成的工作流需要状态更新: {workflow['instance_name']}")
+                            
+                            # 触发状态更新（通过执行引擎）
+                            try:
+                                from .execution_service import execution_engine
+                                if hasattr(execution_engine, 'context_manager'):
+                                    await execution_engine.context_manager._check_workflow_completion(workflow_id)
+                            except Exception as sync_error:
+                                logger.error(f"实时同步触发状态更新失败: {sync_error}")
+                
+                # 每5秒检查一次，保持高实时性
+                await asyncio.sleep(5)
+                
+            except Exception as e:
+                logger.error(f"实时状态同步失败: {e}")
+                await asyncio.sleep(10)  # 错误时等待10秒再重试
     
     async def _create_alert(self, alert_type: str, message: str, 
                           severity: str, context: Optional[Dict[str, Any]] = None):

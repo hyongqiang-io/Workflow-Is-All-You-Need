@@ -10,20 +10,14 @@ from datetime import datetime
 from loguru import logger
 
 
-def _json_serializer(obj):
-    """自定义JSON序列化函数，处理UUID和datetime对象"""
-    if isinstance(obj, uuid.UUID):
-        return str(obj)
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+# 使用helpers中的通用JSON序列化器
 
 from ..base import BaseRepository
 from ...models.instance import (
     WorkflowInstance, WorkflowInstanceCreate, WorkflowInstanceUpdate, 
     WorkflowInstanceStatus, ExecutionStatistics
 )
-from ...utils.helpers import now_utc
+from ...utils.helpers import now_utc, safe_json_dumps, safe_json_serializer
 
 
 class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
@@ -64,8 +58,8 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                 "trigger_user_id": instance_data.executor_id,  # Map executor_id to trigger_user_id for database
                 "executor_id": instance_data.executor_id,
                 "workflow_instance_name": instance_data.instance_name,
-                "input_data": json.dumps(instance_data.input_data or {}, ensure_ascii=False),
-                "context_data": json.dumps(instance_data.context_data or {}, ensure_ascii=False),
+                "input_data": safe_json_dumps(instance_data.input_data or {}),
+                "context_data": safe_json_dumps(instance_data.context_data or {}),
                 "status": WorkflowInstanceStatus.PENDING.value,
                 "created_at": now_utc(),
                 "updated_at": now_utc(),
@@ -148,11 +142,11 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             if update_data.status is not None:
                 data["status"] = update_data.status.value
             if update_data.input_data is not None:
-                data["input_data"] = json.dumps(update_data.input_data, ensure_ascii=False, default=_json_serializer)
+                data["input_data"] = safe_json_dumps(update_data.input_data)
             if update_data.context_data is not None:
-                data["context_data"] = json.dumps(update_data.context_data, ensure_ascii=False, default=_json_serializer)
+                data["context_data"] = safe_json_dumps(update_data.context_data)
             if update_data.output_data is not None:
-                data["output_data"] = json.dumps(update_data.output_data, ensure_ascii=False, default=_json_serializer)
+                data["output_data"] = safe_json_dumps(update_data.output_data)
             if update_data.error_message is not None:
                 data["error_message"] = update_data.error_message
             if update_data.current_node_id is not None:
@@ -160,15 +154,15 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             
             # 新增结构化输出字段支持
             if hasattr(update_data, 'execution_summary') and update_data.execution_summary is not None:
-                data["execution_summary"] = json.dumps(update_data.execution_summary, ensure_ascii=False, default=_json_serializer)
+                data["execution_summary"] = safe_json_dumps(update_data.execution_summary)
             if hasattr(update_data, 'quality_metrics') and update_data.quality_metrics is not None:
-                data["quality_metrics"] = json.dumps(update_data.quality_metrics, ensure_ascii=False, default=_json_serializer)
+                data["quality_metrics"] = safe_json_dumps(update_data.quality_metrics)
             if hasattr(update_data, 'data_lineage') and update_data.data_lineage is not None:
-                data["data_lineage"] = json.dumps(update_data.data_lineage, ensure_ascii=False, default=_json_serializer)
+                data["data_lineage"] = safe_json_dumps(update_data.data_lineage)
             if hasattr(update_data, 'output_summary') and update_data.output_summary is not None:
                 # 将Pydantic模型转换为字典再序列化
                 output_summary_dict = update_data.output_summary.dict() if hasattr(update_data.output_summary, 'dict') else update_data.output_summary
-                data["output_summary"] = json.dumps(output_summary_dict, ensure_ascii=False, default=_json_serializer)
+                data["output_summary"] = safe_json_dumps(output_summary_dict)
             
             # 根据状态更新时间戳
             if update_data.status == WorkflowInstanceStatus.RUNNING:

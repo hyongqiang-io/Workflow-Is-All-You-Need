@@ -7,6 +7,7 @@ import json
 import asyncio
 from typing import Dict, Any, Optional, List
 from loguru import logger
+from .helpers import safe_json_dumps
 
 # 尝试导入OpenAI，如果失败则使用模拟版本
 
@@ -189,7 +190,7 @@ class OpenAIClient:
             
             # 返回符合OpenAI格式的响应
             return {
-                "content": json.dumps(mock_response, ensure_ascii=False),
+                "content": safe_json_dumps(mock_response),
                 "usage": {
                     "prompt_tokens": 150,
                     "completion_tokens": 200,
@@ -201,7 +202,7 @@ class OpenAIClient:
             logger.error(f"模拟OpenAI请求失败: {e}")
             # 返回最基本的响应
             return {
-                "content": json.dumps({
+                "content": safe_json_dumps({
                     "analysis_result": "模拟分析完成",
                     "key_findings": ["基础分析结果"],
                     "recommendations": ["建议使用真实API"],

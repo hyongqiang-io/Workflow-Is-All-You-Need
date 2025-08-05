@@ -7,12 +7,10 @@ import {
   TeamOutlined,
   CheckSquareOutlined,
   BranchesOutlined,
-  RobotOutlined,
   LogoutOutlined,
   SettingOutlined,
   DashboardOutlined,
-  BellOutlined,
-  BugOutlined
+  BellOutlined
 } from '@ant-design/icons';
 
 const { Header, Sider, Content } = Layout;
@@ -38,23 +36,9 @@ const MainLayout: React.FC = () => {
       label: '仪表板',
     },
     {
-      key: 'workflow-menu',
+      key: '/workflow',
       icon: <BranchesOutlined />,
-      label: '工作流',
-      children: [
-        {
-          key: '/workflow',
-          label: '工作流管理',
-        },
-        {
-          key: '/workflow/react-flow',
-          label: 'React Flow 设计器',
-        },
-        {
-          key: '/workflow/react-flow-demo',
-          label: 'React Flow 演示',
-        },
-      ],
+      label: '工作流管理',
     },
     {
       key: '/todo',
@@ -65,12 +49,6 @@ const MainLayout: React.FC = () => {
       key: '/resource',
       icon: <TeamOutlined />,
       label: '资源管理',
-    },
-    {
-      key: 'test-runner',
-      icon: <BugOutlined />,
-      label: '测试运行器',
-      path: '/test-runner'
     },
     {
       key: '/profile',
