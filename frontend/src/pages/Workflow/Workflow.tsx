@@ -8,15 +8,10 @@ import {
   DeleteOutlined,
   BranchesOutlined,
   ReloadOutlined,
-  ShareAltOutlined,
-  HistoryOutlined,
-  BugOutlined,
-  DatabaseOutlined,
-  ApiOutlined,
-  ToolOutlined
+  HistoryOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { workflowAPI, executionAPI, nodeAPI, authAPI } from '../../services/api';
+import { workflowAPI, executionAPI } from '../../services/api';
 import { useAuthStore } from '../../stores/authStore';
 import WorkflowDesigner from '../../components/WorkflowDesigner';
 import WorkflowInstanceList from '../../components/WorkflowInstanceList';
@@ -266,217 +261,9 @@ const WorkflowPage: React.FC = () => {
     loadWorkflows();
   };
 
-  const handleViewTaskFlow = (workflow: WorkflowItem) => {
-    navigate(`/workflow/${workflow.baseId}/task-flow`); // 使用workflow_base_id
-  };
-
   const handleViewInstances = (workflow: WorkflowItem) => {
     setCurrentWorkflow(workflow);
     setInstanceListVisible(true);
-  };
-
-  // ========== 测试函数区域 ==========
-  const testBackendHealth = async () => {
-    try {
-      const response = await fetch('http://localhost:8001/health');
-      if (response.ok) {
-        const data = await response.json();
-        message.success(`后端服务正常: ${data.message || '健康检查通过'}`);
-        console.log('后端健康检查结果:', data);
-      } else {
-        throw new Error(`HTTP ${response.status}`);
-      }
-    } catch (error: any) {
-      message.error(`后端服务异常: ${error.message}`);
-      console.error('后端健康检查失败:', error);
-    }
-  };
-
-  const testAuthAPI = async () => {
-    try {
-      const currentUser = await authAPI.getCurrentUser();
-      message.success(`认证正常，当前用户: ${currentUser.data?.username || '未知'}`);
-      console.log('当前用户信息:', currentUser);
-    } catch (error: any) {
-      message.error(`认证失败: ${error.response?.data?.message || error.message}`);
-      console.error('认证测试失败:', error);
-    }
-  };
-
-  const testNodeAPI = async () => {
-    if (!workflows.length) {
-      message.warning('请先创建一个工作流');
-      return;
-    }
-
-    const testWorkflow = workflows[0];
-    try {
-      console.log('测试工作流:', testWorkflow);
-      
-      // 1. 获取节点列表
-      const nodesResponse = await nodeAPI.getWorkflowNodes(testWorkflow.baseId);
-      console.log('节点列表响应:', nodesResponse);
-      
-      const nodes = nodesResponse.data?.nodes || [];
-      message.success(`节点API测试成功，找到 ${nodes.length} 个节点`);
-      
-      // 2. 如果有节点，测试节点更新
-      if (nodes.length > 0) {
-        const testNode = nodes[0];
-        console.log('测试节点更新:', testNode);
-        
-        try {
-          const updateData = {
-            name: testNode.name,
-            task_description: '测试更新 ' + new Date().toLocaleTimeString(),
-            position_x: testNode.position_x || 0,
-            position_y: testNode.position_y || 0
-          };
-          
-          const updateResponse = await nodeAPI.updateNode(
-            testNode.node_base_id, 
-            testWorkflow.baseId, 
-            updateData
-          );
-          console.log('节点更新响应:', updateResponse);
-          message.success('节点更新测试成功');
-        } catch (updateError: any) {
-          console.error('节点更新测试失败:', updateError);
-          message.error(`节点更新失败: ${updateError.response?.data?.message || updateError.message}`);
-        }
-      }
-      
-    } catch (error: any) {
-      message.error(`节点API测试失败: ${error.response?.data?.message || error.message}`);
-      console.error('节点API测试失败:', error);
-    }
-  };
-
-  const testCreateNode = async () => {
-    if (!workflows.length) {
-      message.warning('请先创建一个工作流');
-      return;
-    }
-
-    const testWorkflow = workflows[0];
-    try {
-      const nodeData = {
-        name: `测试节点_${Date.now()}`,
-        type: 'processor',
-        task_description: '这是一个测试节点',
-        workflow_base_id: testWorkflow.baseId,
-        position_x: Math.floor(Math.random() * 300) + 100,
-        position_y: Math.floor(Math.random() * 200) + 100
-      };
-
-      console.log('创建测试节点:', nodeData);
-      const response = await nodeAPI.createNode(nodeData);
-      console.log('节点创建响应:', response);
-      
-      const newNodeId = response.data?.node?.node_base_id;
-      if (!newNodeId) {
-        throw new Error('创建响应中没有节点ID');
-      }
-      
-      message.success(`测试节点创建成功，ID: ${newNodeId}`);
-      
-      // 分阶段测试更新，增加延迟时间
-      const testDelays = [500, 1000, 2000, 5000]; // 0.5s, 1s, 2s, 5s
-      
-      for (let i = 0; i < testDelays.length; i++) {
-        const delay = testDelays[i];
-        setTimeout(async () => {
-          try {
-            console.log(`尝试更新节点 (延迟${delay}ms):`, newNodeId);
-            
-            // 先检查节点是否存在
-            try {
-              const checkResponse = await nodeAPI.getWorkflowNodes(testWorkflow.baseId);
-              const nodes = checkResponse.data?.nodes || [];
-              const targetNode = nodes.find((n: any) => n.node_base_id === newNodeId);
-              const nodeExists = !!targetNode;
-              
-              console.log(`延迟${delay}ms后节点是否存在:`, nodeExists);
-              console.log('当前节点列表:', nodes.map((n: any) => ({ id: n.node_base_id, name: n.name })));
-              
-              if (nodeExists && targetNode) {
-                console.log('找到的节点详细信息:', {
-                  node_base_id: targetNode.node_base_id,
-                  name: targetNode.name,
-                  type: targetNode.type,
-                  workflow_base_id: targetNode.workflow_base_id,
-                  is_current_version: targetNode.is_current_version,
-                  is_deleted: targetNode.is_deleted
-                });
-              }
-              
-              if (!nodeExists) {
-                console.warn(`延迟${delay}ms后节点仍不存在于数据库中`);
-                return;
-              }
-            } catch (checkError) {
-              console.error('检查节点存在性失败:', checkError);
-              return;
-            }
-            
-            // 尝试更新
-            await nodeAPI.updateNode(newNodeId, testWorkflow.baseId, {
-              name: `${nodeData.name}_更新${delay}ms`,
-              task_description: `更新测试 ${delay}ms延迟`,
-              position_x: nodeData.position_x + (i * 10),
-              position_y: nodeData.position_y + (i * 10)
-            });
-            
-            console.log(`延迟${delay}ms的更新测试成功`);
-            message.success(`延迟${delay}ms更新成功！`);
-            
-          } catch (updateError: any) {
-            console.error(`延迟${delay}ms更新测试失败:`, updateError);
-            console.error('错误详情:', {
-              status: updateError.response?.status,  
-              statusText: updateError.response?.statusText,
-              data: updateError.response?.data
-            });
-          }
-        }, delay);
-      }
-      
-    } catch (error: any) {
-      message.error(`创建测试节点失败: ${error.response?.data?.message || error.message}`);
-      console.error('创建测试节点失败:', error);
-    }
-  };
-
-  const clearConsoleAndTest = () => {
-    console.clear();
-    console.log('=== 开始调试测试 ===');
-    console.log('当前工作流列表:', workflows);
-    console.log('当前用户:', useAuthStore.getState().user);
-    message.info('控制台已清空，开始调试测试');
-  };
-
-  const runFullDiagnostic = async () => {
-    console.log('=== 开始完整诊断 ===');
-    message.info('开始完整诊断，请查看控制台');
-    
-    // 1. 后端健康检查
-    console.log('1. 后端健康检查...');
-    await testBackendHealth();
-    
-    // 2. 认证测试
-    console.log('2. 认证测试...');
-    await testAuthAPI();
-    
-    // 3. 工作流API测试
-    if (workflows.length > 0) {
-      console.log('3. 工作流API测试...');
-      await testNodeAPI();
-    } else {
-      console.log('3. 跳过工作流API测试（无工作流）');
-    }
-    
-    console.log('=== 诊断完成 ===');
-    message.success('完整诊断完成，请查看控制台详情');
   };
 
   const formatDate = (dateString: string) => {
@@ -576,14 +363,6 @@ const WorkflowPage: React.FC = () => {
           <Button 
             type="link" 
             size="small" 
-            icon={<ShareAltOutlined />}
-            onClick={() => handleViewTaskFlow(record)}
-          >
-            任务流程
-          </Button>
-          <Button 
-            type="link" 
-            size="small" 
             icon={<HistoryOutlined />}
             onClick={() => handleViewInstances(record)}
           >
@@ -656,59 +435,6 @@ const WorkflowPage: React.FC = () => {
                 创建工作流
               </Button>
               
-              {/* ========== 测试按钮区域 ========== */}
-              <Space.Compact>
-                <Button 
-                  icon={<BugOutlined />}
-                  onClick={clearConsoleAndTest}
-                  title="清空控制台并开始调试"
-                  size="small"
-                >
-                  调试
-                </Button>
-                <Button 
-                  icon={<ApiOutlined />}
-                  onClick={testBackendHealth}
-                  title="测试后端服务健康状态"
-                  size="small"
-                >
-                  后端
-                </Button>
-                <Button 
-                  icon={<DatabaseOutlined />}
-                  onClick={testAuthAPI}
-                  title="测试认证API"
-                  size="small"
-                >
-                  认证
-                </Button>
-                <Button 
-                  icon={<ToolOutlined />}
-                  onClick={testNodeAPI}
-                  title="测试节点API"
-                  size="small"
-                >
-                  节点API
-                </Button>
-                <Button 
-                  icon={<PlusOutlined />}
-                  onClick={testCreateNode}
-                  title="测试创建节点"
-                  size="small"
-                >
-                  创建测试
-                </Button>
-              </Space.Compact>
-              
-              <Button 
-                type="dashed"
-                icon={<ToolOutlined />}
-                onClick={runFullDiagnostic}
-                title="运行完整系统诊断"
-                size="small"
-              >
-                完整诊断
-              </Button>
             </Space>
           </Col>
         </Row>
