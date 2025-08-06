@@ -38,7 +38,6 @@ interface WorkflowItem {
 }
 
 const WorkflowPage: React.FC = () => {
-  const navigate = useNavigate();
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [createModalVisible, setCreateModalVisible] = useState(false);

@@ -12,7 +12,7 @@ import sys
 import json
 from loguru import logger
 logger.remove()
-logger.add(sys.stderr,level="DEBUG")
+logger.add(sys.stderr, level="DEBUG", enqueue=True)  # 修复Windows GBK编码问题
 
 # 延迟导入避免循环依赖
 from ..models.instance import WorkflowInstanceStatus, WorkflowInstanceUpdate

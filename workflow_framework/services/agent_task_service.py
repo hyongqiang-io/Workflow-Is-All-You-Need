@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from loguru import logger
 logger.remove()
-logger.add(sys.stderr,level="DEBUG")
+logger.add(sys.stderr, level="DEBUG", enqueue=True)  # 修复Windows GBK编码问题
 
 from ..repositories.instance.task_instance_repository import TaskInstanceRepository
 from ..repositories.agent.agent_repository import AgentRepository
@@ -20,6 +20,7 @@ from ..models.instance import (
 )
 from ..utils.helpers import now_utc
 from ..utils.openai_client import openai_client
+from .mcp_service import mcp_service
 
 
 class AgentTaskService:
@@ -428,9 +429,24 @@ class AgentTaskService:
         """调用Agent API处理任务（仅使用OpenAI规范）"""
         try:
             logger.trace(f"🔌 [AGENT-API] 开始调用Agent API")
-            logger.trace(f"   - Agent: {agent.get('agent_name', 'unknown')}")
-            logger.trace(f"   - 模型: {agent.get('model_name', 'unknown')}")
-            logger.trace(f"   - Base URL: {agent.get('base_url', 'none')}")
+            
+            # 兼容不同Agent对象格式
+            agent_name = 'unknown'
+            model_name = 'unknown'  
+            base_url = 'none'
+            
+            if isinstance(agent, dict):
+                agent_name = agent.get('agent_name', 'unknown')
+                model_name = agent.get('model_name', 'unknown')
+                base_url = agent.get('base_url', 'none')
+            elif hasattr(agent, 'agent_name'):
+                agent_name = getattr(agent, 'agent_name', 'unknown')
+                model_name = getattr(agent, 'model_name', 'unknown')
+                base_url = getattr(agent, 'base_url', 'none')
+            
+            logger.trace(f"   - Agent: {agent_name}")
+            logger.trace(f"   - 模型: {model_name}")
+            logger.trace(f"   - Base URL: {base_url}")
             logger.trace(f"   - 任务ID: {ai_client_data.get('task_id', 'unknown')}")
             
             # 统一使用OpenAI规范格式处理所有AI任务
@@ -461,10 +477,19 @@ class AgentTaskService:
             logger.trace(f"🛠️ [OPENAI-FORMAT] 构建 OpenAI API 请求数据")
             
             # 从 agent 的 parameters 中获取参数
-            agent_params = agent.get('parameters') or {}
-            model_name = agent.get('model_name', 'gpt-3.5-turbo')
-            temperature = agent_params.get('temperature', 0.7)
-            max_tokens = agent_params.get('max_tokens', 2000)
+            if isinstance(agent, dict):
+                agent_params = agent.get('parameters') or {}
+                model_name = agent.get('model_name', 'gpt-3.5-turbo')
+            elif hasattr(agent, 'parameters'):
+                agent_params = agent.parameters or {}
+                model_name = getattr(agent, 'model_name', 'gpt-3.5-turbo')
+            else:
+                logger.warning(f"⚠️ [OPENAI-FORMAT] 无法获取Agent参数，使用默认值")
+                agent_params = {}
+                model_name = 'gpt-3.5-turbo'
+                
+            temperature = agent_params.get('temperature', 0.7) if isinstance(agent_params, dict) else 0.7
+            max_tokens = agent_params.get('max_tokens', 2000) if isinstance(agent_params, dict) else 2000
             
             # 添加调试日志
             logger.trace(f"🔧 [OPENAI-FORMAT] Agent参数:")
@@ -472,6 +497,71 @@ class AgentTaskService:
             logger.trace(f"   - agent_params: {agent_params}")
             logger.trace(f"   - temperature: {temperature}")
             logger.trace(f"   - max_tokens: {max_tokens}")
+            
+            # 获取Agent的MCP工具
+            agent_id = None
+            if isinstance(agent, dict):
+                agent_id = agent.get('agent_id')
+            elif hasattr(agent, 'agent_id'):
+                agent_id = agent.agent_id
+            else:
+                logger.warning(f"⚠️ [MCP-TOOLS] Agent对象类型无法识别: {type(agent)}, 跳过工具获取")
+                
+            mcp_tools = []
+            if agent_id:
+                try:
+                    logger.trace(f"🔧 [MCP-TOOLS] 获取Agent的MCP工具: {agent_id}")
+                    logger.trace(f"   - Agent对象类型: {type(agent)}")
+                    logger.trace(f"   - Agent是否为字典: {isinstance(agent, dict)}")
+                    if isinstance(agent, dict):
+                        logger.trace(f"   - Agent字典键: {list(agent.keys())}")
+                    
+                    mcp_tools = await mcp_service.get_agent_tools(agent_id)
+                    logger.trace(f"   - 找到MCP工具数量: {len(mcp_tools)}")
+                    
+                    # 检查工具选择模式
+                    tool_config = {}
+                    if isinstance(agent, dict):
+                        tool_config = agent.get('tool_config', {}) or {}
+                    elif hasattr(agent, 'tool_config'):
+                        tool_config = getattr(agent, 'tool_config', {}) or {}
+                    
+                    # 确保tool_config是字典类型
+                    if not isinstance(tool_config, dict):
+                        logger.warning(f"⚠️ [MCP-TOOLS] tool_config不是字典类型: {type(tool_config)}, 使用默认配置")
+                        tool_config = {}
+                        
+                    tool_selection = tool_config.get('tool_selection', 'auto')
+                    
+                    logger.trace(f"   - 工具选择模式: {tool_selection}")
+                    
+                    if tool_selection == 'disabled':
+                        logger.trace(f"   - 工具调用已禁用，清空工具列表")
+                        mcp_tools = []
+                    elif tool_selection == 'manual':
+                        # 应用工具过滤
+                        allowed_tools = tool_config.get('allowed_tools', [])
+                        blocked_tools = tool_config.get('blocked_tools', [])
+                        
+                        if allowed_tools:
+                            mcp_tools = [tool for tool in mcp_tools if tool.name in allowed_tools]
+                            logger.trace(f"   - 应用允许列表后工具数量: {len(mcp_tools)}")
+                        
+                        if blocked_tools:
+                            mcp_tools = [tool for tool in mcp_tools if tool.name not in blocked_tools]
+                            logger.trace(f"   - 应用禁用列表后工具数量: {len(mcp_tools)}")
+                    
+                    # 显示最终工具列表
+                    if mcp_tools:
+                        logger.trace(f"   - 可用工具:")
+                        for i, tool in enumerate(mcp_tools[:5]):  # 只显示前5个
+                            logger.trace(f"     {i+1}. {tool.name} ({tool.server_name})")
+                        if len(mcp_tools) > 5:
+                            logger.trace(f"     ... 还有 {len(mcp_tools) - 5} 个工具")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ [MCP-TOOLS] 获取MCP工具失败: {e}")
+                    mcp_tools = []
             
             openai_request = {
                 'messages': [
@@ -489,31 +579,49 @@ class AgentTaskService:
                 'max_tokens': max_tokens
             }
             
+            # 如果有MCP工具，添加到请求中
+            if mcp_tools:
+                openai_tools = [tool.to_openai_format() for tool in mcp_tools]
+                openai_request['tools'] = openai_tools
+                openai_request['tool_choice'] = 'auto'
+                logger.trace(f"🔧 [MCP-TOOLS] 添加工具到OpenAI请求: {len(openai_tools)} 个工具")
+            
             logger.trace(f"   - 模型: {model_name}")
             logger.trace(f"   - 温度: {temperature}")
             logger.trace(f"   - 最大token: {max_tokens}")
             logger.trace(f"   - 消息数量: {len(openai_request['messages'])}")
+            logger.trace(f"   - 工具数量: {len(openai_request.get('tools', []))}")
             logger.trace(f"   - 系统消息长度: {len(openai_request['messages'][0]['content'])}")
             logger.trace(f"   - 用户消息长度: {len(openai_request['messages'][1]['content'])}")
             
-            # 调用OpenAI客户端处理任务
+            # 调用OpenAI客户端处理任务（支持工具调用）
             logger.trace(f"🔄 [OPENAI-FORMAT] 调用OpenAI客户端")
             logger.trace(f"   - 使用模型: {openai_request['model']}")
-            logger.trace(f"   - Base URL: {agent.get('base_url', 'default')}")
-            logger.trace(f"   - API Key存在: {'是' if agent.get('api_key') else '否'}")
+            
+            # 获取Base URL和API Key（兼容字典和对象）
+            base_url = 'default'
+            has_api_key = False
+            if isinstance(agent, dict):
+                base_url = agent.get('base_url', 'default')
+                has_api_key = bool(agent.get('api_key'))
+            elif hasattr(agent, 'base_url'):
+                base_url = getattr(agent, 'base_url', 'default')
+                has_api_key = bool(getattr(agent, 'api_key', None))
+                
+            logger.trace(f"   - Base URL: {base_url}")
+            logger.trace(f"   - API Key存在: {'是' if has_api_key else '否'}")
             logger.trace(f" 系统消息：{openai_request['messages'][0]['content']}")
             logger.trace(f" 用户消息：{openai_request['messages'][1]['content']}")
-            
             
             # 设置超时时间（防止卡死）
             try:
                 openai_result = await asyncio.wait_for(
-                    openai_client.process_task(openai_request),
-                    timeout=300  # 5分钟超时
+                    self._process_with_tools(agent, openai_request, mcp_tools),
+                    timeout=600  # 10分钟超时（工具调用可能需要更长时间）
                 )
                 logger.trace(f"✅ [OPENAI-FORMAT] OpenAI客户端调用成功")
             except asyncio.TimeoutError:
-                logger.error(f"⏰ [OPENAI-FORMAT] OpenAI API调用超时（5分钟）")
+                logger.error(f"⏰ [OPENAI-FORMAT] OpenAI API调用超时（10分钟）")
                 raise RuntimeError("OpenAI API调用超时")
             except Exception as api_e:
                 logger.error(f"❌ [OPENAI-FORMAT] OpenAI API调用异常: {api_e}")
@@ -525,9 +633,10 @@ class AgentTaskService:
                 response_content = ai_response.get('content', '')
                 
                 # 直接返回文本结果，不要求特定格式
+                model_used = openai_result.get('model', model_name)  # 使用之前获取的model_name
                 result = {
                     'result': response_content,  # Agent的原始输出
-                    'model_used': openai_result.get('model', agent.get('model')),
+                    'model_used': model_used,
                     'token_usage': openai_result.get('usage', {})
                 }
                 
@@ -986,6 +1095,140 @@ class AgentTaskService:
         except Exception as e:
             logger.error(f"构建用户消息失败: {e}")
             return f"任务：{task.get('task_title', '未知任务')}"
+    
+    async def _process_with_tools(self, agent: Dict[str, Any], 
+                                openai_request: Dict[str, Any], 
+                                mcp_tools: List) -> Dict[str, Any]:
+        """处理带有工具调用的OpenAI请求"""
+        try:
+            # 如果没有工具，直接调用普通API
+            if not mcp_tools:
+                return await openai_client.process_task(openai_request)
+            
+            logger.trace(f"🔧 [TOOL-PROCESS] 开始处理带工具的请求")
+            logger.trace(f"   - 可用工具数量: {len(mcp_tools)}")
+            
+            # 获取工具配置
+            tool_config = {}
+            if isinstance(agent, dict):
+                tool_config = agent.get('tool_config', {})
+            elif hasattr(agent, 'tool_config'):
+                tool_config = getattr(agent, 'tool_config', {}) or {}
+                
+            max_tool_calls = tool_config.get('max_tool_calls', 5) if isinstance(tool_config, dict) else 5
+            tool_timeout = tool_config.get('timeout', 30) if isinstance(tool_config, dict) else 30
+            
+            logger.trace(f"   - 最大工具调用次数: {max_tool_calls}")
+            logger.trace(f"   - 工具超时时间: {tool_timeout}秒")
+            
+            # 创建工具映射表
+            tool_map = {tool.name: tool for tool in mcp_tools}
+            
+            messages = openai_request['messages'].copy()
+            tool_call_count = 0
+            
+            while tool_call_count < max_tool_calls:
+                # 调用OpenAI API
+                logger.trace(f"🚀 [TOOL-PROCESS] 调用OpenAI API (轮次 {tool_call_count + 1})")
+                response = await openai_client.process_task(openai_request)
+                
+                if not response['success']:
+                    return response
+                
+                ai_response = response['result']
+                assistant_message = ai_response.get('message', {})
+                
+                # 检查是否有工具调用
+                tool_calls = assistant_message.get('tool_calls', [])
+                
+                if not tool_calls:
+                    # 没有工具调用，返回最终结果
+                    logger.trace(f"✅ [TOOL-PROCESS] 对话完成，无工具调用")
+                    return response
+                
+                logger.trace(f"🔧 [TOOL-PROCESS] 检测到工具调用: {len(tool_calls)} 个")
+                
+                # 添加助手消息到对话历史
+                messages.append({
+                    'role': 'assistant',
+                    'content': assistant_message.get('content'),
+                    'tool_calls': tool_calls
+                })
+                
+                # 执行工具调用
+                tool_responses = []
+                for tool_call in tool_calls:
+                    tool_call_id = tool_call.get('id')
+                    function_call = tool_call.get('function', {})
+                    tool_name = function_call.get('name')
+                    
+                    logger.trace(f"🔧 [TOOL-CALL] 调用工具: {tool_name}")
+                    
+                    if tool_name in tool_map:
+                        try:
+                            tool = tool_map[tool_name]
+                            arguments = json.loads(function_call.get('arguments', '{}'))
+                            
+                            # 调用MCP工具
+                            logger.trace(f"   - 参数: {arguments}")
+                            tool_result = await asyncio.wait_for(
+                                mcp_service.call_tool(tool_name, tool.server_name, arguments),
+                                timeout=tool_timeout
+                            )
+                            
+                            if tool_result['success']:
+                                logger.trace(f"   ✅ 工具调用成功")
+                                # 工具结果可能是字符串或对象，统一处理
+                                result_data = tool_result['result']
+                                if isinstance(result_data, str):
+                                    response_content = result_data
+                                else:
+                                    response_content = json.dumps(result_data)
+                            else:
+                                logger.warning(f"   ❌ 工具调用失败: {tool_result['error']}")
+                                response_content = f"错误: {tool_result['error']}"
+                            
+                        except asyncio.TimeoutError:
+                            logger.warning(f"   ⏰ 工具调用超时: {tool_name}")
+                            response_content = f"工具调用超时 ({tool_timeout}秒)"
+                        except Exception as e:
+                            logger.error(f"   ❌ 工具调用异常: {e}")
+                            response_content = f"工具调用异常: {str(e)}"
+                    else:
+                        logger.warning(f"   ❌ 未找到工具: {tool_name}")
+                        response_content = f"未找到工具: {tool_name}"
+                    
+                    # 添加工具响应
+                    tool_responses.append({
+                        'role': 'tool',
+                        'content': response_content,
+                        'tool_call_id': tool_call_id
+                    })
+                
+                # 将工具响应添加到消息历史
+                messages.extend(tool_responses)
+                
+                # 更新请求消息
+                openai_request['messages'] = messages
+                tool_call_count += 1
+                
+                logger.trace(f"🔄 [TOOL-PROCESS] 工具调用完成，准备下一轮对话")
+            
+            # 达到最大工具调用次数
+            logger.warning(f"⚠️ [TOOL-PROCESS] 达到最大工具调用次数: {max_tool_calls}")
+            
+            # 进行最后一次调用获取最终结果
+            final_response = await openai_client.process_task(openai_request)
+            return final_response
+            
+        except Exception as e:
+            logger.error(f"❌ [TOOL-PROCESS] 工具调用处理失败: {e}")
+            import traceback
+            logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
+            return {
+                'success': False,
+                'error': f'工具调用处理失败: {str(e)}'
+            }
 
 
 # 全局Agent任务服务实例

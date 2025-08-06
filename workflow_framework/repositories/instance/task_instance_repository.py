@@ -493,10 +493,10 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 # input_data和output_data现在是文本格式，不需要JSON解析
                 formatted_results.append(result)
             
-            logger.info(f"✅ [TASK-REPO] Agent任务查找完成，返回 {len(formatted_results)} 个任务")
+            logger.info(f"[OK] [TASK-REPO] Agent任务查找完成，返回 {len(formatted_results)} 个任务")
             return formatted_results
         except Exception as e:
-            logger.error(f"❌ [TASK-REPO] 获取Agent待处理任务失败: {e}")
+            logger.error(f"[ERROR] [TASK-REPO] 获取Agent待处理任务失败: {e}")
             import traceback
             logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
             raise

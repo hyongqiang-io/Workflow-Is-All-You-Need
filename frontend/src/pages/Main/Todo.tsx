@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Card, List, Tag, Button, Modal, Form, Input, Select, DatePicker, message, Space, Badge, Collapse, Typography, Divider, Alert } from 'antd';
-import { CheckCircleOutlined, ClockCircleOutlined, ExclamationCircleOutlined, EditOutlined, SaveOutlined, InfoCircleOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
+import { Card, List, Tag, Button, Modal, Form, Input, Select, message, Space, Collapse, Typography, Divider, Alert } from 'antd';
+import { SaveOutlined } from '@ant-design/icons';
 import { useTaskStore } from '../../stores/taskStore';
 import { useAuthStore } from '../../stores/authStore';
 
 const { TextArea } = Input;
-const { Option } = Select;
 const { Panel } = Collapse;
 const { Text, Paragraph } = Typography;
 
@@ -25,8 +24,7 @@ const Todo: React.FC = () => {
     cancelTask,
     deleteTask,
     saveTaskDraft,
-    getTaskDraft,
-    clearTaskDraft
+    getTaskDraft
   } = useTaskStore();
   
   const [submitModalVisible, setSubmitModalVisible] = useState(false);

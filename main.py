@@ -19,18 +19,22 @@ from workflow_framework.api.execution import router as execution_router
 from workflow_framework.api.tools import router as tools_router
 from workflow_framework.api.test import router as test_router
 from workflow_framework.api.workflow_output import router as workflow_output_router
+from workflow_framework.api.mcp import router as mcp_router
+from workflow_framework.api.mcp_user_tools import router as mcp_user_tools_router
+from workflow_framework.api.agent_tools import router as agent_tools_router
 from workflow_framework.utils.database import initialize_database, close_database
 from workflow_framework.utils.exceptions import BusinessException, ErrorResponse
 from workflow_framework.services.execution_service import execution_engine
 from workflow_framework.services.agent_task_service import agent_task_service
 from workflow_framework.services.monitoring_service import monitoring_service
 
-# 配置日志
+# 配置日志 - 修复Windows GBK编码问题
 logger.remove()
 logger.add(
     sys.stdout,
     format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-    level="INFO"
+    level="INFO",
+    enqueue=True  # 避免多线程日志冲突
 )
 
 # 创建FastAPI应用
@@ -155,6 +159,16 @@ async def startup_event():
         await agent_task_service.start_service()
         logger.trace("Agent任务处理服务启动成功")
         
+        # 启动MCP工具服务
+        from workflow_framework.services.mcp_tool_service import mcp_tool_service
+        await mcp_tool_service.initialize()
+        logger.trace("MCP工具管理服务启动成功")
+        
+        # 启动数据库驱动的MCP服务（替代原有服务）
+        from workflow_framework.services.database_mcp_service import database_mcp_service
+        await database_mcp_service.initialize()
+        logger.trace("数据库驱动的MCP服务启动成功")
+        
         # 启动监控服务
         await monitoring_service.start_monitoring()
         logger.trace("监控服务启动成功")
@@ -175,6 +189,16 @@ async def shutdown_event():
         # 停止监控服务
         await monitoring_service.stop_monitoring()
         logger.trace("监控服务已停止")
+        
+        # 停止数据库驱动的MCP服务
+        from workflow_framework.services.database_mcp_service import database_mcp_service
+        await database_mcp_service.shutdown()
+        logger.trace("数据库驱动的MCP服务已停止")
+        
+        # 停止MCP工具服务
+        from workflow_framework.services.mcp_tool_service import mcp_tool_service
+        await mcp_tool_service.shutdown()
+        logger.trace("MCP工具管理服务已停止")
         
         # 停止Agent任务服务
         await agent_task_service.stop_service()
@@ -207,6 +231,19 @@ app.include_router(execution_router)
 app.include_router(tools_router, prefix="/api")
 app.include_router(test_router, prefix="/api")
 app.include_router(workflow_output_router)
+logger.trace("注册MCP路由...")
+app.include_router(mcp_router, prefix="/api")
+logger.trace("MCP路由注册完成")
+
+# 注册新的MCP工具管理路由
+logger.trace("注册MCP用户工具管理路由...")
+app.include_router(mcp_user_tools_router, prefix="/api/mcp", tags=["MCP用户工具"])
+logger.trace("MCP用户工具管理路由注册完成")
+
+# 注册Agent工具绑定路由
+logger.trace("注册Agent工具绑定路由...")
+app.include_router(agent_tools_router, prefix="/api", tags=["Agent工具绑定"])
+logger.trace("Agent工具绑定路由注册完成")
 logger.trace("所有路由注册完成")
 
 # 打印所有已注册的路由用于调试
@@ -245,7 +282,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8001,
+        port=8001,  # 恢复为8001端口
         reload=False,  # 禁用自动重载以防止服务自动关闭
         log_level="info"
     )

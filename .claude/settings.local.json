@@ -153,7 +153,14 @@
       "Bash(/mnt/d/anaconda3/envs/fornew/bin/python -c \"\nimport asyncio\nimport uuid\nfrom workflow_framework.repositories.instance.task_instance_repository import TaskInstanceRepository\n\nasync def check_tasks():\n    repo = TaskInstanceRepository()\n    \n    # 查询提到的任务ID\n    task_ids = [\n        ''183eba7b-160a-437e-9dba-ad0d484126f9'',\n        ''c2cd416c-2c38-4803-8066-4e876ebadb28''\n    ]\n    \n    for task_id_str in task_ids:\n        try:\n            task_id = uuid.UUID(task_id_str)\n            task = await repo.get_task_by_id(task_id)\n            if task:\n                print(f''\\n任务 {task_id_str}:'')\n                print(f''  标题: {task.get(\"\"task_title\"\", \"\"无\"\")}'')\n                print(f''  状态: {task.get(\"\"status\"\", \"\"无\"\")}'')\n                print(f''  类型: {task.get(\"\"task_type\"\", \"\"无\"\")}'')\n                print(f''  分配用户ID: {task.get(\"\"assigned_user_id\"\", \"\"无\"\")}'')\n                print(f''  分配代理ID: {task.get(\"\"assigned_agent_id\"\", \"\"无\"\")}'')\n                print(f''  创建时间: {task.get(\"\"created_at\"\", \"\"无\"\")}'')\n                print(f''  分配时间: {task.get(\"\"assigned_at\"\", \"\"无\"\")}'')\n            else:\n                print(f''\\n任务 {task_id_str}: 未找到'')\n        except Exception as e:\n            print(f''\\n查询任务 {task_id_str} 失败: {e}'')\n\nasyncio.run(check_tasks())\n\")",
       "Bash(/mnt/d/anaconda3/envs/fornew/bin/python:*)",
       "Bash(/mnt/d/anaconda3/envs/fornew/Scripts/python.exe debug_task_assignment.py)",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(chmod:*)",
+      "Bash(./deployment/scripts/test-local.sh:*)",
+      "Bash(bash:*)",
+      "Bash(dos2unix:*)",
+      "Bash(docker-compose:*)",
+      "Bash(kill:*)",
+      "Bash(powershell.exe:*)"
     ],
     "deny": []
   }

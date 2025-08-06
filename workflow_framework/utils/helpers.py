@@ -65,6 +65,29 @@ def safe_json_dumps(data: Any, **kwargs) -> str:
     return json.dumps(data, **default_kwargs)
 
 
+def safe_json_loads(json_str: Optional[str], default: Any = None) -> Any:
+    """
+    安全的JSON loads，处理解析错误
+    
+    Args:
+        json_str: 要解析的JSON字符串
+        default: 解析失败时的默认值
+        
+    Returns:
+        解析后的数据或默认值
+    """
+    if not json_str or not isinstance(json_str, str):
+        return default
+    
+    try:
+        return json.loads(json_str)
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
+        # 记录错误但不抛出异常
+        import logging
+        logging.warning(f"JSON解析失败: {e}, 原始数据: {json_str[:100]}...")
+        return default
+
+
 def dict_to_sql_update(data: Dict[str, Any], exclude: Optional[List[str]] = None) -> tuple:
     """
     将字典转换为SQL UPDATE语句的SET部分

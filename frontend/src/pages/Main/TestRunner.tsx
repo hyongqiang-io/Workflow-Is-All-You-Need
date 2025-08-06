@@ -397,7 +397,7 @@ const TestRunner: React.FC = () => {
                 <Col span={6}>
                   <div style={{ textAlign: 'center' }}>
                     <Title level={3} style={{ color: '#722ed1', margin: 0 }}>
-                      {summary.success_rate.toFixed(1)}%
+                      {(Number(summary?.success_rate) || 0).toFixed(1)}%
                     </Title>
                     <Text type="secondary">成功率</Text>
                   </div>

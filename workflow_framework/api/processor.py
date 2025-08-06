@@ -604,8 +604,8 @@ async def delete_processor(
 
 @router.put("/agents/{agent_id}", response_model=BaseResponse)
 async def update_agent(
+    agent_update: AgentUpdate,
     agent_id: uuid.UUID = Path(..., description="Agent ID"),
-    agent_data: dict = None,
     current_user: CurrentUser = Depends(get_current_user_context)
 ):
     """
@@ -613,19 +613,15 @@ async def update_agent(
     
     Args:
         agent_id: Agent ID
-        agent_data: Agent更新数据
+        agent_update: Agent更新数据
         current_user: 当前用户
         
     Returns:
         更新结果
     """
     try:
-        # 验证输入数据
-        if not agent_data:
-            raise ValidationError("请提供Agent更新数据")
-        
-        # 创建AgentUpdate对象
-        agent_update = AgentUpdate(**agent_data)
+        logger.info(f"Agent更新请求: agent_id={agent_id}, user_id={current_user.user_id}")
+        logger.info(f"Agent更新数据: {agent_update.model_dump(exclude_unset=True)}")
         
         # 更新Agent信息
         updated_agent = await agent_repository.update_agent(agent_id, agent_update)
@@ -652,6 +648,8 @@ async def update_agent(
         raise
     except Exception as e:
         logger.error(f"Agent更新异常: {e}")
+        import traceback
+        logger.error(f"异常详情: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Agent更新失败，请稍后再试"

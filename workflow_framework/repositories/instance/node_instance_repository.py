@@ -9,7 +9,7 @@ from datetime import datetime
 from loguru import logger
 import sys
 logger.remove()
-logger.add(sys.stderr,level="DEBUG")
+logger.add(sys.stderr, level="DEBUG", enqueue=True)  # 修复Windows GBK编码问题
 
 from ..base import BaseRepository
 from ...models.instance import (
