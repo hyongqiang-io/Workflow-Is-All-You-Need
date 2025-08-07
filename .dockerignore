@@ -1,0 +1,92 @@
+# .dockerignore
+# 忽略不需要打包到Docker镜像中的文件
+
+# 开发环境文件
+.env
+.env.local
+.env.development
+
+# Git文件
+.git
+.gitignore
+
+# 文档和说明
+*.md
+DEPLOYMENT.md
+
+# 日志文件
+logs/
+*.log
+
+# 临时文件
+tmp/
+temp/
+
+# Python缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 测试文件
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# Node.js (前端)
+frontend/node_modules/
+frontend/build/
+frontend/.env*
+
+# 备份文件
+backup/
+*.bak
+*.backup
+
+# SSL证书
+ssl/
+*.pem
+*.key
+*.crt
+
+# 上传文件
+uploads/
+media/
+
+# Docker文件
+Dockerfile*
+docker-compose*.yml
+
+# 部署脚本
+deploy.sh
+monitor.sh
+backup.sh

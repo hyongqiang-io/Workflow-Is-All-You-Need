@@ -19,18 +19,22 @@ from workflow_framework.api.execution import router as execution_router
 from workflow_framework.api.tools import router as tools_router
 from workflow_framework.api.test import router as test_router
 from workflow_framework.api.workflow_output import router as workflow_output_router
+from workflow_framework.api.mcp import router as mcp_router
+from workflow_framework.api.mcp_user_tools import router as mcp_user_tools_router
+from workflow_framework.api.agent_tools import router as agent_tools_router
 from workflow_framework.utils.database import initialize_database, close_database
 from workflow_framework.utils.exceptions import BusinessException, ErrorResponse
 from workflow_framework.services.execution_service import execution_engine
 from workflow_framework.services.agent_task_service import agent_task_service
 from workflow_framework.services.monitoring_service import monitoring_service
 
-# 配置日志
+# 配置日志 - 修复Windows GBK编码问题
 logger.remove()
 logger.add(
     sys.stdout,
     format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-    level="INFO"
+    level="INFO",
+    enqueue=True  # 避免多线程日志冲突
 )
 
 # 创建FastAPI应用
@@ -49,20 +53,20 @@ async def log_requests(request: Request, call_next):
     start_time = time.time()
     
     # 记录请求信息
-    logger.info(f"HTTP请求进入: {request.method} {request.url}")
-    logger.info(f"请求路径: {request.url.path}")
-    logger.info(f"请求头: {dict(request.headers)}")
+    logger.trace(f"HTTP请求进入: {request.method} {request.url}")
+    logger.trace(f"请求路径: {request.url.path}")
+    logger.trace(f"请求头: {dict(request.headers)}")
     
     # 特别关注删除请求
     if request.method == "DELETE" and "processors" in str(request.url.path):
-        logger.info(f"收到删除处理器请求: {request.url.path}")
-        logger.info(f"完整URL: {request.url}")
+        logger.trace(f"收到删除处理器请求: {request.url.path}")
+        logger.trace(f"完整URL: {request.url}")
     
     response = await call_next(request)
     
     # 记录响应信息
     process_time = time.time() - start_time
-    logger.info(f"HTTP响应: {response.status_code} (耗时: {process_time:.3f}s)")
+    logger.trace(f"HTTP响应: {response.status_code} (耗时: {process_time:.3f}s)")
     
     # 如果是404，记录更多信息
     if response.status_code == 404:
@@ -141,25 +145,35 @@ async def general_exception_handler(request, exc: Exception):
 async def startup_event():
     """应用启动事件"""
     try:
-        logger.info("正在启动工作流管理框架...")
+        logger.trace("正在启动工作流管理框架...")
         
         # 初始化数据库连接
         await initialize_database()
-        logger.info("数据库连接初始化成功")
+        logger.trace("数据库连接初始化成功")
         
         # 启动执行引擎
         await execution_engine.start_engine()
-        logger.info("工作流执行引擎启动成功")
+        logger.trace("工作流执行引擎启动成功")
         
         # 启动Agent任务服务
         await agent_task_service.start_service()
-        logger.info("Agent任务处理服务启动成功")
+        logger.trace("Agent任务处理服务启动成功")
+        
+        # 启动MCP工具服务
+        from workflow_framework.services.mcp_tool_service import mcp_tool_service
+        await mcp_tool_service.initialize()
+        logger.trace("MCP工具管理服务启动成功")
+        
+        # 启动数据库驱动的MCP服务（替代原有服务）
+        from workflow_framework.services.database_mcp_service import database_mcp_service
+        await database_mcp_service.initialize()
+        logger.trace("数据库驱动的MCP服务启动成功")
         
         # 启动监控服务
         await monitoring_service.start_monitoring()
-        logger.info("监控服务启动成功")
+        logger.trace("监控服务启动成功")
         
-        logger.info("工作流管理框架启动完成")
+        logger.trace("工作流管理框架启动完成")
         
     except Exception as e:
         logger.error(f"应用启动失败: {e}")
@@ -170,52 +184,75 @@ async def startup_event():
 async def shutdown_event():
     """应用关闭事件"""
     try:
-        logger.info("正在关闭工作流管理框架...")
+        logger.trace("正在关闭工作流管理框架...")
         
         # 停止监控服务
         await monitoring_service.stop_monitoring()
-        logger.info("监控服务已停止")
+        logger.trace("监控服务已停止")
+        
+        # 停止数据库驱动的MCP服务
+        from workflow_framework.services.database_mcp_service import database_mcp_service
+        await database_mcp_service.shutdown()
+        logger.trace("数据库驱动的MCP服务已停止")
+        
+        # 停止MCP工具服务
+        from workflow_framework.services.mcp_tool_service import mcp_tool_service
+        await mcp_tool_service.shutdown()
+        logger.trace("MCP工具管理服务已停止")
         
         # 停止Agent任务服务
         await agent_task_service.stop_service()
-        logger.info("Agent任务处理服务已停止")
+        logger.trace("Agent任务处理服务已停止")
         
         # 停止执行引擎
         await execution_engine.stop_engine()
-        logger.info("工作流执行引擎已停止")
+        logger.trace("工作流执行引擎已停止")
         
         # 关闭数据库连接
         await close_database()
-        logger.info("数据库连接已关闭")
+        logger.trace("数据库连接已关闭")
         
-        logger.info("工作流管理框架已关闭")
+        logger.trace("工作流管理框架已关闭")
         
     except Exception as e:
         logger.error(f"应用关闭异常: {e}")
 
 
 # 注册路由  
-logger.info("开始注册路由...")
+logger.trace("开始注册路由...")
 app.include_router(auth_router, prefix="/api")
 app.include_router(user_router, prefix="/api")
 app.include_router(workflow_router, prefix="/api")
 app.include_router(node_router, prefix="/api")
-logger.info("注册processor路由...")
+logger.trace("注册processor路由...")
 app.include_router(processor_router, prefix="/api")
-logger.info("processor路由注册完成")
+logger.trace("processor路由注册完成")
 app.include_router(execution_router)
 app.include_router(tools_router, prefix="/api")
 app.include_router(test_router, prefix="/api")
 app.include_router(workflow_output_router)
-logger.info("所有路由注册完成")
+logger.trace("注册MCP路由...")
+app.include_router(mcp_router, prefix="/api")
+logger.trace("MCP路由注册完成")
+
+# 注册新的MCP工具管理路由
+logger.trace("注册MCP用户工具管理路由...")
+app.include_router(mcp_user_tools_router, prefix="/api/mcp", tags=["MCP用户工具"])
+logger.trace("MCP用户工具管理路由注册完成")
+
+# 注册Agent工具绑定路由
+logger.trace("注册Agent工具绑定路由...")
+app.include_router(agent_tools_router, prefix="/api", tags=["Agent工具绑定"])
+logger.trace("Agent工具绑定路由注册完成")
+logger.trace("所有路由注册完成")
 
 # 打印所有已注册的路由用于调试
-logger.info("已注册的路由列表:")
+logger.trace("已注册的路由列表:")
 for route in app.routes:
     if hasattr(route, 'path') and hasattr(route, 'methods'):
-        logger.info(f"{list(route.methods)} {route.path}")
+        logger.trace(f"{list(route.methods)} {route.path}")
     elif hasattr(route, 'path_regex'):
-        logger.info(f"路由: {route.path_regex.pattern}")
+        logger.trace(f"路由: {route.path_regex.pattern}")
 
 
 @app.get("/")
@@ -241,11 +278,11 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     
-    logger.info("启动服务器...")
+    logger.trace("启动服务器...")
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8001,
+        port=8001,  # 恢复为8001端口
         reload=False,  # 禁用自动重载以防止服务自动关闭
         log_level="info"
     )

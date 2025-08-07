@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Form, Input, Button, Row, Col, message, Switch, Divider } from 'antd';
-import { UserOutlined, RobotOutlined, SettingOutlined } from '@ant-design/icons';
+import { Card, Form, Input, Button, Row, Col, message, Switch, Divider, Statistic, Avatar, Typography, Space, Tag } from 'antd';
+import { UserOutlined, RobotOutlined, SettingOutlined, CalendarOutlined, MailOutlined, CheckCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useAuthStore } from '../../stores/authStore';
 import { userAPI } from '../../services/api';
 
 const { TextArea } = Input;
+const { Title, Text } = Typography;
 
 // 根据真实数据库结构定义接口
 interface UserProfile {
@@ -37,7 +38,7 @@ const Profile: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [userLoading, setUserLoading] = useState(false);
   const [userForm] = Form.useForm();
-  const { user, setUser } = useAuthStore();
+  const { user, setUser, getCurrentUser } = useAuthStore();
 
   useEffect(() => {
     fetchUserProfile();
@@ -46,36 +47,108 @@ const Profile: React.FC = () => {
   }, []);
 
   const fetchUserProfile = async () => {
+    // 首先确保有登录用户信息
     if (!user || !user.user_id) {
-      console.log('用户信息不完整，跳过加载:', user);
+      console.log('用户信息不完整，尝试获取当前用户信息:', user);
+      try {
+        // 如果没有用户信息，尝试从认证服务获取
+        await getCurrentUser();
+        // 获取成功后，user会被更新，我们可以继续
+      } catch (error) {
+        console.error('无法获取当前用户信息:', error);
+        message.error('请重新登录');
+        setLoading(false);
+        return;
+      }
+    }
+
+    // 再次检查user是否已更新
+    const currentUser = useAuthStore.getState().user;
+    if (!currentUser || !currentUser.user_id) {
+      console.error('仍然无法获取用户信息');
+      message.error('用户信息获取失败，请重新登录');
       setLoading(false);
       return;
     }
     
     try {
-      console.log('开始获取用户资料，用户ID:', user.user_id);
+      console.log('开始获取用户详细资料，用户ID:', currentUser.user_id);
       
-      const response: any = await userAPI.getUser(user.user_id);
-      console.log('用户信息API响应:', response);
+      const response: any = await userAPI.getUser(currentUser.user_id);
+      console.log('用户详细信息API响应:', response);
       
-      if (response && response.success && response.data) {
+      if (response && response.success !== false && response.data) {
         const userData = response.data;
         console.log('设置用户资料数据:', userData);
         setUserProfile(userData);
         
         // 使用实际存在的字段设置表单
         userForm.setFieldsValue({
-          username: userData.username || '',
-          email: userData.email || '',
+          username: userData.username || currentUser.username || '',
+          email: userData.email || currentUser.email || '',
           terminal_endpoint: userData.terminal_endpoint || '',
           description: userData.description || '',
-          role: userData.role || '',
+          role: userData.role || currentUser.role || '',
           profile: userData.profile ? JSON.stringify(userData.profile, null, 2) : '',
         });
+      } else {
+        // 如果API调用失败，使用authStore中的基础信息
+        console.log('API调用失败，使用基础用户信息');
+        const basicUserData: UserProfile = {
+          user_id: currentUser.user_id,
+          username: currentUser.username,
+          email: currentUser.email,
+          role: currentUser.role || undefined,
+          status: true,
+          created_at: currentUser.created_at,
+          updated_at: currentUser.created_at,
+          description: '',
+          terminal_endpoint: '',
+          profile: undefined
+        };
+        
+        setUserProfile(basicUserData);
+        userForm.setFieldsValue({
+          username: currentUser.username || '',
+          email: currentUser.email || '',
+          terminal_endpoint: '',
+          description: '',
+          role: currentUser.role || '',
+          profile: '',
+        });
+        
+        message.warning('使用基础用户信息，部分功能可能受限');
       }
     } catch (error) {
       console.error('获取用户资料失败:', error);
       message.error('获取用户资料失败');
+      
+      // 出错时，至少显示基础信息
+      const currentUser = useAuthStore.getState().user;
+      if (currentUser) {
+        const basicUserData: UserProfile = {
+          user_id: currentUser.user_id,
+          username: currentUser.username,
+          email: currentUser.email,
+          role: currentUser.role || undefined,
+          status: true,
+          created_at: currentUser.created_at,
+          updated_at: currentUser.created_at,
+          description: '',
+          terminal_endpoint: '',
+          profile: undefined
+        };
+        
+        setUserProfile(basicUserData);
+        userForm.setFieldsValue({
+          username: currentUser.username || '',
+          email: currentUser.email || '',
+          terminal_endpoint: '',
+          description: '',
+          role: currentUser.role || '',
+          profile: '',
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -163,14 +236,20 @@ const Profile: React.FC = () => {
           // 更新全局用户状态
           setUser({
             ...user!,
-            ...response.data
+            username: response.data.username,
+            email: response.data.email,
+            role: response.data.role
           });
           console.log('用户资料更新成功，新数据:', response.data);
         }
         
         // 强制显示成功消息
         console.log('🎉 即将显示成功消息');
-        message.success('🎉 用户信息更新成功！数据已保存');
+        message.success({
+          content: '用户信息更新成功！',
+          duration: 3,
+          icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
+        });
         
         // 重新获取最新数据确保同步
         setTimeout(() => {
@@ -178,7 +257,10 @@ const Profile: React.FC = () => {
         }, 1000);
       } else {
         console.error('❌ 更新失败，响应:', response);
-        message.error(response?.message || '更新失败');
+        message.error({
+          content: response?.message || '更新失败，请检查网络连接',
+          duration: 4,
+        });
       }
     } catch (error: any) {
       console.error('用户信息更新异常:', error);
@@ -196,9 +278,88 @@ const Profile: React.FC = () => {
     );
   }
 
+  const handleRefresh = async () => {
+    setLoading(true);
+    try {
+      await Promise.all([fetchUserProfile(), fetchProcessors()]);
+      message.success('信息已刷新');
+    } catch (error) {
+      message.error('刷新失败');
+    }
+  };
+
   return (
     <div>
-      <h2 style={{ marginBottom: '24px' }}>个人信息管理</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <Title level={2} style={{ margin: 0 }}>个人信息管理</Title>
+        <Button 
+          icon={<ReloadOutlined />} 
+          onClick={handleRefresh}
+          loading={loading}
+        >
+          刷新信息
+        </Button>
+      </div>
+      
+      {/* 用户概览卡片 */}
+      {userProfile && (
+        <Card style={{ marginBottom: '24px' }}>
+          <Row align="middle">
+            <Col span={4}>
+              <Avatar 
+                size={80} 
+                icon={<UserOutlined />} 
+                style={{ 
+                  backgroundColor: '#1890ff',
+                  fontSize: '32px'
+                }}
+              />
+            </Col>
+            <Col span={12}>
+              <Space direction="vertical" size="small">
+                <Title level={3} style={{ margin: 0 }}>
+                  {userProfile.username}
+                </Title>
+                <Space>
+                  <MailOutlined style={{ color: '#666' }} />
+                  <Text type="secondary">{userProfile.email}</Text>
+                </Space>
+                <Space>
+                  <CalendarOutlined style={{ color: '#666' }} />
+                  <Text type="secondary">
+                    加入时间: {new Date(userProfile.created_at).toLocaleDateString('zh-CN')}
+                  </Text>
+                </Space>
+                {userProfile.role && (
+                  <Tag color={userProfile.role === 'admin' ? 'red' : 'blue'}>
+                    {userProfile.role.toUpperCase()}
+                  </Tag>
+                )}
+              </Space>
+            </Col>
+            <Col span={8}>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Statistic
+                    title="账户状态"
+                    value={userProfile.status ? '正常' : '禁用'}
+                    prefix={<CheckCircleOutlined style={{ color: userProfile.status ? '#52c41a' : '#f5222d' }} />}
+                    valueStyle={{ color: userProfile.status ? '#52c41a' : '#f5222d' }}
+                  />
+                </Col>
+                <Col span={12}>
+                  <Statistic
+                    title="关联Agent"
+                    value={processors.length}
+                    prefix={<RobotOutlined />}
+                    valueStyle={{ color: '#1890ff' }}
+                  />
+                </Col>
+              </Row>
+            </Col>
+          </Row>
+        </Card>
+      )}
       
       <Row gutter={24}>
         {/* 用户信息编辑 */}
@@ -258,18 +419,36 @@ const Profile: React.FC = () => {
                 label="用户角色"
                 tooltip="用户在系统中的角色"
               >
-                <Input placeholder="如: admin, user, developer" />
+                <Input 
+                  placeholder="如: admin, user, developer" 
+                  addonBefore="Role"
+                />
               </Form.Item>
 
               <Form.Item 
                 name="profile" 
                 label="扩展信息 (JSON格式)"
                 tooltip="以JSON格式存储的扩展用户信息"
+                rules={[
+                  {
+                    validator: (_, value) => {
+                      if (!value || value.trim() === '') {
+                        return Promise.resolve();
+                      }
+                      try {
+                        JSON.parse(value);
+                        return Promise.resolve();
+                      } catch (error) {
+                        return Promise.reject(new Error('请输入有效的JSON格式'));
+                      }
+                    }
+                  }
+                ]}
               >
                 <TextArea 
                   rows={4} 
-                  placeholder='{"skills": ["Python", "React"], "location": "Beijing"}' 
-                  style={{ fontFamily: 'monospace' }}
+                  placeholder='{"skills": ["Python", "React"], "location": "Beijing", "department": "IT"}' 
+                  style={{ fontFamily: 'Monaco, Consolas, "Courier New", monospace', fontSize: '13px' }}
                 />
               </Form.Item>
               

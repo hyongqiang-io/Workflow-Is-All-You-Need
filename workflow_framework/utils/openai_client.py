@@ -7,6 +7,7 @@ import json
 import asyncio
 from typing import Dict, Any, Optional, List
 from loguru import logger
+from .helpers import safe_json_dumps
 
 # 尝试导入OpenAI，如果失败则使用模拟版本
 
@@ -69,36 +70,111 @@ class OpenAIClient:
     
     async def _call_openai_api_with_messages(self, messages: List[Dict[str, str]], 
                                            model: str, task_data: Dict[str, Any]) -> Dict[str, Any]:
-        """使用messages格式调用OpenAI API"""
+        """使用messages格式调用OpenAI API（支持工具调用）"""
         try:
+            logger.info(f"[OPENAI-API] 准备调用API")
+            logger.info(f"   - 模型: {model}")
+            logger.info(f"   - 消息数量: {len(messages)}")
+            logger.info(f"   - 温度: {task_data.get('temperature', self.temperature)}")
+            logger.info(f"   - 最大tokens: {task_data.get('max_tokens', 2000)}")
+            
+            # 检查是否有工具
+            tools = task_data.get('tools', [])
+            tool_choice = task_data.get('tool_choice')
+            
+            logger.info(f"   - 工具数量: {len(tools)}")
+            logger.info(f"   - 工具选择: {tool_choice}")
+            
+            if tools:
+                logger.info(f"[TOOL-DEBUG] 工具列表:")
+                for i, tool in enumerate(tools[:3]):  # 只显示前3个工具
+                    logger.info(f"   工具 {i+1}: {tool.get('function', {}).get('name', 'unknown')}")
+                    logger.info(f"     描述: {tool.get('function', {}).get('description', 'no description')[:100]}...")
+            
+            # 构建API请求参数
+            api_params = {
+                'model': model,
+                'messages': messages,
+                'temperature': task_data.get('temperature', self.temperature),
+                'max_tokens': task_data.get('max_tokens', 2000),
+                'top_p': self.top_p,
+            }
+            
+            # 如果有工具，添加工具参数
+            if tools:
+                api_params['tools'] = tools
+                if tool_choice:
+                    api_params['tool_choice'] = tool_choice
+                logger.info(f"[TOOL-DEBUG] 已添加工具参数到API请求")
+            
             # 调用OpenAI API
+            logger.info(f"[OPENAI-API] 开始调用 {model}")
             response = await asyncio.wait_for(
-                self.aclient.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    temperature=task_data.get('temperature', self.temperature),
-                    max_tokens=task_data.get('max_tokens', 2000),
-                    top_p=self.top_p,
-                ),
+                self.aclient.chat.completions.create(**api_params),
                 timeout=30.0  # 30秒超时
             )
-
+            
+            logger.info(f"[OPENAI-API] API调用成功")
+            
             # 提取响应内容
-            content = response.choices[0].message.content
+            message = response.choices[0].message
+            content = message.content
+            tool_calls = getattr(message, 'tool_calls', []) or []  # 确保不是None
+            
             usage = {
                 'prompt_tokens': response.usage.prompt_tokens,
                 'completion_tokens': response.usage.completion_tokens,
                 'total_tokens': response.usage.total_tokens
             }
             
+            logger.info(f"[OPENAI-API] 响应解析完成")
+            logger.info(f"   - 内容长度: {len(content) if content else 0}")
+            logger.info(f"   - 工具调用数量: {len(tool_calls) if tool_calls else 0}")
+            logger.info(f"   - Token使用: {usage}")
+            
+            if tool_calls:
+                logger.info(f"[TOOL-DEBUG] 检测到工具调用:")
+                for i, tool_call in enumerate(tool_calls):
+                    func_name = tool_call.function.name if hasattr(tool_call, 'function') else 'unknown'
+                    logger.info(f"   工具调用 {i+1}: {func_name}")
+                    logger.info(f"     ID: {tool_call.id}")
+                    if hasattr(tool_call, 'function'):
+                        logger.info(f"     参数: {tool_call.function.arguments[:200]}...")
+                
+                # 将工具调用转换为可序列化的格式
+                serializable_tool_calls = []
+                for tool_call in tool_calls:
+                    serializable_tool_calls.append({
+                        'id': tool_call.id,
+                        'type': getattr(tool_call, 'type', 'function'),
+                        'function': {
+                            'name': tool_call.function.name,
+                            'arguments': tool_call.function.arguments
+                        }
+                    })
+            
             # 返回符合OpenAI响应格式的结果
-            return {
+            result = {
                 'content': content,
-                'usage': usage
+                'usage': usage,
+                'message': {
+                    'content': content,
+                    'role': 'assistant'
+                }
             }
+            
+            # 如果有工具调用，添加到响应中
+            if tool_calls:
+                result['message']['tool_calls'] = serializable_tool_calls
+                logger.info(f"[TOOL-DEBUG] 工具调用已添加到响应中")
+            
+            return result
                 
         except Exception as e:
             logger.error(f"调用OpenAI API失败: {e}")
+            logger.error(f"错误类型: {type(e).__name__}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
             # 降级到模拟处理
             return await self._simulate_openai_request(messages, model)
     
@@ -189,7 +265,7 @@ class OpenAIClient:
             
             # 返回符合OpenAI格式的响应
             return {
-                "content": json.dumps(mock_response, ensure_ascii=False),
+                "content": safe_json_dumps(mock_response),
                 "usage": {
                     "prompt_tokens": 150,
                     "completion_tokens": 200,
@@ -201,7 +277,7 @@ class OpenAIClient:
             logger.error(f"模拟OpenAI请求失败: {e}")
             # 返回最基本的响应
             return {
-                "content": json.dumps({
+                "content": safe_json_dumps({
                     "analysis_result": "模拟分析完成",
                     "key_findings": ["基础分析结果"],
                     "recommendations": ["建议使用真实API"],

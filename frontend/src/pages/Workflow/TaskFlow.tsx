@@ -13,7 +13,6 @@ import { useAuthStore } from '../../stores/authStore';
 import TaskFlowViewer from '../../components/TaskFlowViewer';
 
 const { Title, Text } = Typography;
-const { Option } = Select;
 
 const TaskFlow: React.FC = () => {
   const { workflowId } = useParams<{ workflowId: string }>();
@@ -21,12 +20,6 @@ const TaskFlow: React.FC = () => {
   const { user } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [workflowInfo, setWorkflowInfo] = useState<any>(null);
-
-  useEffect(() => {
-    if (workflowId) {
-      loadWorkflowInfo();
-    }
-  }, [workflowId]);
 
   const loadWorkflowInfo = async () => {
     setLoading(true);
@@ -57,6 +50,12 @@ const TaskFlow: React.FC = () => {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (workflowId) {
+      loadWorkflowInfo();
+    }
+  }, [workflowId, loadWorkflowInfo]);
 
   const handleTaskAction = async (taskId: string, action: 'start' | 'complete' | 'pause') => {
     try {

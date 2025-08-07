@@ -227,6 +227,7 @@ class TaskInstanceCreate(TaskInstanceBase, CreateRequest):
 class TaskInstanceUpdate(UpdateRequest):
     """任务实例更新模型"""
     status: Optional[TaskInstanceStatus] = Field(None, description="执行状态")
+    input_data: Optional[str] = Field(None, description="输入数据（文本格式）")
     output_data: Optional[str] = Field(None, description="输出数据（文本格式）")
     result_summary: Optional[str] = Field(None, description="结果摘要")
     error_message: Optional[str] = Field(None, description="错误信息")

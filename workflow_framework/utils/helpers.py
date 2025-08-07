@@ -19,6 +19,75 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def safe_json_serializer(obj):
+    """
+    安全的JSON序列化器，处理特殊类型对象
+    
+    Args:
+        obj: 要序列化的对象
+        
+    Returns:
+        可序列化的值
+        
+    Raises:
+        TypeError: 如果对象类型不受支持
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, uuid.UUID):
+        return str(obj)
+    elif hasattr(obj, '__dict__'):
+        # 处理自定义对象
+        return obj.__dict__
+    else:
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def safe_json_dumps(data: Any, **kwargs) -> str:
+    """
+    安全的JSON dumps，自动处理特殊类型对象
+    
+    Args:
+        data: 要序列化的数据
+        **kwargs: 传递给json.dumps的其他参数
+        
+    Returns:
+        JSON字符串
+    """
+    # 设置默认参数
+    default_kwargs = {
+        'ensure_ascii': False,
+        'indent': 2,
+        'default': safe_json_serializer
+    }
+    default_kwargs.update(kwargs)
+    
+    return json.dumps(data, **default_kwargs)
+
+
+def safe_json_loads(json_str: Optional[str], default: Any = None) -> Any:
+    """
+    安全的JSON loads，处理解析错误
+    
+    Args:
+        json_str: 要解析的JSON字符串
+        default: 解析失败时的默认值
+        
+    Returns:
+        解析后的数据或默认值
+    """
+    if not json_str or not isinstance(json_str, str):
+        return default
+    
+    try:
+        return json.loads(json_str)
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
+        # 记录错误但不抛出异常
+        import logging
+        logging.warning(f"JSON解析失败: {e}, 原始数据: {json_str[:100]}...")
+        return default
+
+
 def dict_to_sql_update(data: Dict[str, Any], exclude: Optional[List[str]] = None) -> tuple:
     """
     将字典转换为SQL UPDATE语句的SET部分
@@ -47,7 +116,7 @@ def dict_to_sql_update(data: Dict[str, Any], exclude: Optional[List[str]] = None
         set_clauses.append(f"{key} = ${param_index}")
         # 处理JSONB字段的序列化
         if isinstance(value, (dict, list)):
-            values.append(json.dumps(value, ensure_ascii=False))
+            values.append(safe_json_dumps(value))
         else:
             values.append(value)
         param_index += 1
@@ -83,7 +152,7 @@ def dict_to_sql_insert(data: Dict[str, Any], exclude: Optional[List[str]] = None
     for value in filtered_data.values():
         if isinstance(value, (dict, list)):
             # 对字典和列表进行JSON序列化
-            values.append(json.dumps(value, ensure_ascii=False))
+            values.append(safe_json_dumps(value))
         else:
             values.append(value)
     

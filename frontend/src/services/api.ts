@@ -2,8 +2,8 @@ import axios from 'axios';
 
 // 创建axios实例
 const api = axios.create({
-  baseURL: 'http://localhost:8001', // 后端API地址
-  timeout: 10000,
+  baseURL: 'http://localhost:8001', // 后端API地址 - 恢复为8001
+  timeout: 60000, // 增加到60秒，因为工作流执行可能需要更长时间
   headers: {
     'Content-Type': 'application/json',
   },
@@ -432,6 +432,146 @@ export const executionAPI = {
       throw error;
     }
   },
+};
+
+// MCP相关API
+export const mcpAPI = {
+  // 获取MCP服务器列表
+  getMCPServers: () => api.get('/api/mcp/servers'),
+
+  // 添加MCP服务器
+  addMCPServer: (data: {
+    name: string;
+    url: string;
+    capabilities?: string[];
+    auth?: any;
+    timeout?: number;
+  }) => api.post('/api/mcp/servers', data),
+
+  // 获取服务器状态
+  getServerStatus: (serverName: string) => api.get(`/api/mcp/servers/${serverName}/status`),
+
+  // 发现服务器工具
+  discoverServerTools: (serverName: string) => api.get(`/api/mcp/servers/${serverName}/tools`),
+
+  // 调用MCP工具
+  callMCPTool: (data: {
+    tool_name: string;
+    server_name: string;
+    arguments: any;
+  }) => api.post('/api/mcp/tools/call', data),
+
+  // 获取Agent工具配置
+  getAgentToolConfig: (agentId: string) => api.get(`/api/mcp/agents/${agentId}/config`),
+
+  // 更新Agent工具配置
+  updateAgentToolConfig: (agentId: string, config: any) => api.put(`/api/mcp/agents/${agentId}/config`, config),
+
+  // 获取Agent可用工具
+  getAgentTools: (agentId: string) => api.get(`/api/mcp/agents/${agentId}/tools`),
+
+  // 移除MCP服务器
+  removeMCPServer: (serverName: string) => api.delete(`/api/mcp/servers/${serverName}`),
+
+  // 刷新服务器工具
+  refreshServerTools: (serverName: string) => api.post(`/api/mcp/servers/${serverName}/refresh-tools`),
+
+  // MCP服务健康检查
+  getMCPHealth: () => api.get('/api/mcp/health'),
+};
+
+// MCP用户工具管理API
+export const mcpUserToolsAPI = {
+  // 获取用户工具列表
+  getUserTools: (params?: { server_name?: string; tool_name?: string; is_active?: boolean }) =>
+    api.get('/api/mcp/user-tools', { params }),
+
+  // 添加MCP服务器并发现工具
+  addMCPServer: (data: {
+    server_name: string;
+    server_url: string;
+    server_description?: string;
+    auth_config?: any;
+  }) => api.post('/api/mcp/user-tools', data),
+
+  // 更新工具配置
+  updateTool: (toolId: string, data: {
+    server_description?: string;
+    tool_description?: string;
+    auth_config?: any;
+    timeout_seconds?: number;
+    is_server_active?: boolean;
+    is_tool_active?: boolean;
+  }) => api.put(`/api/mcp/user-tools/${toolId}`, data),
+
+  // 删除工具
+  deleteTool: (toolId: string) => api.delete(`/api/mcp/user-tools/${toolId}`),
+
+  // 删除服务器的所有工具
+  deleteServerTools: (serverName: string) => api.delete(`/api/mcp/user-tools/server/${serverName}`),
+
+  // 重新发现服务器工具
+  rediscoverServerTools: (serverName: string) => api.post(`/api/mcp/user-tools/server/${serverName}/rediscover`),
+
+  // 测试工具调用
+  testTool: (toolId: string, args: any = {}) => api.post(`/api/mcp/user-tools/${toolId}/test`, { arguments: args }),
+
+  // 获取认证类型
+  getAuthTypes: () => api.get('/api/mcp/auth-types'),
+
+  // 获取用户工具统计
+  getUserToolStats: () => api.get('/api/mcp/user-tools/stats'),
+};
+
+// Agent工具绑定API
+export const agentToolsAPI = {
+  // 获取Agent绑定的工具
+  getAgentTools: (agentId: string, params?: { is_enabled?: boolean }) =>
+    api.get(`/api/agents/${agentId}/tools`, { params }),
+
+  // 为Agent绑定工具
+  bindTool: (agentId: string, data: {
+    tool_id: string;
+    is_enabled?: boolean;
+    priority?: number;
+    max_calls_per_task?: number;
+    timeout_override?: number;
+    custom_config?: any;
+  }) => api.post(`/api/agents/${agentId}/tools`, data),
+
+  // 批量绑定工具
+  batchBindTools: (agentId: string, bindings: Array<{
+    tool_id: string;
+    is_enabled?: boolean;
+    priority?: number;
+    max_calls_per_task?: number;
+    timeout_override?: number;
+    custom_config?: any;
+  }>) => api.post(`/api/agents/${agentId}/tools/batch`, { bindings }),
+
+  // 更新工具绑定配置
+  updateToolBinding: (agentId: string, toolId: string, data: {
+    is_enabled?: boolean;
+    priority?: number;
+    max_calls_per_task?: number;
+    timeout_override?: number;
+    custom_config?: any;
+  }) => api.put(`/api/agents/${agentId}/tools/${toolId}`, data),
+
+  // 解除工具绑定
+  unbindTool: (agentId: string, toolId: string) => api.delete(`/api/agents/${agentId}/tools/${toolId}`),
+
+  // 获取Agent工具配置
+  getAgentToolConfig: (agentId: string) => api.get(`/api/agents/${agentId}/tool-config`),
+
+  // 获取Agent可用执行工具
+  getAgentExecutionTools: (agentId: string) => api.get(`/api/agents/${agentId}/execution-tools`),
+
+  // 获取Agent工具使用统计
+  getAgentToolStats: (agentId: string) => api.get(`/api/agents/${agentId}/tool-stats`),
+
+  // 获取热门工具列表
+  getPopularTools: (limit: number = 10) => api.get('/api/tools/popular', { params: { limit } }),
 };
 
 export default api; 

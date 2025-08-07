@@ -1206,7 +1206,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                             任务统计: 总计{node.task_statistics.total_tasks}个，
                             完成{node.task_statistics.completed_tasks}个，
                             失败{node.task_statistics.failed_tasks}个，
-                            成功率{node.task_statistics.success_rate.toFixed(1)}%
+                            成功率{(Number(node.task_statistics?.success_rate) || 0).toFixed(1)}%
                           </div>
                         </div>
                       )}

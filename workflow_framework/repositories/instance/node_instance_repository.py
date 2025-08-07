@@ -7,12 +7,16 @@ import uuid
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from loguru import logger
+import sys
+logger.remove()
+logger.add(sys.stderr, level="DEBUG", enqueue=True)  # 修复Windows GBK编码问题
 
 from ..base import BaseRepository
 from ...models.instance import (
     NodeInstance, NodeInstanceCreate, NodeInstanceUpdate, NodeInstanceStatus
 )
 from ...utils.helpers import now_utc
+import json
 
 
 class NodeInstanceRepository(BaseRepository[NodeInstance]):
@@ -21,18 +25,38 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
     def __init__(self):
         super().__init__("node_instance")
     
+    def _deserialize_json_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """反序列化JSON字段"""
+        if not data:
+            return data
+        
+        # 需要反序列化的JSON字段列表
+        json_fields = ['input_data', 'output_data']
+        
+        result = data.copy()
+        for field in json_fields:
+            if field in result and result[field] is not None:
+                if isinstance(result[field], str):
+                    try:
+                        result[field] = json.loads(result[field])
+                    except (json.JSONDecodeError, TypeError):
+                        # 如果解析失败，保持原始值
+                        logger.warning(f"反序列化字段 {field} 失败，保持原始值: {result[field]}")
+        
+        return result
+    
     async def create_node_instance(self, instance_data: NodeInstanceCreate) -> Optional[Dict[str, Any]]:
         """创建节点实例"""
         node_instance_id = uuid.uuid4()
-        logger.info(f"🚀 开始创建节点实例: {instance_data.node_instance_name or '无名称'}")
-        logger.info(f"   - 节点实例ID: {node_instance_id}")
-        logger.info(f"   - 工作流实例ID: {instance_data.workflow_instance_id}")
-        logger.info(f"   - 节点ID: {instance_data.node_id}")
-        logger.info(f"   - 初始状态: {instance_data.status.value}")
+        logger.trace(f"🚀 开始创建节点实例: {instance_data.node_instance_name or '无名称'}")
+        logger.trace(f"   - 节点实例ID: {node_instance_id}")
+        logger.trace(f"   - 工作流实例ID: {instance_data.workflow_instance_id}")
+        logger.trace(f"   - 节点ID: {instance_data.node_id}")
+        logger.trace(f"   - 初始状态: {instance_data.status.value}")
         
         try:
             # 验证工作流实例是否存在
-            logger.info(f"🔍 验证工作流实例: {instance_data.workflow_instance_id}")
+            logger.trace(f"🔍 验证工作流实例: {instance_data.workflow_instance_id}")
             workflow_instance_query = """
                 SELECT workflow_instance_id FROM workflow_instance 
                 WHERE workflow_instance_id = $1 AND is_deleted = FALSE
@@ -43,19 +67,19 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
             if not workflow_instance_result:
                 logger.error(f"❌ 工作流实例不存在: {instance_data.workflow_instance_id}")
                 raise ValueError(f"工作流实例 {instance_data.workflow_instance_id} 不存在")
-            logger.info(f"✅ 工作流实例验证成功")
+            logger.trace(f"✅ 工作流实例验证成功")
             
             # 验证节点是否存在
-            logger.info(f"🔍 验证节点: {instance_data.node_id}")
+            logger.trace(f"🔍 验证节点: {instance_data.node_id}")
             node_query = "SELECT node_id, name, type FROM node WHERE node_id = $1 AND is_deleted = FALSE"
             node_result = await self.db.fetch_one(node_query, instance_data.node_id)
             if not node_result:
                 logger.error(f"❌ 节点不存在: {instance_data.node_id}")
                 raise ValueError(f"节点 {instance_data.node_id} 不存在")
-            logger.info(f"✅ 节点验证成功: {node_result['name']} (类型: {node_result['type']})")
+            logger.trace(f"✅ 节点验证成功: {node_result['name']} (类型: {node_result['type']})")
             
             # 准备数据
-            logger.info(f"📝 准备节点实例数据")
+            logger.trace(f"📝 准备节点实例数据")
             data = {
                 "node_instance_id": node_instance_id,
                 "workflow_instance_id": instance_data.workflow_instance_id,
@@ -69,20 +93,23 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
                 "retry_count": instance_data.retry_count or 0,
                 "created_at": now_utc(),
             }
-            logger.info(f"   - 节点实例名称: {data['node_instance_name']}")
-            logger.info(f"   - 任务描述: {data['task_description'] or '无'}")
-            logger.info(f"   - 重试次数: {data['retry_count']}")
+            logger.trace(f"   - 节点实例名称: {data['node_instance_name']}")
+            logger.trace(f"   - 任务描述: {data['task_description'] or '无'}")
+            logger.trace(f"   - 重试次数: {data['retry_count']}")
             
-            logger.info(f"💾 写入数据库: 节点实例 {node_instance_id}")
+            logger.trace(f"💾 写入数据库: 节点实例 {node_instance_id}")
             result = await self.create(data)
             if result:
-                logger.info(f"✅ 节点实例创建成功!")
-                logger.info(f"   - 实例ID: {result['node_instance_id']}")
-                logger.info(f"   - 实例名称: {result.get('node_instance_name', '无名称')}")
-                logger.info(f"   - 状态: {result.get('status', 'unknown')}")
-                logger.info(f"   - 创建时间: {result.get('created_at', 'unknown')}")
+                logger.trace(f"✅ 节点实例创建成功!")
+                logger.trace(f"   - 实例ID: {result['node_instance_id']}")
+                logger.trace(f"   - 实例名称: {result.get('node_instance_name', '无名称')}")
+                logger.trace(f"   - 状态: {result.get('status', 'unknown')}")
+                logger.trace(f"   - 创建时间: {result.get('created_at', 'unknown')}")
             else:
                 logger.error(f"❌ 节点实例创建失败: 数据库返回空结果")
+            # 反序列化JSON字段
+            if result:
+                result = self._deserialize_json_fields(result)
             return result
         except Exception as e:
             logger.error(f"❌ 创建节点实例失败: {e}")
@@ -95,7 +122,11 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
     
     async def get_instance_by_id(self, instance_id: uuid.UUID) -> Optional[Dict[str, Any]]:
         """根据ID获取节点实例"""
-        return await self.get_by_id(instance_id, "node_instance_id")
+        result = await self.get_by_id(instance_id, "node_instance_id")
+        if result:
+            # 反序列化JSON字段
+            result = self._deserialize_json_fields(result)
+        return result
     
     async def get_instance_with_details(self, instance_id: uuid.UUID) -> Optional[Dict[str, Any]]:
         """获取节点实例详细信息"""
@@ -137,16 +168,19 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
             # 添加更新时间
             update_fields["updated_at"] = now_utc()
             
-            logger.info(f"💾 更新节点实例数据库: {instance_id}")
-            logger.info(f"   - 更新字段: {list(update_fields.keys())}")
+            logger.trace(f"💾 更新节点实例数据库: {instance_id}")
+            logger.trace(f"   - 更新字段: {list(update_fields.keys())}")
             result = await self.update(instance_id, update_fields, "node_instance_id")
             if result:
-                logger.info(f"✅ 节点实例更新成功!")
-                logger.info(f"   - 实例ID: {instance_id}")
+                logger.trace(f"✅ 节点实例更新成功!")
+                logger.trace(f"   - 实例ID: {instance_id}")
                 if update_data.status:
-                    logger.info(f"   - 新状态: {update_data.status.value}")
+                    logger.trace(f"   - 新状态: {update_data.status.value}")
             else:
                 logger.error(f"❌ 节点实例更新失败: 数据库返回空结果")
+            # 反序列化JSON字段
+            if result:
+                result = self._deserialize_json_fields(result)
             return result
         except Exception as e:
             logger.error(f"更新节点实例失败: {e}")
@@ -176,7 +210,7 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
             
             result = await self.update(instance_id, update_data, "node_instance_id")
             if result:
-                logger.info(f"更新节点实例 {instance_id} 状态为 {status.value}")
+                logger.trace(f"更新节点实例 {instance_id} 状态为 {status.value}")
             return result
         except Exception as e:
             logger.error(f"更新节点实例状态失败: {e}")
@@ -193,7 +227,7 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
             """
             result = await self.db.fetch_one(query, instance_id)
             if result:
-                logger.info(f"节点实例 {instance_id} 重试次数增加到 {result['retry_count']}")
+                logger.trace(f"节点实例 {instance_id} 重试次数增加到 {result['retry_count']}")
             return result
         except Exception as e:
             logger.error(f"增加重试次数失败: {e}")
@@ -358,7 +392,7 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
             
             # 解析更新的记录数
             updated_count = int(result.split()[1]) if result.split()[1].isdigit() else 0
-            logger.info(f"取消了 {updated_count} 个等待执行的节点实例")
+            logger.trace(f"取消了 {updated_count} 个等待执行的节点实例")
             return updated_count
         except Exception as e:
             logger.error(f"取消等待执行的节点实例失败: {e}")
@@ -413,7 +447,7 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
     async def delete_node_instance(self, node_instance_id: uuid.UUID, soft_delete: bool = True) -> bool:
         """删除节点实例"""
         try:
-            logger.info(f"🗑️ 开始删除节点实例: {node_instance_id} (软删除: {soft_delete})")
+            logger.trace(f"🗑️ 开始删除节点实例: {node_instance_id} (软删除: {soft_delete})")
             
             if soft_delete:
                 result = await self.update(node_instance_id, {
@@ -428,7 +462,7 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
             
             if success:
                 action = "软删除" if soft_delete else "硬删除"
-                logger.info(f"✅ {action}节点实例成功: {node_instance_id}")
+                logger.trace(f"✅ {action}节点实例成功: {node_instance_id}")
             
             return success
         except Exception as e:
@@ -438,7 +472,7 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
     async def delete_nodes_by_workflow_instance(self, workflow_instance_id: uuid.UUID, soft_delete: bool = True) -> int:
         """批量删除指定工作流实例下的所有节点实例"""
         try:
-            logger.info(f"🗑️ 开始删除工作流实例 {workflow_instance_id} 下的所有节点实例 (软删除: {soft_delete})")
+            logger.trace(f"🗑️ 开始删除工作流实例 {workflow_instance_id} 下的所有节点实例 (软删除: {soft_delete})")
             
             if soft_delete:
                 query = """
@@ -454,7 +488,7 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
             # 提取影响的行数
             deleted_count = int(result.split()[-1]) if "DELETE" in result or "UPDATE" in result else 0
             
-            logger.info(f"✅ 删除工作流实例 {workflow_instance_id} 下的节点实例完成，影响 {deleted_count} 个节点实例")
+            logger.trace(f"✅ 删除工作流实例 {workflow_instance_id} 下的节点实例完成，影响 {deleted_count} 个节点实例")
             return deleted_count
             
         except Exception as e:

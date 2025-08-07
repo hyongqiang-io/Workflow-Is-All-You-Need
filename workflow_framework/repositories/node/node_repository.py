@@ -13,7 +13,7 @@ from ...models.node import (
     Node, NodeCreate, NodeUpdate, NodeConnection, 
     NodeConnectionCreate, NodeConnectionUpdate, NodeVersionCreate
 )
-from ...utils.helpers import now_utc
+from ...utils.helpers import now_utc, safe_json_dumps
 
 
 class NodeRepository(BaseRepository[Node]):
@@ -278,7 +278,7 @@ class NodeConnectionRepository:
             # 处理condition_config的JSON序列化
             condition_config = connection_data.condition_config
             if isinstance(condition_config, dict):
-                condition_config = json.dumps(condition_config, ensure_ascii=False)
+                condition_config = safe_json_dumps(condition_config)
             
             result = await self.db.fetch_one(
                 query,

@@ -189,6 +189,13 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                         except Exception as e:
                             logger.warning(f"   ⚠️  计算执行时间失败: {e}")
             
+            if update_data.input_data is not None:
+                data["input_data"] = update_data.input_data
+                if update_data.input_data and len(update_data.input_data.strip()) > 0:
+                    logger.info(f"   📥 输入数据: {update_data.input_data[:100]}{'...' if len(update_data.input_data) > 100 else ''}")
+                else:
+                    logger.info(f"   📥 输入数据: 空")
+                    
             if update_data.output_data is not None:
                 data["output_data"] = update_data.output_data
                 if update_data.output_data and len(update_data.output_data.strip()) > 0:
@@ -318,6 +325,11 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                                      limit: int = 50) -> List[Dict[str, Any]]:
         """获取用户的人工任务"""
         try:
+            logger.info(f"🗃️ [数据库查询] 查询用户人工任务:")
+            logger.info(f"   - 用户ID: {user_id}")
+            logger.info(f"   - 任务类型过滤: {TaskInstanceType.HUMAN.value}")
+            logger.info(f"   - 状态过滤: {status.value if status else '全部'}")
+            
             if status:
                 query = """
                     SELECT ti.*, 
@@ -330,9 +342,17 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                     LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
                     WHERE ti.assigned_user_id = $1 AND ti.task_type = $2 
                           AND ti.status = $3 AND ti.is_deleted = FALSE
-                    ORDER BY ti.created_at ASC
+                    ORDER BY 
+                        CASE ti.status 
+                            WHEN 'assigned' THEN 1 
+                            WHEN 'pending' THEN 2 
+                            WHEN 'in_progress' THEN 3 
+                            ELSE 4 
+                        END,
+                        ti.created_at DESC
                     LIMIT $4
                 """
+                logger.info(f"🗃️ [数据库查询] 执行带状态过滤的查询")
                 results = await self.db.fetch_all(query, user_id, TaskInstanceType.HUMAN.value, 
                                                 status.value, limit)
             else:
@@ -346,10 +366,66 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                     LEFT JOIN workflow_instance wi ON wi.workflow_instance_id = ti.workflow_instance_id
                     LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
                     WHERE ti.assigned_user_id = $1 AND ti.task_type = $2 AND ti.is_deleted = FALSE
-                    ORDER BY ti.created_at ASC
+                    ORDER BY 
+                        CASE ti.status 
+                            WHEN 'assigned' THEN 1 
+                            WHEN 'pending' THEN 2 
+                            WHEN 'in_progress' THEN 3 
+                            ELSE 4 
+                        END,
+                        ti.created_at DESC
                     LIMIT $3
                 """
+                logger.info(f"🗃️ [数据库查询] 执行无状态过滤的查询")
                 results = await self.db.fetch_all(query, user_id, TaskInstanceType.HUMAN.value, limit)
+            
+            logger.info(f"🗃️ [数据库查询] 查询完成，返回 {len(results)} 条记录")
+            
+            # 额外诊断：如果没有结果，查看是否有匹配的任务但条件不满足
+            if len(results) == 0:
+                logger.warning(f"⚠️ [数据库诊断] 没有找到匹配的任务，开始诊断...")
+                
+                # 诊断1：查询该用户的所有任务
+                debug_query1 = """
+                    SELECT task_instance_id, task_title, task_type, status, assigned_user_id
+                    FROM task_instance 
+                    WHERE assigned_user_id = $1 AND is_deleted = FALSE
+                    LIMIT 5
+                """
+                debug_results1 = await self.db.fetch_all(debug_query1, user_id)
+                logger.info(f"🔧 [诊断1] 该用户的所有任务: {len(debug_results1)} 个")
+                for task in debug_results1:
+                    logger.info(f"   - {task['task_title']} | 类型: {task['task_type']} | 状态: {task['status']}")
+                
+                # 诊断2：查询所有HUMAN类型的任务
+                debug_query2 = """
+                    SELECT task_instance_id, task_title, assigned_user_id, status
+                    FROM task_instance 
+                    WHERE task_type = $1 AND is_deleted = FALSE
+                    LIMIT 5
+                """
+                debug_results2 = await self.db.fetch_all(debug_query2, TaskInstanceType.HUMAN.value)
+                logger.info(f"🔧 [诊断2] 所有HUMAN类型任务: {len(debug_results2)} 个")
+                for task in debug_results2:
+                    logger.info(f"   - {task['task_title']} | 用户: {task['assigned_user_id']} | 状态: {task['status']}")
+                    
+                # 诊断3：查询目标任务的详细信息
+                target_task_ids = ['183eba7b-160a-437e-9dba-ad0d484126f9', 'c2cd416c-2c38-4803-8066-4e876ebadb28']
+                for task_id in target_task_ids:
+                    debug_query3 = """
+                        SELECT task_instance_id, task_title, task_type, assigned_user_id, status
+                        FROM task_instance 
+                        WHERE task_instance_id = $1
+                    """
+                    debug_result3 = await self.db.fetch_one(debug_query3, task_id)
+                    if debug_result3:
+                        logger.info(f"🔧 [诊断3] 目标任务 {task_id}:")
+                        logger.info(f"   - 标题: {debug_result3['task_title']}")
+                        logger.info(f"   - 类型: {debug_result3['task_type']}")
+                        logger.info(f"   - 分配用户: {debug_result3['assigned_user_id']}")
+                        logger.info(f"   - 状态: {debug_result3['status']}")
+                    else:
+                        logger.info(f"🔧 [诊断3] 目标任务 {task_id} 不存在")
             
             # 直接返回结果（input_data和output_data现在是文本格式）
             formatted_results = []
@@ -417,10 +493,10 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 # input_data和output_data现在是文本格式，不需要JSON解析
                 formatted_results.append(result)
             
-            logger.info(f"✅ [TASK-REPO] Agent任务查找完成，返回 {len(formatted_results)} 个任务")
+            logger.info(f"[OK] [TASK-REPO] Agent任务查找完成，返回 {len(formatted_results)} 个任务")
             return formatted_results
         except Exception as e:
-            logger.error(f"❌ [TASK-REPO] 获取Agent待处理任务失败: {e}")
+            logger.error(f"[ERROR] [TASK-REPO] 获取Agent待处理任务失败: {e}")
             import traceback
             logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
             raise

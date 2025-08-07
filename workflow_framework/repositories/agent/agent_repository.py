@@ -49,13 +49,47 @@ class AgentRepository(BaseRepository[Agent]):
     
     async def get_agent_by_id(self, agent_id: uuid.UUID) -> Optional[Dict[str, Any]]:
         """根据ID获取Agent"""
-        return await self.get_by_id(agent_id, "agent_id")
+        result = await self.get_by_id(agent_id, "agent_id")
+        if result:
+            # 解析JSON字段
+            result = self._parse_json_fields(result)
+        return result
+    
+    def _parse_json_fields(self, agent_data: Dict[str, Any]) -> Dict[str, Any]:
+        """解析Agent数据中的JSON字段"""
+        import json
+        
+        # 解析JSON字段
+        json_fields = ['tool_config', 'parameters', 'capabilities']
+        for field in json_fields:
+            if field in agent_data and agent_data[field]:
+                if isinstance(agent_data[field], str):
+                    try:
+                        agent_data[field] = json.loads(agent_data[field])
+                    except (json.JSONDecodeError, ValueError):
+                        # 如果解析失败，设为默认值
+                        if field == 'capabilities':
+                            agent_data[field] = []
+                        else:
+                            agent_data[field] = {}
+                        
+        # 确保必要字段存在且为正确类型
+        if 'tool_config' not in agent_data or not isinstance(agent_data['tool_config'], dict):
+            agent_data['tool_config'] = {}
+        if 'parameters' not in agent_data or not isinstance(agent_data['parameters'], dict):
+            agent_data['parameters'] = {}
+        if 'capabilities' not in agent_data or not isinstance(agent_data['capabilities'], list):
+            agent_data['capabilities'] = []
+            
+        return agent_data
     
     async def get_agent_by_name(self, agent_name: str) -> Optional[Dict[str, Any]]:
         """根据名称获取Agent"""
         try:
             query = "SELECT * FROM agent WHERE agent_name = $1 AND is_deleted = FALSE"
             result = await self.db.fetch_one(query, agent_name)
+            if result:
+                result = self._parse_json_fields(result)
             return result
         except Exception as e:
             logger.error(f"根据名称获取Agent失败: {e}")

@@ -20,6 +20,8 @@ import {
   ExclamationCircleOutlined
 } from '@ant-design/icons';
 import { resourceAPI, agentAPI, processorAPI } from '../../services/api';
+import MCPToolsManagement from '../../components/MCPToolsManagement';
+import AgentToolSelector from '../../components/AgentToolSelector';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -97,6 +99,8 @@ const Resource: React.FC = () => {
   // Agent创建相关状态
   const [createAgentModalVisible, setCreateAgentModalVisible] = useState(false);
   const [createAgentForm] = Form.useForm();
+  const [toolBindings, setToolBindings] = useState<any[]>([]);  // 新Agent的工具绑定
+  const [editToolBindings, setEditToolBindings] = useState<any[]>([]);  // 编辑Agent的工具绑定
 
   // 使用 useMemo 优化过滤计算，避免无限重渲染
   const filteredResources = useMemo(() => {
@@ -279,24 +283,16 @@ const Resource: React.FC = () => {
   const handleBindTools = useCallback((agent: ResourceItem) => {
     setSelectedAgent(agent);
     setToolModalVisible(true);
-    toolForm.setFieldsValue({
-      agentId: agent.id,
-      selectedTools: agent.tools || []
-    });
-  }, [toolForm]);
+    // 不再使用旧的表单，工具绑定将通过AgentToolSelector组件处理
+  }, []);
 
   const handleBindToolsConfirm = useCallback(async () => {
-    try {
-      const values = await toolForm.validateFields();
-      await agentAPI.bindTools(values.agentId, { tool_ids: values.selectedTools });
-      message.success('工具绑定成功');
-      setToolModalVisible(false);
-      loadResources();
-    } catch (error: any) {
-      console.error('绑定失败:', error);
-      message.error(error.response?.data?.detail || '绑定失败');
-    }
-  }, [toolForm, loadResources]);
+    // 工具绑定现在直接通过AgentToolSelector组件处理
+    // 这里只需要关闭模态框
+    setToolModalVisible(false);
+    message.success('工具绑定已保存');
+    loadResources();
+  }, [loadResources]);
 
   const handleViewAgent = useCallback((agent: ResourceItem) => {
     setSelectedAgent(agent);
@@ -306,6 +302,7 @@ const Resource: React.FC = () => {
   const handleEditAgent = useCallback((agent: ResourceItem) => {
     setSelectedAgent(agent);
     setEditModalVisible(true);
+    setEditToolBindings([]); // 重置编辑工具绑定
     
     // 处理配置字段 - 如果是对象，转换为JSON字符串
     let configValue = agent.config || {};
@@ -358,8 +355,27 @@ const Resource: React.FC = () => {
       console.log('Agent更新响应:', response);
       
       if (response && response.data && response.data.success) {
-        message.success('Agent更新成功');
+        // 如果工具绑定有变化，同步更新工具绑定
+        if (editToolBindings.length > 0) {
+          try {
+            console.log('🔥 开始同步工具绑定变化...');
+            // 导入agentToolsAPI
+            const { agentToolsAPI } = await import('../../services/api');
+            
+            // 批量绑定工具（这会覆盖现有绑定）
+            await agentToolsAPI.batchBindTools(selectedAgent.id, editToolBindings);
+            console.log('✅ 工具绑定同步成功');
+            message.success(`Agent更新成功，工具绑定已同步`);
+          } catch (toolError: any) {
+            console.error('❌ 工具绑定同步失败:', toolError);
+            message.warning('Agent更新成功，但工具绑定同步失败: ' + toolError.message);
+          }
+        } else {
+          message.success('Agent更新成功');
+        }
+        
         setEditModalVisible(false);
+        setEditToolBindings([]);  // 清空编辑工具绑定
         loadResources();
       } else {
         message.error(response?.data?.message || '更新Agent失败');
@@ -368,7 +384,7 @@ const Resource: React.FC = () => {
       console.error('更新失败:', error);
       message.error(error.response?.data?.detail || '更新Agent失败');
     }
-  }, [editForm, selectedAgent, loadResources]);
+  }, [editForm, selectedAgent, loadResources, editToolBindings]);
 
   const handleDeleteAgent = useCallback((agent: ResourceItem) => {
     console.log('🔥 准备删除Agent:', agent);
@@ -405,6 +421,7 @@ const Resource: React.FC = () => {
     console.log('🔥 准备创建新Agent');
     setCreateAgentModalVisible(true);
     createAgentForm.resetFields();
+    setToolBindings([]);  // 重置工具绑定
   }, [createAgentForm]);
 
   const confirmCreateAgent = useCallback(async () => {
@@ -423,10 +440,32 @@ const Resource: React.FC = () => {
       
       console.log('🔥 处理后的Agent数据:', agentData);
       
-      await agentAPI.createAgent(agentData);
-      message.success('Agent创建成功');
+      // 创建Agent
+      const response = await agentAPI.createAgent(agentData);
+      const createdAgent = response.data;
+      
+      // 如果有工具绑定，创建Agent后立即绑定工具
+      if (toolBindings.length > 0 && createdAgent?.agent_id) {
+        console.log('🔥 开始绑定工具到新创建的Agent...');
+        try {
+          // 导入agentToolsAPI
+          const { agentToolsAPI } = await import('../../services/api');
+          
+          // 批量绑定工具
+          await agentToolsAPI.batchBindTools(createdAgent.agent_id, toolBindings);
+          console.log('✅ 工具绑定成功');
+          message.success(`Agent创建成功，已绑定 ${toolBindings.length} 个工具`);
+        } catch (toolError: any) {
+          console.error('❌ 工具绑定失败:', toolError);
+          message.warning('Agent创建成功，但工具绑定失败: ' + toolError.message);
+        }
+      } else {
+        message.success('Agent创建成功');
+      }
+      
       setCreateAgentModalVisible(false);
       createAgentForm.resetFields();
+      setToolBindings([]);  // 清空工具绑定
       loadResources();
     } catch (error: any) {
       console.error('❌ Agent创建失败:', error);
@@ -436,12 +475,13 @@ const Resource: React.FC = () => {
         message.error(error.response?.data?.detail || '创建Agent失败');
       }
     }
-  }, [createAgentForm, loadResources]);
+  }, [createAgentForm, loadResources, toolBindings]);
 
   const cancelCreateAgent = useCallback(() => {
     console.log('🔥 用户取消创建Agent');
     setCreateAgentModalVisible(false);
     createAgentForm.resetFields();
+    setToolBindings([]);  // 清空工具绑定
   }, [createAgentForm]);
 
   // Processor管理相关方法
@@ -1034,6 +1074,13 @@ const Resource: React.FC = () => {
           }}
         />
       )
+    },
+    {
+      key: 'tools',
+      label: <span><ToolOutlined />我的工具</span>,
+      children: (
+        <MCPToolsManagement onToolsUpdate={loadResources} />
+      )
     }
   ], [searchText, typeFilter, statusFilter, filteredResources, loading, agentList, processors, loadResources, handleViewAgent, handleBindTools, handleEditAgent, handleDeleteAgent, handleDeleteProcessor, getResourceIcon, getResourceColor, getStatusColor, getStatusText]);
 
@@ -1174,32 +1221,14 @@ const Resource: React.FC = () => {
         open={toolModalVisible}
         onOk={handleBindToolsConfirm}
         onCancel={() => setToolModalVisible(false)}
-        width={800}
+        width={1000}
+        okText="保存绑定"
+        cancelText="取消"
       >
-        <Form form={toolForm} layout="vertical">
-          <Form.Item name="agentId" hidden>
-            <Input />
-          </Form.Item>
-          <Form.Item
-            name="selectedTools"
-            label="选择工具"
-          >
-            <Select
-              mode="multiple"
-              placeholder="请选择要绑定的工具"
-              style={{ width: '100%' }}
-            >
-              {tools.map(tool => (
-                <Option key={tool.id} value={tool.name}>
-                  <div>
-                    <div>{tool.name}</div>
-                    <div style={{ fontSize: '12px', color: '#666' }}>{tool.description}</div>
-                  </div>
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-        </Form>
+        <AgentToolSelector
+          agentId={selectedAgent?.id}
+          mode="edit"
+        />
       </Modal>
 
       {/* Agent详情模态框 */}
@@ -1333,6 +1362,19 @@ const Resource: React.FC = () => {
             <TextArea 
               rows={6} 
               placeholder="请输入JSON格式的配置信息（可选）" 
+            />
+          </Form.Item>
+          
+          {/* 工具绑定编辑器 */}
+          <Form.Item
+            label="工具绑定"
+            help="管理Agent可使用的MCP工具"
+          >
+            <AgentToolSelector
+              agentId={selectedAgent?.id}
+              value={editToolBindings}
+              onChange={setEditToolBindings}
+              mode="edit"
             />
           </Form.Item>
         </Form>
@@ -1486,7 +1528,7 @@ const Resource: React.FC = () => {
         okText="创建Agent"
         cancelText="取消"
         width={600}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form
           form={createAgentForm}
@@ -1548,6 +1590,18 @@ const Resource: React.FC = () => {
             <TextArea 
               rows={3} 
               placeholder='{"tools": ["calculator", "search"]}'
+            />
+          </Form.Item>
+
+          {/* 新的工具绑定选择器 */}
+          <Form.Item
+            label="工具绑定"
+            help="选择并配置Agent可使用的MCP工具"
+          >
+            <AgentToolSelector
+              value={toolBindings}
+              onChange={setToolBindings}
+              mode="create"
             />
           </Form.Item>
 

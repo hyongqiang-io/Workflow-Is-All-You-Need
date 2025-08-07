@@ -260,10 +260,23 @@ async def get_workflow_status(
         
         node_instances = result.get("node_instances") or []
         
-        # 如果node_instances是None或字符串，设为空列表
+        # 如果node_instances是None或字符串，尝试解析或设为空列表
         if not isinstance(node_instances, list):
             logger.warning(f"node_instances不是列表类型: {type(node_instances)} - {node_instances}")
-            node_instances = []
+            if isinstance(node_instances, str):
+                try:
+                    import json
+                    parsed_nodes = json.loads(node_instances)
+                    if isinstance(parsed_nodes, list):
+                        node_instances = parsed_nodes
+                        logger.info(f"成功解析node_instances字符串为列表，包含 {len(node_instances)} 个节点")
+                    else:
+                        node_instances = []
+                except json.JSONDecodeError as e:
+                    logger.error(f"解析node_instances JSON失败: {e}")
+                    node_instances = []
+            else:
+                node_instances = []
         
         # 统计节点状态
         total_nodes = len(node_instances)
@@ -277,6 +290,38 @@ async def get_workflow_status(
         
         # 当前运行的节点
         current_running_nodes = [node.get('node_name') for node in node_instances if node.get('status') == 'running']
+        
+        # 检查是否需要主动更新工作流状态
+        current_status = result.get("status")
+        should_trigger_completion_check = False
+        
+        if total_nodes > 0 and completed_nodes == total_nodes and failed_nodes == 0:
+            # 所有节点都完成且没有失败节点
+            if current_status not in ['completed', 'COMPLETED']:
+                logger.info(f"🔄 检测到所有节点已完成但工作流状态为 {current_status}，主动触发完成检查")
+                should_trigger_completion_check = True
+        elif failed_nodes > 0:
+            # 有失败节点
+            if current_status not in ['failed', 'FAILED']:
+                logger.info(f"🔄 检测到有失败节点但工作流状态为 {current_status}，主动触发失败检查")
+                should_trigger_completion_check = True
+        
+        # 如果需要，触发工作流状态检查
+        if should_trigger_completion_check:
+            try:
+                from ..services.execution_service import ExecutionEngine
+                execution_engine = ExecutionEngine()
+                await execution_engine._check_workflow_completion(instance_id)
+                logger.info(f"✅ 主动触发的工作流状态检查完成")
+                
+                # 重新查询更新后的状态
+                updated_result = await workflow_instance_repo.db.fetch_one(query, instance_id)
+                if updated_result:
+                    result = updated_result
+                    current_status = result.get("status")
+                    logger.info(f"📊 工作流状态已更新为: {current_status}")
+            except Exception as e:
+                logger.error(f"❌ 主动触发工作流状态检查失败: {e}")
         
         formatted_instance = {
             "instance_id": str(result["workflow_instance_id"]),

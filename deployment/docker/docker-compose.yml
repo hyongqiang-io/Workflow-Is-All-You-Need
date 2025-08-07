@@ -1,7 +1,5 @@
 version: '3.8'
-
 services:
-  # 后端服务
   backend:
     build:
       context: ../..
@@ -11,23 +9,33 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=sqlite:///./data/workflow.db
       - SECRET_KEY=${SECRET_KEY:-your-default-secret-key}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - CORS_ORIGINS=["http://localhost:3000","https://${DOMAIN:-localhost}"]
+      - DB_HOST=postgres
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-workflow_db}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgresql}
+      - DATABASE_URL=postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgresql}@postgres:${DB_PORT:-5432}/${DB_NAME:-workflow_db}
     volumes:
       - backend_data:/app/data
       - backend_logs:/app/logs
     networks:
       - workflow-network
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/api/test/health')"]
+      test:
+        - CMD
+        - python
+        - -c
+        - import requests; requests.get('http://localhost:8000/api/test/health')
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
-
-  # 前端服务
+    depends_on:
+      postgres:
+        condition: service_healthy
   frontend:
     build:
       context: ../..
@@ -43,8 +51,6 @@ services:
       - workflow-network
     volumes:
       - ./ssl:/etc/nginx/ssl:ro
-
-  # 数据库备份服务
   backup:
     image: alpine:latest
     container_name: workflow-backup
@@ -54,19 +60,38 @@ services:
       - ./backups:/backups
     environment:
       - BACKUP_SCHEDULE=${BACKUP_SCHEDULE:-0 2 * * *}
-    command: >
-      sh -c "
-        apk add --no-cache dcron &&
-        echo '${BACKUP_SCHEDULE:-0 2 * * *} cp /data/workflow.db /backups/workflow_$$(date +\%Y\%m\%d_\%H\%M\%S).db && find /backups -name \"workflow_*.db\" -mtime +7 -delete' | crontab - &&
-        crond -f
-      "
-
+    command: "sh -c \"\n  apk add --no-cache dcron &&\n  echo '${BACKUP_SCHEDULE:-0\
+      \ 2 * * *} cp /data/workflow.db /backups/workflow_$$(date +\\%Y\\%m\\%d_\\%H\\\
+      %M\\%S).db && find /backups -name \\\"workflow_*.db\\\" -mtime +7 -delete' |\
+      \ crontab - &&\n  crond -f\n\"\n"
+  postgres:
+    image: postgres:15-alpine
+    container_name: workflow-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${DB_NAME:-workflow_db}
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgresql}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - workflow-network
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${DB_USER:-postgres}
+      interval: 30s
+      timeout: 10s
+      retries: 3
 volumes:
   backend_data:
     driver: local
   backend_logs:
     driver: local
-
+  postgres_data:
+    driver: local
 networks:
   workflow-network:
     driver: bridge

@@ -9,12 +9,9 @@ import Register from './pages/Auth/Register';
 import MainLayout from './pages/Main/MainLayout';
 import Dashboard from './pages/Main/Dashboard';
 import Workflow from './pages/Workflow/Workflow';
-import ReactFlowWorkflow from './pages/Workflow/ReactFlowWorkflow';
-import ReactFlowDemo from './pages/Workflow/ReactFlowDemo';
 import Todo from './pages/Main/Todo';
 import Resource from './pages/Main/Resource';
 import Profile from './pages/Profile/Profile';
-import TestRunner from './pages/Main/TestRunner';
 import TaskFlow from './pages/Workflow/TaskFlow';
 
 // 组件
@@ -39,11 +36,8 @@ function App() {
             <Route path="profile" element={<Profile />} />
             <Route path="resource" element={<Resource />} />
             <Route path="workflow" element={<Workflow />} />
-            <Route path="workflow/react-flow" element={<ReactFlowWorkflow />} />
-            <Route path="workflow/react-flow-demo" element={<ReactFlowDemo />} />
             <Route path="workflow/:workflowId/task-flow" element={<TaskFlow />} />
             <Route path="todo" element={<Todo />} />
-            <Route path="test-runner" element={<TestRunner />} />
           </Route>
           <Route path="*" element={<Navigate to="/login" />} />
         </Routes>
