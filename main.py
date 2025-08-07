@@ -10,23 +10,23 @@ from loguru import logger
 import sys
 import time
 
-from workflow_framework.api.auth import router as auth_router
-from workflow_framework.api.user import router as user_router
-from workflow_framework.api.workflow import router as workflow_router
-from workflow_framework.api.node import router as node_router
-from workflow_framework.api.processor import router as processor_router
-from workflow_framework.api.execution import router as execution_router
-from workflow_framework.api.tools import router as tools_router
-from workflow_framework.api.test import router as test_router
-from workflow_framework.api.workflow_output import router as workflow_output_router
-from workflow_framework.api.mcp import router as mcp_router
-from workflow_framework.api.mcp_user_tools import router as mcp_user_tools_router
-from workflow_framework.api.agent_tools import router as agent_tools_router
-from workflow_framework.utils.database import initialize_database, close_database
-from workflow_framework.utils.exceptions import BusinessException, ErrorResponse
-from workflow_framework.services.execution_service import execution_engine
-from workflow_framework.services.agent_task_service import agent_task_service
-from workflow_framework.services.monitoring_service import monitoring_service
+from backend.api.auth import router as auth_router
+from backend.api.user import router as user_router
+from backend.api.workflow import router as workflow_router
+from backend.api.node import router as node_router
+from backend.api.processor import router as processor_router
+from backend.api.execution import router as execution_router
+from backend.api.tools import router as tools_router
+from backend.api.test import router as test_router
+from backend.api.workflow_output import router as workflow_output_router
+from backend.api.mcp import router as mcp_router
+from backend.api.mcp_user_tools import router as mcp_user_tools_router
+from backend.api.agent_tools import router as agent_tools_router
+from backend.utils.database import initialize_database, close_database
+from backend.utils.exceptions import BusinessException, ErrorResponse
+from backend.services.execution_service import execution_engine
+from backend.services.agent_task_service import agent_task_service
+from backend.services.monitoring_service import monitoring_service
 
 # 配置日志 - 修复Windows GBK编码问题
 logger.remove()
@@ -160,12 +160,12 @@ async def startup_event():
         logger.trace("Agent任务处理服务启动成功")
         
         # 启动MCP工具服务
-        from workflow_framework.services.mcp_tool_service import mcp_tool_service
+        from backend.services.mcp_tool_service import mcp_tool_service
         await mcp_tool_service.initialize()
         logger.trace("MCP工具管理服务启动成功")
         
         # 启动数据库驱动的MCP服务（替代原有服务）
-        from workflow_framework.services.database_mcp_service import database_mcp_service
+        from backend.services.database_mcp_service import database_mcp_service
         await database_mcp_service.initialize()
         logger.trace("数据库驱动的MCP服务启动成功")
         
@@ -191,12 +191,12 @@ async def shutdown_event():
         logger.trace("监控服务已停止")
         
         # 停止数据库驱动的MCP服务
-        from workflow_framework.services.database_mcp_service import database_mcp_service
+        from backend.services.database_mcp_service import database_mcp_service
         await database_mcp_service.shutdown()
         logger.trace("数据库驱动的MCP服务已停止")
         
         # 停止MCP工具服务
-        from workflow_framework.services.mcp_tool_service import mcp_tool_service
+        from backend.services.mcp_tool_service import mcp_tool_service
         await mcp_tool_service.shutdown()
         logger.trace("MCP工具管理服务已停止")
         

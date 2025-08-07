@@ -8,15 +8,15 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 import sys
 
-from workflow_framework.api.auth import router as auth_router
-from workflow_framework.api.user import router as user_router  
-from workflow_framework.api.workflow import router as workflow_router
-from workflow_framework.api.node import router as node_router
-from workflow_framework.api.processor import router as processor_router
-from workflow_framework.api.execution import router as execution_router
-from workflow_framework.api.tools import router as tools_router
-from workflow_framework.api.test import router as test_router
-from workflow_framework.utils.exceptions import BusinessException, ErrorResponse
+from backend.api.auth import router as auth_router
+from backend.api.user import router as user_router  
+from backend.api.workflow import router as workflow_router
+from backend.api.node import router as node_router
+from backend.api.processor import router as processor_router
+from backend.api.execution import router as execution_router
+from backend.api.tools import router as tools_router
+from backend.api.test import router as test_router
+from backend.utils.exceptions import BusinessException, ErrorResponse
 
 # 配置日志
 logger.remove()

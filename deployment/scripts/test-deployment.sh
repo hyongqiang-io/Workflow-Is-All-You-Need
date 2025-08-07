@@ -428,7 +428,7 @@ test_database_connection() {
         "docker")
             # Docker环境中测试数据库
             if docker-compose -f deployment/docker/docker-compose.yml exec -T backend python -c "
-from workflow_framework.utils.database import get_database_connection
+from backend.utils.database import get_database_connection
 import asyncio
 async def test_db():
     try:

@@ -1,92 +1,103 @@
-# .dockerignore
-# 忽略不需要打包到Docker镜像中的文件
+# .dockerignore - 减少构建上下文大小
+# 排除不需要的文件和目录
 
-# 开发环境文件
-.env
-.env.local
-.env.development
-
-# Git文件
+# Git
 .git
 .gitignore
+.gitattributes
 
-# 文档和说明
+# 文档
 *.md
-DEPLOYMENT.md
+docs/
 
 # 日志文件
-logs/
 *.log
+logs/
+*.log.*
 
 # 临时文件
-tmp/
-temp/
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
 
-# Python缓存
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# 测试文件
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.nox/
-
-# IDE文件
+# 编辑器和IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# 操作系统文件
-.DS_Store
-Thumbs.db
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+.pytest_cache/
 
-# Node.js (前端)
-frontend/node_modules/
-frontend/build/
-frontend/.env*
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# 构建产物
+build/
+dist/
+*.tar.gz
+
+# 测试文件
+test_*.py
+*_test.py
+tests/
+coverage/
+.coverage
+.nyc_output
+
+# 数据库
+*.db
+*.sqlite
+*.sqlite3
+
+# 配置文件（敏感信息）
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.key
+*.pem
+*.p12
+*.pfx
 
 # 备份文件
-backup/
 *.bak
 *.backup
+backups/
 
-# SSL证书
-ssl/
-*.pem
-*.key
-*.crt
+# 缓存
+.cache/
+*.cache
 
-# 上传文件
-uploads/
-media/
+# 开发工具
+.eslintcache
+.stylelintcache
 
-# Docker文件
+# Docker
 Dockerfile*
-docker-compose*.yml
+docker-compose*
 
-# 部署脚本
-deploy.sh
-monitor.sh
-backup.sh
+# CI/CD
+.github/
+.gitlab-ci.yml
+jenkins/
+
+# 监控和分析
+.nyc_output
+coverage.lcov

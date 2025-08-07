@@ -101,16 +101,6 @@ install_nginx() {
 setup_environment() {
     log_info "设置环境变量..."
     
-    # 创建.env文件
-    if [[ ! -f .env ]]; then
-        cp .env.example .env
-        log_warn "请编辑.env文件配置您的环境变量"
-        read -p "是否现在编辑.env文件? (y/n): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            ${EDITOR:-nano} .env
-        fi
-    fi
     
     # 导入环境变量
     if [[ -f .env ]]; then
@@ -166,9 +156,9 @@ deploy_backend_native() {
     log_info "部署后端..."
     
     # 创建应用目录
-    mkdir -p /opt/workflow-app
-    cp -r ../../* /opt/workflow-app/
-    cd /opt/workflow-app
+    mkdir -p /home/ubuntu
+    cp -r ../../* /home/ubuntu/
+    cd /home/ubuntu
     
     # 创建Python虚拟环境
     python3 -m venv venv
@@ -178,7 +168,7 @@ deploy_backend_native() {
     pip install -r requirements.txt
     
     # 初始化数据库
-    python -c "from workflow_framework.scripts.init_database import main; main()"
+    python -c "from backend.scripts.init_database import main; main()"
     
     # 创建systemd服务
     cp deployment/systemd/workflow-backend.service /etc/systemd/system/
@@ -199,7 +189,7 @@ deploy_frontend_native() {
     fi
     
     # 构建前端
-    cd /opt/workflow-app/frontend
+    cd /home/ubuntu/frontend
     npm install
     npm run build
     
@@ -214,7 +204,7 @@ configure_nginx() {
     log_info "配置Nginx..."
     
     # 复制配置文件
-    cp /opt/workflow-app/deployment/nginx/workflow.conf /etc/nginx/sites-available/
+    cp /home/ubuntu/deployment/nginx/workflow.conf /etc/nginx/sites-available/
     
     # 启用站点
     ln -sf /etc/nginx/sites-available/workflow.conf /etc/nginx/sites-enabled/
