@@ -80,7 +80,7 @@ echo
 echo "3. 检查项目结构..."
 
 required_dirs=(
-    "workflow_framework"
+    "backend"
     "frontend"
     "deployment"
     "deployment/docker"

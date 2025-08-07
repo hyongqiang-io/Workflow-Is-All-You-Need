@@ -1,4 +1,4 @@
-# 前端 Dockerfile
+# 前端 Dockerfile - 优化版本
 FROM node:18-alpine as build
 
 # 设置工作目录
@@ -7,17 +7,31 @@ WORKDIR /app
 # 复制package文件
 COPY frontend/package*.json ./
 
-# 安装依赖
-RUN npm ci --only=production
+# 安装依赖（使用 npm ci 提高安装速度）
+RUN npm ci --only=production && npm cache clean --force
 
 # 复制源代码
 COPY frontend/ .
 
+# 构建参数
+ARG BUILD_DATE
+ARG VERSION
+ARG REACT_APP_API_URL
+
+# 设置构建环境变量
+ENV REACT_APP_API_URL=${REACT_APP_API_URL}
+ENV REACT_APP_VERSION=${VERSION}
+ENV GENERATE_SOURCEMAP=false
+ENV CI=true
+
 # 构建应用
 RUN npm run build
 
-# 生产阶段
+# 生产阶段 - 使用 nginx
 FROM nginx:alpine
+
+# 安装 curl（用于健康检查）
+RUN apk add --no-cache curl
 
 # 复制构建结果
 COPY --from=build /app/build /usr/share/nginx/html
@@ -25,8 +39,22 @@ COPY --from=build /app/build /usr/share/nginx/html
 # 复制nginx配置
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# 添加构建信息
+LABEL build_date=${BUILD_DATE}
+LABEL version=${VERSION}
+
+# 创建非root用户
+RUN addgroup -g 1000 -S nginx && \
+    adduser -u 1000 -D -S -G nginx nginx && \
+    chown -R nginx:nginx /usr/share/nginx/html && \
+    chown -R nginx:nginx /var/cache/nginx
+
 # 暴露端口
 EXPOSE 80
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost/ || exit 1
 
 # 启动nginx
 CMD ["nginx", "-g", "daemon off;"]

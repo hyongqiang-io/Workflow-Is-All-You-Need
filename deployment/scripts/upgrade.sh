@@ -114,11 +114,11 @@ run_database_migration() {
     
     if [[ "$DEPLOYMENT_TYPE" == "docker" ]]; then
         cd deployment/docker
-        docker-compose run --rm backend python -c "from workflow_framework.scripts.init_database import main; main()"
+        docker-compose run --rm backend python -c "from backend.scripts.init_database import main; main()"
         cd ../..
     else
         source venv/bin/activate
-        python -c "from workflow_framework.scripts.init_database import main; main()"
+        python -c "from backend.scripts.init_database import main; main()"
         deactivate
     fi
 }

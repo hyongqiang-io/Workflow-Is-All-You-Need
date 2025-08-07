@@ -376,7 +376,7 @@ test_python_backend() {
     # 初始化数据库
     log_info "初始化数据库..."
     mkdir -p data
-    if python3 -c "from workflow_framework.scripts.init_database import main; main()" 2>/dev/null; then
+    if python3 -c "from backend.scripts.init_database import main; main()" 2>/dev/null; then
         test_passed "数据库初始化成功"
     else
         test_failed "数据库初始化失败"
@@ -582,7 +582,7 @@ simulate_deployment_process() {
     # 3. 数据库初始化
     log_info "步骤3: 数据库初始化"
     mkdir -p data
-    if python3 -c "from workflow_framework.scripts.init_database import main; main()" 2>/dev/null; then
+    if python3 -c "from backend.scripts.init_database import main; main()" 2>/dev/null; then
         test_passed "数据库初始化模拟成功"
     else
         test_failed "数据库初始化模拟失败"

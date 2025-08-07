@@ -14,9 +14,9 @@ import os
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from workflow_framework.utils.database import db_manager, initialize_database
-from workflow_framework.services.mcp_tool_service import mcp_tool_service
-from workflow_framework.services.agent_tool_service import agent_tool_service
+from backend.utils.database import db_manager, initialize_database
+from backend.services.mcp_tool_service import mcp_tool_service
+from backend.services.agent_tool_service import agent_tool_service
 
 
 class MCPDataMigration:

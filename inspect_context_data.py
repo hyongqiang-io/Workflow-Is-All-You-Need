@@ -7,7 +7,7 @@ import asyncio
 import uuid
 import json
 import pprint
-from workflow_framework.repositories.instance.task_instance_repository import TaskInstanceRepository
+from backend.repositories.instance.task_instance_repository import TaskInstanceRepository
 
 async def inspect_context_data():
     """检查context_data的具体内容"""
