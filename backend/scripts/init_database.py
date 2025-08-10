@@ -258,26 +258,33 @@ CREATE TABLE IF NOT EXISTS workflow_instance (
     workflow_instance_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workflow_id UUID NOT NULL,
     workflow_base_id UUID NOT NULL,
-    trigger_user_id UUID NOT NULL,
+    executor_id UUID NOT NULL,
     workflow_instance_name VARCHAR(255),
-    instance_name VARCHAR(255),
-    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
+    instance_name VARCHAR(255) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'paused', 'completed', 'failed', 'cancelled')),
     input_data JSONB,
     context_data JSONB,
     output_data JSONB,
-    start_at TIMESTAMP WITH TIME ZONE,
     started_at TIMESTAMP WITH TIME ZONE,
     completed_at TIMESTAMP WITH TIME ZONE,
     error_message TEXT,
+    current_node_id UUID,
     retry_count INTEGER NOT NULL DEFAULT 0,
+    -- 新增的结构化输出字段
+    execution_summary JSONB,
+    quality_metrics JSONB,
+    data_lineage JSONB,
+    output_summary JSONB,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
     
     CONSTRAINT fk_workflow_instance_workflow 
         FOREIGN KEY (workflow_id) REFERENCES workflow(workflow_id),
-    CONSTRAINT fk_workflow_instance_trigger_user 
-        FOREIGN KEY (trigger_user_id) REFERENCES "user"(user_id)
+    CONSTRAINT fk_workflow_instance_executor 
+        FOREIGN KEY (executor_id) REFERENCES "user"(user_id),
+    CONSTRAINT fk_workflow_instance_current_node 
+        FOREIGN KEY (current_node_id) REFERENCES node(node_id)
 );
 
 -- 表10：node_instance（节点实例表）
@@ -285,8 +292,10 @@ CREATE TABLE IF NOT EXISTS node_instance (
     node_instance_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workflow_instance_id UUID NOT NULL,
     node_id UUID NOT NULL,
+    node_base_id UUID NOT NULL,
     node_instance_name VARCHAR(255),
-    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'ready', 'running', 'completed', 'failed', 'skipped')),
+    task_description TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'waiting', 'running', 'completed', 'failed', 'cancelled')),
     input_data JSONB,
     output_data JSONB,
     started_at TIMESTAMP WITH TIME ZONE,
@@ -309,11 +318,11 @@ CREATE TABLE IF NOT EXISTS task_instance (
     node_instance_id UUID NOT NULL,
     workflow_instance_id UUID NOT NULL,
     processor_id UUID NOT NULL,
-    task_type VARCHAR(20) DEFAULT 'human' CHECK (task_type IN ('human', 'agent', 'system')),
-    task_title VARCHAR(255),
-    task_description TEXT,
+    task_type VARCHAR(20) DEFAULT 'human' CHECK (task_type IN ('human', 'agent', 'mixed')),
+    task_title VARCHAR(255) NOT NULL,
+    task_description TEXT DEFAULT '',
     instructions TEXT,
-    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'assigned', 'in_progress', 'completed', 'failed', 'cancelled')),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'assigned', 'waiting', 'in_progress', 'completed', 'failed', 'cancelled')),
     priority INTEGER DEFAULT 1 CHECK (priority >= 1 AND priority <= 5),
     input_data TEXT,
     context_data TEXT,
@@ -388,15 +397,116 @@ CREATE INDEX IF NOT EXISTS idx_agent_name ON agent(agent_name);
 
 -- 实例表索引
 CREATE INDEX IF NOT EXISTS idx_workflow_instance_workflow_id ON workflow_instance(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_instance_workflow_base_id ON workflow_instance(workflow_base_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_instance_status ON workflow_instance(status);
-CREATE INDEX IF NOT EXISTS idx_workflow_instance_trigger_user ON workflow_instance(trigger_user_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_instance_executor ON workflow_instance(executor_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_instance_current_node ON workflow_instance(current_node_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_instance_created_status ON workflow_instance(created_at DESC, status);
+CREATE INDEX IF NOT EXISTS idx_workflow_instance_completed ON workflow_instance(completed_at DESC) WHERE completed_at IS NOT NULL;
+
+-- 新增输出数据字段索引
+CREATE INDEX IF NOT EXISTS idx_workflow_instance_execution_summary ON workflow_instance USING GIN (execution_summary);
+CREATE INDEX IF NOT EXISTS idx_workflow_instance_quality_metrics ON workflow_instance USING GIN (quality_metrics);
+CREATE INDEX IF NOT EXISTS idx_workflow_instance_data_lineage ON workflow_instance USING GIN (data_lineage);
+
 CREATE INDEX IF NOT EXISTS idx_node_instance_workflow_instance ON node_instance(workflow_instance_id);
+CREATE INDEX IF NOT EXISTS idx_node_instance_node_id ON node_instance(node_id);
+CREATE INDEX IF NOT EXISTS idx_node_instance_node_base_id ON node_instance(node_base_id);
 CREATE INDEX IF NOT EXISTS idx_node_instance_status ON node_instance(status);
+
 CREATE INDEX IF NOT EXISTS idx_task_instance_node_instance ON task_instance(node_instance_id);
 CREATE INDEX IF NOT EXISTS idx_task_instance_workflow_instance ON task_instance(workflow_instance_id);
+CREATE INDEX IF NOT EXISTS idx_task_instance_processor ON task_instance(processor_id);
 CREATE INDEX IF NOT EXISTS idx_task_instance_status ON task_instance(status);
+CREATE INDEX IF NOT EXISTS idx_task_instance_task_type ON task_instance(task_type);
+CREATE INDEX IF NOT EXISTS idx_task_instance_priority ON task_instance(priority);
 CREATE INDEX IF NOT EXISTS idx_task_instance_assigned_user ON task_instance(assigned_user_id);
 CREATE INDEX IF NOT EXISTS idx_task_instance_assigned_agent ON task_instance(assigned_agent_id);
+
+-- 表14：mcp_tool_registry（MCP工具注册表）
+CREATE TABLE IF NOT EXISTS mcp_tool_registry (
+    tool_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    server_name VARCHAR(255) NOT NULL,
+    server_url TEXT NOT NULL,
+    server_description TEXT,
+    tool_name VARCHAR(255) NOT NULL,
+    tool_description TEXT,
+    tool_parameters JSONB DEFAULT '{}',
+    auth_config JSONB,
+    timeout_seconds INTEGER DEFAULT 30,
+    is_server_active BOOLEAN DEFAULT TRUE,
+    is_tool_active BOOLEAN DEFAULT TRUE,
+    server_status VARCHAR(20) DEFAULT 'unknown',
+    tool_usage_count INTEGER DEFAULT 0,
+    success_rate FLOAT DEFAULT 0.0,
+    bound_agents_count INTEGER DEFAULT 0,
+    last_tool_call TIMESTAMP WITH TIME ZONE,
+    last_health_check TIMESTAMP WITH TIME ZONE,
+    last_tool_discovery TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    
+    UNIQUE(user_id, server_name, tool_name),
+    CONSTRAINT fk_mcp_tool_user 
+        FOREIGN KEY (user_id) REFERENCES "user"(user_id)
+);
+
+-- 表15：agent_tool_bindings（Agent工具绑定表）
+CREATE TABLE IF NOT EXISTS agent_tool_bindings (
+    binding_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id UUID NOT NULL,
+    tool_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    binding_config JSONB DEFAULT '{}',
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    
+    UNIQUE(agent_id, tool_id),
+    CONSTRAINT fk_atb_agent 
+        FOREIGN KEY (agent_id) REFERENCES agent(agent_id),
+    CONSTRAINT fk_atb_tool 
+        FOREIGN KEY (tool_id) REFERENCES mcp_tool_registry(tool_id) ON DELETE CASCADE,
+    CONSTRAINT fk_atb_user 
+        FOREIGN KEY (user_id) REFERENCES "user"(user_id)
+);
+
+-- MCP表索引
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_registry_user_id ON mcp_tool_registry(user_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_registry_server_name ON mcp_tool_registry(server_name);
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_registry_active ON mcp_tool_registry(is_server_active, is_tool_active);
+CREATE INDEX IF NOT EXISTS idx_agent_tool_bindings_agent_id ON agent_tool_bindings(agent_id);
+CREATE INDEX IF NOT EXISTS idx_agent_tool_bindings_tool_id ON agent_tool_bindings(tool_id);
+CREATE INDEX IF NOT EXISTS idx_agent_tool_bindings_user_id ON agent_tool_bindings(user_id);
+
+-- 创建user_mcp_tools_view视图
+CREATE OR REPLACE VIEW user_mcp_tools_view AS
+SELECT 
+    tool_id,
+    user_id,
+    server_name,
+    server_url,
+    server_description,
+    tool_name,
+    tool_description,
+    tool_parameters,
+    auth_config,
+    timeout_seconds,
+    is_server_active,
+    is_tool_active,
+    server_status,
+    tool_usage_count,
+    success_rate,
+    bound_agents_count,
+    last_tool_call,
+    last_health_check,
+    created_at,
+    updated_at
+FROM mcp_tool_registry 
+WHERE is_deleted = FALSE
+ORDER BY server_name, tool_name;
 """
             
             await self.execute_sql_file(sql_schema)
@@ -676,25 +786,31 @@ SELECT
     wi.started_at,
     wi.completed_at,
     wi.error_message,
+    wi.current_node_id,
     wi.retry_count,
+    wi.execution_summary,
+    wi.quality_metrics,
+    wi.data_lineage,
+    wi.output_summary,
     wi.created_at,
     wi.updated_at,
     w.name as workflow_name,
     w.description as workflow_description,
-    u.username as trigger_user_name,
+    u.username as executor_name,
     COUNT(ni.node_instance_id) as total_nodes,
     COUNT(CASE WHEN ni.status = 'completed' THEN 1 END) as completed_nodes,
     COUNT(CASE WHEN ni.status = 'failed' THEN 1 END) as failed_nodes,
     COUNT(CASE WHEN ni.status = 'running' THEN 1 END) as running_nodes
 FROM workflow_instance wi
 JOIN workflow w ON w.workflow_id = wi.workflow_id
-JOIN "user" u ON u.user_id = wi.trigger_user_id
+JOIN "user" u ON u.user_id = wi.executor_id
 LEFT JOIN node_instance ni ON ni.workflow_instance_id = wi.workflow_instance_id AND ni.is_deleted = FALSE
 WHERE wi.is_deleted = FALSE
 GROUP BY wi.workflow_instance_id, wi.workflow_id, wi.workflow_base_id, 
          wi.workflow_instance_name, wi.instance_name, wi.status, wi.input_data, 
          wi.context_data, wi.output_data, wi.started_at, wi.completed_at, 
-         wi.error_message, wi.retry_count, wi.created_at, wi.updated_at,
+         wi.error_message, wi.current_node_id, wi.retry_count, wi.execution_summary,
+         wi.quality_metrics, wi.data_lineage, wi.output_summary, wi.created_at, wi.updated_at,
          w.name, w.description, u.username;
 
 -- 任务实例详情视图
@@ -749,7 +865,9 @@ SELECT
     ni.node_instance_id,
     ni.workflow_instance_id,
     ni.node_id,
+    ni.node_base_id,
     ni.node_instance_name,
+    ni.task_description as node_instance_task_description,
     ni.status,
     ni.input_data,
     ni.output_data,
@@ -761,7 +879,7 @@ SELECT
     ni.updated_at,
     n.name as node_name,
     n.type as node_type,
-    n.task_description,
+    n.task_description as node_task_description,
     n.position_x,
     n.position_y,
     wi.workflow_instance_name,
@@ -776,8 +894,8 @@ JOIN workflow_instance wi ON wi.workflow_instance_id = ni.workflow_instance_id
 JOIN workflow w ON w.workflow_id = wi.workflow_id
 LEFT JOIN task_instance ti ON ti.node_instance_id = ni.node_instance_id AND ti.is_deleted = FALSE
 WHERE ni.is_deleted = FALSE AND wi.is_deleted = FALSE
-GROUP BY ni.node_instance_id, ni.workflow_instance_id, ni.node_id, 
-         ni.node_instance_name, ni.status, ni.input_data, ni.output_data,
+GROUP BY ni.node_instance_id, ni.workflow_instance_id, ni.node_id, ni.node_base_id,
+         ni.node_instance_name, ni.task_description, ni.status, ni.input_data, ni.output_data,
          ni.started_at, ni.completed_at, ni.error_message, ni.retry_count,
          ni.created_at, ni.updated_at, n.name, n.type, n.task_description,
          n.position_x, n.position_y, wi.workflow_instance_name, w.name;

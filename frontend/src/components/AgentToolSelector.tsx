@@ -63,23 +63,45 @@ const AgentToolSelector: React.FC<AgentToolSelectorProps> = ({
   const loadAvailableTools = async () => {
     setLoading(true);
     try {
+      console.log('🔧 [AGENT-TOOLS-DEBUG] 开始加载可用工具');
+      
       const response = await mcpUserToolsAPI.getUserTools();
-      if (response && response.data && response.data.servers) {
+      console.log('🔧 [AGENT-TOOLS-DEBUG] 原始响应:', response);
+      
+      // 修复：适应新的响应数据结构
+      if (response && response.servers) {
         const tools: MCPTool[] = [];
-        response.data.servers.forEach((server: any) => {
-          server.tools?.forEach((tool: any) => {
+        console.log('🔧 [AGENT-TOOLS-DEBUG] 服务器数量:', response.servers.length);
+        
+        response.servers.forEach((server: any, serverIndex: number) => {
+          console.log(`🔧 [AGENT-TOOLS-DEBUG] 处理服务器 ${serverIndex + 1}: ${server.server_name}`);
+          console.log(`   - 服务器状态: ${server.server_status}`);
+          console.log(`   - 服务器激活: ${server.is_server_active}`);
+          console.log(`   - 工具数量: ${server.tools?.length || 0}`);
+          
+          server.tools?.forEach((tool: any, toolIndex: number) => {
+            console.log(`   - 工具 ${toolIndex + 1}: ${tool.tool_name}`);
+            console.log(`     * 工具激活: ${tool.is_tool_active}`);
+            
             tools.push({
               ...tool,
               server_name: server.server_name,
               server_url: server.server_url,
-              is_server_active: server.server_status === 'healthy',
+              is_server_active: server.is_server_active, // 使用服务器提供的激活状态
               server_status: server.server_status
             });
           });
         });
+        
+        console.log('🔧 [AGENT-TOOLS-DEBUG] 解析后的工具总数:', tools.length);
+        console.log('🔧 [AGENT-TOOLS-DEBUG] 工具详情:', tools);
+        
         setAvailableTools(tools);
+      } else {
+        console.warn('🔧 [AGENT-TOOLS-DEBUG] 响应数据格式不正确:', response);
       }
     } catch (error: any) {
+      console.error('🔧 [AGENT-TOOLS-DEBUG] 加载工具失败:', error);
       message.error(`加载工具失败: ${error.message}`);
     } finally {
       setLoading(false);
@@ -230,9 +252,22 @@ const AgentToolSelector: React.FC<AgentToolSelectorProps> = ({
   };
 
   // 获取可选择的工具列表
-  const selectableTools = availableTools.filter(tool => 
-    tool.is_server_active && tool.is_tool_active && !isToolSelected(tool.tool_id)
-  );
+  const selectableTools = availableTools.filter(tool => {
+    const isServerActive = tool.is_server_active;
+    const isToolActive = tool.is_tool_active;
+    const isNotSelected = !isToolSelected(tool.tool_id);
+    
+    console.log(`🔍 [FILTER-DEBUG] 工具: ${tool.tool_name}`);
+    console.log(`   - 服务器激活: ${isServerActive}`);
+    console.log(`   - 工具激活: ${isToolActive}`);
+    console.log(`   - 未选中: ${isNotSelected}`);
+    console.log(`   - 最终可选: ${isServerActive && isToolActive && isNotSelected}`);
+    
+    return isServerActive && isToolActive && isNotSelected;
+  });
+  
+  console.log('🔍 [FILTER-DEBUG] 可选工具总数:', selectableTools.length);
+  console.log('🔍 [FILTER-DEBUG] 可选工具列表:', selectableTools);
 
   return (
     <div>

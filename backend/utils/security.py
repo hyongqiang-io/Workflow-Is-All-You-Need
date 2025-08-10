@@ -17,7 +17,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # JWT配置
 SECRET_KEY = "your-secret-key-change-in-production"  # 生产环境中应该从环境变量读取
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24小时
 
 
 class Token(BaseModel):

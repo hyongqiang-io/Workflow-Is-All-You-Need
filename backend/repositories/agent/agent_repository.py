@@ -114,7 +114,7 @@ class AgentRepository(BaseRepository[Agent]):
             
             # 其他字段
             for field in ['description', 'base_url', 'api_key', 'model_name', 
-                         'tool_config', 'parameters', 'is_autonomous', 'capabilities']:
+                         'tool_config', 'parameters', 'is_autonomous']:
                 value = getattr(agent_data, field, None)
                 if value is not None:
                     update_data[field] = value
@@ -238,7 +238,7 @@ class AgentRepository(BaseRepository[Agent]):
         """获取所有激活Agent"""
         try:
             query = """
-                SELECT agent_id, agent_name, description, endpoint, 
+                SELECT agent_id, agent_name, description, base_url, 
                        created_at, updated_at, is_deleted
                 FROM agent 
                 WHERE is_deleted = FALSE 

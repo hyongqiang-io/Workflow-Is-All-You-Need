@@ -166,10 +166,56 @@ async def call_mcp_tool(
 ):
     """调用MCP工具"""
     try:
+        logger.info(f"🔧 [API-CALL] 用户直接调用MCP工具")
+        logger.info(f"   - 用户: {current_user.username} ({current_user.user_id})")
+        logger.info(f"   - 工具: {call_request.tool_name} @ {call_request.server_name}")
+        
+        # 验证用户是否有权限使用该工具
+        # 检查用户是否拥有该工具或通过Agent绑定有权限使用
+        from ..services.mcp_tool_service import mcp_tool_service
+        user_tools = await mcp_tool_service.get_user_tools(current_user.user_id)
+        
+        # 检查是否是用户直接拥有的工具
+        has_direct_access = any(
+            tool['tool_name'] == call_request.tool_name and 
+            tool['server_name'] == call_request.server_name
+            for tool in user_tools
+        )
+        
+        if not has_direct_access:
+            # 检查是否通过Agent绑定有权限
+            from ..services.agent_tool_service import agent_tool_service
+            # 获取用户的所有Agent
+            from ..repositories.agent.agent_repository import AgentRepository
+            agent_repo = AgentRepository()
+            user_agents = await agent_repo.get_agents_by_user(current_user.user_id)
+            
+            has_agent_access = False
+            for agent in user_agents:
+                agent_tools = await agent_tool_service.get_agent_tools(agent['agent_id'])
+                if any(
+                    tool['tool_name'] == call_request.tool_name and 
+                    tool['server_name'] == call_request.server_name
+                    for tool in agent_tools
+                ):
+                    has_agent_access = True
+                    logger.info(f"   - 通过Agent {agent['agent_id']} 获得工具权限")
+                    break
+            
+            if not has_agent_access:
+                logger.warning(f"   ❌ 用户无权限调用该工具")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"您没有权限调用工具 {call_request.tool_name}"
+                )
+        
+        logger.info(f"   ✅ 权限验证通过，开始调用工具")
+        
         result = await mcp_service.call_tool(
             call_request.tool_name,
             call_request.server_name,
-            call_request.arguments
+            call_request.arguments,
+            current_user.user_id  # 传递用户ID用于日志记录
         )
         
         return BaseResponse(

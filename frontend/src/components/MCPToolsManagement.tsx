@@ -7,7 +7,7 @@ import {
 import { 
   PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, PlayCircleOutlined,
   SettingOutlined, EyeOutlined, CodeOutlined, WarningOutlined, CheckCircleOutlined,
-  ClockCircleOutlined, DisconnectOutlined, ApiOutlined
+  ClockCircleOutlined, DisconnectOutlined, ApiOutlined, HeartOutlined
 } from '@ant-design/icons';
 import { mcpUserToolsAPI, agentToolsAPI } from '../services/api';
 
@@ -63,25 +63,75 @@ const MCPToolsManagement: React.FC<MCPToolsManagement> = ({ onToolsUpdate }) => 
   const loadUserTools = async () => {
     setLoading(true);
     try {
+      console.log('🔍 [FRONTEND-DEBUG] 开始加载用户工具');
+      console.log('   - API调用: getUserTools()');
+      
       const response = await mcpUserToolsAPI.getUserTools();
-      if (response && response.data) {
-        setServers(response.data.servers || []);
+      
+      console.log('📊 [FRONTEND-DEBUG] API响应接收');
+      console.log('   - 响应对象:', response);
+      console.log('   - response.success:', response?.success);
+      console.log('   - response.message:', response?.message);
+      console.log('   - response.data:', response?.data);
+      
+      // 修复：根据实际的响应数据结构处理
+      if (response) {
+        // 如果响应直接包含 servers 数组（拦截器已处理过的数据）
+        const servers = response.servers || [];
+        console.log('📋 [FRONTEND-DEBUG] 解析服务器数据');
+        console.log('   - 服务器数量:', servers.length);
+        console.log('   - 服务器列表:', servers);
+        
+        servers.forEach((server: MCPServer, index: number) => {
+          console.log(`   - 服务器 ${index + 1}: ${server.server_name}`);
+          console.log(`     * 工具数量: ${server.tools_count}`);
+          console.log(`     * 工具列表长度: ${server.tools?.length || 0}`);
+          console.log(`     * 服务器状态: ${server.server_status}`);
+        });
+        
+        setServers(servers);
+        console.log('✅ [FRONTEND-DEBUG] 服务器数据设置完成');
+      } else {
+        console.warn('⚠️ [FRONTEND-DEBUG] API响应数据为空或格式不正确');
+        console.warn('   - response:', response);
+        setServers([]);
       }
     } catch (error: any) {
+      console.error('❌ [FRONTEND-DEBUG] 加载用户工具失败');
+      console.error('   - 错误类型:', error.constructor.name);
+      console.error('   - 错误信息:', error.message);
+      console.error('   - 完整错误:', error);
       message.error(`加载工具失败: ${error.message}`);
     } finally {
       setLoading(false);
+      console.log('🏁 [FRONTEND-DEBUG] loadUserTools 函数执行完成');
     }
   };
 
   // 加载统计信息
   const loadStats = async () => {
     try {
+      console.log('📈 [FRONTEND-DEBUG] 开始加载统计信息');
+      
       const response = await mcpUserToolsAPI.getUserToolStats();
-      if (response && response.data) {
-        setStats(response.data.overview || {});
+      
+      console.log('📈 [FRONTEND-DEBUG] 统计API响应');
+      console.log('   - 响应对象:', response);
+      console.log('   - response.overview:', response?.overview);
+      
+      if (response) {
+        // 修复：根据实际的响应数据结构处理（拦截器已处理过）
+        const overview = response.overview || response || {};
+        console.log('📊 [FRONTEND-DEBUG] 设置统计数据');
+        console.log('   - 工具总数:', overview.total_tools);
+        console.log('   - 活跃工具:', overview.active_tools);
+        console.log('   - 服务器数:', overview.total_servers);
+        console.log('   - 总调用次数:', overview.total_usage_count);
+        
+        setStats(overview);
       }
     } catch (error: any) {
+      console.error('❌ [FRONTEND-DEBUG] 加载统计信息失败:', error);
       message.error(`加载统计信息失败: ${error.message}`);
     }
   };
@@ -89,25 +139,57 @@ const MCPToolsManagement: React.FC<MCPToolsManagement> = ({ onToolsUpdate }) => 
   // 加载认证类型
   const loadAuthTypes = async () => {
     try {
+      console.log('🔒 [FRONTEND-DEBUG] 开始加载认证类型');
+      
       const response = await mcpUserToolsAPI.getAuthTypes();
-      if (response && response.data) {
-        setAuthTypes(response.data.auth_types || []);
+      
+      console.log('🔒 [FRONTEND-DEBUG] 认证类型API响应');
+      console.log('   - 响应对象:', response);
+      console.log('   - response.auth_types:', response?.auth_types);
+      
+      if (response) {
+        // 修复：根据实际的响应数据结构处理（拦截器已处理过）
+        const authTypes = response.auth_types || [];
+        console.log('📋 [FRONTEND-DEBUG] 设置认证类型');
+        console.log('   - 认证类型数量:', authTypes.length);
+        console.log('   - 认证类型列表:', authTypes);
+        
+        setAuthTypes(authTypes);
       }
     } catch (error: any) {
+      console.error('❌ [FRONTEND-DEBUG] 加载认证类型失败:', error);
       console.error('加载认证类型失败:', error);
     }
   };
 
   useEffect(() => {
-    loadUserTools();
-    loadStats();
-    loadAuthTypes();
+    console.log('🚀 [COMPONENT-DEBUG] MCPToolsManagement 组件初始化');
+    console.log('   - 开始执行 useEffect');
+    
+    const initializeComponent = async () => {
+      console.log('⏳ [COMPONENT-DEBUG] 开始初始化组件数据');
+      try {
+        await loadUserTools();
+        await loadStats();
+        await loadAuthTypes();
+        console.log('✅ [COMPONENT-DEBUG] 组件数据初始化完成');
+      } catch (error) {
+        console.error('❌ [COMPONENT-DEBUG] 组件初始化失败:', error);
+      }
+    };
+    
+    initializeComponent();
   }, []);
 
   // 添加MCP服务器
   const handleAddServer = async (values: any) => {
     try {
-      await mcpUserToolsAPI.addMCPServer({
+      console.log('➕ [FRONTEND-DEBUG] 开始添加MCP服务器');
+      console.log('   - 服务器名称:', values.server_name);
+      console.log('   - 服务器URL:', values.server_url);
+      console.log('   - 认证类型:', values.auth_type);
+      
+      const serverData = {
         server_name: values.server_name,
         server_url: values.server_url,
         server_description: values.server_description,
@@ -115,15 +197,27 @@ const MCPToolsManagement: React.FC<MCPToolsManagement> = ({ onToolsUpdate }) => 
           type: values.auth_type,
           ...values.auth_config
         } : { type: 'none' }
-      });
+      };
+      
+      console.log('   - 请求数据:', serverData);
+      
+      const response = await mcpUserToolsAPI.addMCPServer(serverData);
+      
+      console.log('✅ [FRONTEND-DEBUG] 服务器添加响应');
+      console.log('   - 响应:', response);
       
       message.success('MCP服务器添加成功！');
       setAddServerModalVisible(false);
       addServerForm.resetFields();
-      loadUserTools();
-      loadStats();
+      
+      console.log('🔄 [FRONTEND-DEBUG] 开始刷新数据');
+      await loadUserTools();
+      await loadStats();
       onToolsUpdate?.();
+      console.log('✅ [FRONTEND-DEBUG] 数据刷新完成');
+      
     } catch (error: any) {
+      console.error('❌ [FRONTEND-DEBUG] 添加服务器失败:', error);
       message.error(`添加服务器失败: ${error.message}`);
     }
   };
@@ -153,6 +247,40 @@ const MCPToolsManagement: React.FC<MCPToolsManagement> = ({ onToolsUpdate }) => 
       }
     } catch (error: any) {
       message.error(`重新发现失败: ${error.message}`);
+    }
+  };
+
+  // 健康检查服务器
+  const handleHealthCheck = async (serverName: string) => {
+    try {
+      setLoading(true);
+      message.loading({ content: '正在检查服务器健康状态...', key: 'health-check' });
+      
+      const response = await mcpUserToolsAPI.healthCheckServer(serverName);
+      if (response?.data) {
+        const { server_status, active_tools_count, total_tools_count, tools_discovered } = response.data;
+        
+        message.success({
+          content: `健康检查完成！服务器状态: ${server_status}, 活跃工具: ${active_tools_count}/${total_tools_count}`,
+          key: 'health-check',
+          duration: 4
+        });
+        
+        // 刷新数据以显示最新状态
+        loadUserTools();
+        loadStats();
+        
+        // 触发外部组件更新
+        onToolsUpdate?.();
+      }
+    } catch (error: any) {
+      message.error({
+        content: `健康检查失败: ${error.message}`,
+        key: 'health-check',
+        duration: 4
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -357,6 +485,16 @@ const MCPToolsManagement: React.FC<MCPToolsManagement> = ({ onToolsUpdate }) => 
             }
             extra={
               <Space>
+                <Tooltip title="检查服务器健康状态并更新工具状态">
+                  <Button 
+                    size="small"
+                    icon={<HeartOutlined />}
+                    onClick={() => handleHealthCheck(server.server_name)}
+                    loading={loading}
+                  >
+                    健康检查
+                  </Button>
+                </Tooltip>
                 <Button 
                   size="small"
                   icon={<ReloadOutlined />}

@@ -62,6 +62,7 @@ class MCPServerResponse(BaseModel):
     server_url: str
     server_description: Optional[str]
     server_status: str
+    is_server_active: bool  # 添加服务器激活状态字段
     tools_count: int
     total_usage_count: int
     avg_success_rate: float
@@ -98,6 +99,7 @@ async def get_user_tools(
                     'server_url': tool['server_url'],
                     'server_description': tool.get('server_description'),
                     'server_status': tool['server_status'],
+                    'is_server_active': tool['is_server_active'],  # 添加服务器激活状态
                     'tools_count': 0,
                     'total_usage_count': 0,
                     'tools': []
@@ -313,6 +315,134 @@ async def rediscover_server_tools(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"重新发现服务器工具失败: {str(e)}"
+        )
+
+@router.post("/user-tools/server/{server_name}/health-check", response_model=BaseResponse)
+async def health_check_server_tools(
+    server_name: str,
+    current_user: CurrentUser = Depends(get_current_active_user)
+):
+    """手动触发服务器健康检查并更新工具状态"""
+    try:
+        # 获取服务器配置
+        from ..utils.database import db_manager
+        server_config = await db_manager.fetch_one(
+            """
+            SELECT DISTINCT server_url, auth_config, server_description
+            FROM mcp_tool_registry 
+            WHERE user_id = $1 AND server_name = $2 AND is_deleted = FALSE
+            LIMIT 1
+            """,
+            current_user.user_id, server_name
+        )
+        
+        if not server_config:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"服务器不存在: {server_name}"
+            )
+        
+        server_url = server_config['server_url']
+        auth_config = server_config['auth_config'] or {}
+        
+        # 确保auth_config是字典类型
+        if isinstance(auth_config, str):
+            try:
+                import json
+                auth_config = json.loads(auth_config)
+            except (json.JSONDecodeError, TypeError):
+                auth_config = {}
+        elif not isinstance(auth_config, dict):
+            auth_config = {}
+        
+        # 执行健康检查和工具发现
+        from loguru import logger
+        logger.info(f"🔄 [API-HEALTH-CHECK] 用户 {current_user.username} 手动触发健康检查")
+        logger.info(f"   - 服务器: {server_name}")
+        logger.info(f"   - URL: {server_url}")
+        
+        server_status, discovered_tools = await mcp_tool_service._discover_server_tools(
+            server_url, auth_config
+        )
+        
+        # 记录检查结果
+        logger.info(f"📊 [API-HEALTH-CHECK] 健康检查完成")
+        logger.info(f"   - 服务器状态: {server_status}")
+        logger.info(f"   - 发现工具数量: {len(discovered_tools)}")
+        
+        # 更新数据库中的服务器状态和工具激活状态
+        from datetime import datetime
+        
+        # 更新服务器状态
+        is_server_active = server_status == 'healthy'
+        update_result = await db_manager.execute(
+            """
+            UPDATE mcp_tool_registry 
+            SET server_status = $1, 
+                is_server_active = $2,
+                last_health_check = NOW()
+            WHERE user_id = $3 AND server_name = $4 AND is_deleted = FALSE
+            """,
+            server_status, is_server_active, current_user.user_id, server_name
+        )
+        
+        # 解析更新结果
+        updated_count = 0
+        if update_result:
+            try:
+                # PostgreSQL返回 "UPDATE n" 格式
+                updated_count = int(update_result.split(' ')[1])
+            except (IndexError, ValueError):
+                updated_count = 1  # 假设至少更新了一条
+        
+        logger.info(f"📊 [API-HEALTH-CHECK] 数据库状态更新完成")
+        logger.info(f"   - 更新的工具记录数量: {updated_count}")
+        logger.info(f"   - 服务器激活状态: {is_server_active}")
+        logger.info(f"   - 更新时间: {datetime.now().isoformat()}")
+        
+        # 获取更新后的工具列表
+        updated_tools = await mcp_tool_service.get_user_tools(
+            current_user.user_id, server_name=server_name
+        )
+        
+        # 统计状态
+        active_tools = [t for t in updated_tools if t['is_server_active'] and t['is_tool_active']]
+        
+        return BaseResponse(
+            success=True,
+            message=f"服务器健康检查完成，状态: {server_status}",
+            data={
+                "server_name": server_name,
+                "server_status": server_status,
+                "server_url": server_url,
+                "is_server_active": is_server_active,
+                "health_check_time": datetime.now().isoformat(),
+                "tools_discovered": len(discovered_tools),
+                "tools_updated": updated_count,
+                "active_tools_count": len(active_tools),
+                "total_tools_count": len(updated_tools),
+                "tools": [
+                    {
+                        "tool_name": tool['tool_name'],
+                        "is_server_active": tool['is_server_active'],
+                        "is_tool_active": tool['is_tool_active'],
+                        "server_status": tool['server_status']
+                    }
+                    for tool in updated_tools
+                ]
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"❌ [API-HEALTH-CHECK] 健康检查失败: {e}")
+        import traceback
+        logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"健康检查失败: {str(e)}"
         )
 
 @router.post("/user-tools/{tool_id}/test", response_model=BaseResponse)

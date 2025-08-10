@@ -27,22 +27,25 @@ class AgentToolService:
                              is_enabled: Optional[bool] = None) -> List[Dict[str, Any]]:
         """获取Agent绑定的工具列表"""
         try:
+            # 验证Agent存在（不需要验证user_id，Agent表没有user_id字段）
+            agent = await db_manager.fetch_one(
+                "SELECT agent_id FROM agent WHERE agent_id = $1 AND is_deleted = FALSE",
+                agent_id
+            )
+            if not agent:
+                logger.warning(f"Agent {agent_id} 不存在或已删除")
+                return []
+            
             query = """
                 SELECT 
                     atb.binding_id,
                     atb.agent_id,
                     atb.tool_id,
                     atb.user_id as binding_user_id,
-                    atb.is_enabled,
-                    atb.priority,
-                    atb.max_calls_per_task,
-                    atb.timeout_override,
-                    atb.custom_config,
-                    atb.total_calls,
-                    atb.successful_calls,
-                    atb.last_called,
-                    atb.avg_execution_time,
+                    atb.is_active,
+                    atb.binding_config,
                     atb.created_at as binding_created_at,
+                    atb.updated_at as binding_updated_at,
                     -- 工具信息
                     mtr.server_name,
                     mtr.server_url,
@@ -61,17 +64,14 @@ class AgentToolService:
             params = [agent_id]
             param_count = 1
             
-            if user_id:
-                param_count += 1
-                query += f" AND atb.user_id = ${param_count}"
-                params.append(user_id)
+            # 不再按绑定的user_id过滤，因为Agent所有者应该能看到所有绑定到该Agent的工具
             
             if is_enabled is not None:
                 param_count += 1
-                query += f" AND atb.is_enabled = ${param_count}"
+                query += f" AND atb.is_active = ${param_count}"
                 params.append(is_enabled)
             
-            query += " ORDER BY atb.priority ASC, atb.created_at ASC"
+            query += " ORDER BY atb.created_at ASC"
             
             result = await db_manager.fetch_all(query, *params)
             
@@ -83,9 +83,17 @@ class AgentToolService:
                 if tool.get('tool_parameters'):
                     if isinstance(tool['tool_parameters'], str):
                         tool['tool_parameters'] = json.loads(tool['tool_parameters'])
-                if tool.get('custom_config'):
-                    if isinstance(tool['custom_config'], str):
-                        tool['custom_config'] = json.loads(tool['custom_config'])
+                if tool.get('binding_config'):
+                    if isinstance(tool['binding_config'], str):
+                        tool['binding_config'] = json.loads(tool['binding_config'])
+                
+                # 映射字段名以保持兼容性
+                tool['is_enabled'] = tool.get('is_active', True)
+                tool['priority'] = tool.get('binding_config', {}).get('priority', 0) if tool.get('binding_config') else 0
+                tool['max_calls_per_task'] = tool.get('binding_config', {}).get('max_calls_per_task', 5) if tool.get('binding_config') else 5
+                tool['timeout_override'] = tool.get('binding_config', {}).get('timeout_override') if tool.get('binding_config') else None
+                tool['custom_config'] = tool.get('binding_config', {}) or {}
+                
                 tools.append(tool)
             
             logger.debug(f"获取Agent {agent_id} 的工具数量: {len(tools)}")
@@ -140,12 +148,17 @@ class AgentToolService:
             await db_manager.execute(
                 """
                 INSERT INTO agent_tool_binding (
-                    binding_id, agent_id, tool_id, user_id, is_enabled,
-                    priority, max_calls_per_task, timeout_override, custom_config
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    binding_id, agent_id, tool_id, user_id, is_active,
+                    binding_config
+                ) VALUES ($1, $2, $3, $4, $5, $6)
                 """,
                 binding_id, agent_id, tool_id, user_id, is_enabled,
-                priority, max_calls_per_task, timeout_override, json.dumps(custom_config)
+                json.dumps({
+                    'priority': priority,
+                    'max_calls_per_task': max_calls_per_task,
+                    'timeout_override': timeout_override,
+                    'custom_config': custom_config
+                })
             )
             
             logger.info(f"工具绑定成功: Agent {agent_id} <-> Tool {tool_id}")
@@ -189,20 +202,37 @@ class AgentToolService:
             params = []
             param_count = 0
             
-            allowed_fields = {
-                'is_enabled', 'priority', 'max_calls_per_task', 
-                'timeout_override', 'custom_config'
-            }
+            # Handle updates to the simplified schema
+            if 'is_enabled' in updates:
+                param_count += 1
+                update_fields.append(f"is_active = ${param_count}")
+                params.append(updates['is_enabled'])
             
-            for field, value in updates.items():
-                if field in allowed_fields:
-                    param_count += 1
-                    if field == 'custom_config' and isinstance(value, dict):
-                        update_fields.append(f"{field} = ${param_count}")
-                        params.append(json.dumps(value))
-                    else:
-                        update_fields.append(f"{field} = ${param_count}")
-                        params.append(value)
+            if 'binding_config' in updates:
+                param_count += 1
+                update_fields.append(f"binding_config = ${param_count}")
+                params.append(json.dumps(updates['binding_config']))
+            
+            # Handle legacy field mappings
+            if any(field in updates for field in ['priority', 'max_calls_per_task', 'timeout_override', 'custom_config']):
+                # Get current binding_config
+                current_config = binding.get('binding_config', {})
+                if isinstance(current_config, str):
+                    current_config = json.loads(current_config)
+                
+                # Update config with new values
+                if 'priority' in updates:
+                    current_config['priority'] = updates['priority']
+                if 'max_calls_per_task' in updates:
+                    current_config['max_calls_per_task'] = updates['max_calls_per_task']
+                if 'timeout_override' in updates:
+                    current_config['timeout_override'] = updates['timeout_override']
+                if 'custom_config' in updates:
+                    current_config['custom_config'] = updates['custom_config']
+                
+                param_count += 1
+                update_fields.append(f"binding_config = ${param_count}")
+                params.append(json.dumps(current_config))
             
             if not update_fields:
                 raise ValueError("没有有效的更新字段")
