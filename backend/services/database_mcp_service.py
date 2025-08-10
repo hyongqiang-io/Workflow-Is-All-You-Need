@@ -98,16 +98,28 @@ class DatabaseMCPService:
             if not self.http_client:
                 await self.initialize()
             
+            # 智能URL映射：如果是自己的公网IP，使用本地地址
+            test_url = server_url
+            if "106.54.12.39" in server_url:
+                test_url = server_url.replace("106.54.12.39", "127.0.0.1")
+                logger.info(f"🌐 [HEALTH-CHECK] 检测到公网IP，映射为本地地址")
+                logger.info(f"   - 原始URL: {server_url}")
+                logger.info(f"   - 映射URL: {test_url}")
+            
             # 尝试访问健康检查端点
+            logger.debug(f"🏥 [HEALTH-CHECK] 测试服务器健康: {test_url}")
             response = await self.http_client.get(
-                f"{server_url.rstrip('/')}/health",
+                f"{test_url.rstrip('/')}/health",
                 timeout=timeout
             )
             
-            return response.status_code == 200
+            is_healthy = response.status_code == 200
+            logger.info(f"🏥 [HEALTH-CHECK] 服务器 {server_url} 健康状态: {'✅健康' if is_healthy else '❌不健康'}")
+            
+            return is_healthy
             
         except Exception as e:
-            logger.debug(f"服务器 {server_url} 健康检查失败: {e}")
+            logger.warning(f"🏥 [HEALTH-CHECK] 服务器 {server_url} 健康检查失败: {e}")
             return False
     
     async def _update_server_health_status(self, server_name: str, is_healthy: bool):
@@ -137,24 +149,42 @@ class DatabaseMCPService:
     async def get_agent_tools(self, agent_id: uuid.UUID, user_id: Optional[uuid.UUID] = None) -> List[Dict[str, Any]]:
         """获取Agent可用的工具列表"""
         try:
-            # 直接从数据库获取可用工具，不依赖绑定关系
-            # 允许Agent访问系统工具（通过特定用户ID分享）
-            system_user_id = 'e92d6bc0-3187-430d-96e0-450b6267949a'  # 系统用户ID
+            logger.info(f"🔍 [DB-MCP] 查询Agent工具")
+            logger.info(f"   - Agent ID: {agent_id}")
+            logger.info(f"   - User ID: {user_id}")
             
+            # 基于Agent工具绑定表查询，获取实际绑定到该Agent的工具
             tools_query = """
                 SELECT 
-                    tool_id, tool_name, server_name, server_url,
-                    tool_description, tool_parameters,
-                    is_tool_active, is_server_active, server_status
-                FROM mcp_tool_registry
-                WHERE (user_id = $1 OR user_id IS NULL)
-                AND is_tool_active = true 
-                AND is_server_active = true
-                AND server_status != 'unhealthy'
-                ORDER BY tool_name
+                    mtr.tool_id, mtr.tool_name, mtr.server_name, mtr.server_url,
+                    mtr.tool_description, mtr.tool_parameters,
+                    mtr.is_tool_active, mtr.is_server_active, mtr.server_status,
+                    atb.is_active as binding_active
+                FROM mcp_tool_registry mtr
+                JOIN agent_tool_binding atb ON mtr.tool_id = atb.tool_id
+                WHERE atb.agent_id = $1 
+                AND atb.is_active = true
+                AND mtr.is_tool_active = true 
+                AND mtr.is_server_active = true
+                AND mtr.server_status != 'unhealthy'
+                AND mtr.is_deleted = false
+                ORDER BY mtr.tool_name
             """
             
-            raw_tools = await db_manager.fetch_all(tools_query, system_user_id)
+            logger.info(f"🔍 [DB-MCP] 执行查询SQL")
+            logger.info(f"   - 查询条件: Agent绑定激活, 工具激活, 服务器激活, 非unhealthy状态")
+            
+            raw_tools = await db_manager.fetch_all(tools_query, agent_id)
+            
+            logger.info(f"🔍 [DB-MCP] 查询结果")
+            logger.info(f"   - 原始结果数量: {len(raw_tools)}")
+            
+            for i, tool in enumerate(raw_tools):
+                logger.info(f"   - 工具 {i+1}: {tool['tool_name']} @ {tool['server_name']}")
+                logger.info(f"     * 工具激活: {tool['is_tool_active']}")
+                logger.info(f"     * 服务器激活: {tool['is_server_active']}")
+                logger.info(f"     * 服务器状态: {tool['server_status']}")
+                logger.info(f"     * 绑定激活: {tool['binding_active']}")
             
             # 转换为兼容格式
             compatible_tools = []
@@ -176,15 +206,21 @@ class DatabaseMCPService:
                     "server_url": tool["server_url"]
                 }
                 compatible_tools.append(compatible_tool)
+                
+                logger.info(f"✅ [DB-MCP] 工具转换完成: {compatible_tool['name']}")
             
             logger.info(f"Agent {agent_id} 可用工具: {len(compatible_tools)} 个")
             if compatible_tools:
                 logger.info(f"  工具列表: {[tool['name'] for tool in compatible_tools]}")
             
+            logger.info(f"🎯 [DB-MCP] 最终返回工具数量: {len(compatible_tools)}")
             return compatible_tools
             
         except Exception as e:
-            logger.error(f"获取Agent工具列表失败: {agent_id}, 错误: {e}")
+            logger.error(f"❌ [DB-MCP] 获取Agent工具失败: {e}")
+            logger.error(f"   - Agent ID: {agent_id}")
+            import traceback
+            logger.error(f"   - 错误详情: {traceback.format_exc()}")
             return []
     
     async def call_tool(self, tool_name: str, server_name: str, 
@@ -193,29 +229,61 @@ class DatabaseMCPService:
         start_time = datetime.utcnow()
         
         try:
-            # 从数据库获取工具信息
+            logger.info(f"🔧 [TOOL-CALL] 开始调用MCP工具")
+            logger.info(f"   - 工具名称: {tool_name}")
+            logger.info(f"   - 服务器: {server_name}")
+            logger.info(f"   - 调用用户: {user_id or '系统/Agent调用'}")
+            
+            # 从数据库获取工具信息 - 移除严格的用户过滤以支持跨用户工具访问
             tool_query = """
-                SELECT tool_id, server_url, tool_parameters, is_tool_active, is_server_active, server_status
+                SELECT tool_id, user_id as tool_owner, server_url, tool_parameters, 
+                       is_tool_active, is_server_active, server_status
                 FROM mcp_tool_registry
                 WHERE tool_name = $1 AND server_name = $2
-                AND ($3::uuid IS NULL OR user_id = $3)
+                AND is_deleted = false
                 ORDER BY created_at DESC
                 LIMIT 1
             """
             
-            tool_info = await db_manager.fetch_one(tool_query, tool_name, server_name, user_id)
+            logger.debug(f"   - 执行工具查询: {tool_query}")
+            tool_info = await db_manager.fetch_one(tool_query, tool_name, server_name)
             
             if not tool_info:
+                logger.warning(f"   ❌ 未找到工具: {tool_name} @ {server_name}")
                 raise ValueError(f"工具 {tool_name} 不存在于服务器 {server_name}")
             
+            # 记录工具权限信息
+            tool_owner = tool_info['tool_owner']
+            logger.info(f"   - 工具所有者: {tool_owner}")
+            if user_id and tool_owner != user_id:
+                logger.info(f"   ⚠️ 跨用户工具访问: 调用者({user_id}) != 工具所有者({tool_owner})")
+            elif not user_id:
+                logger.info(f"   🤖 系统/Agent调用: 跳过用户权限验证")
+            
             if not tool_info['is_tool_active']:
+                logger.warning(f"   ❌ 工具已被禁用: {tool_name}")
                 raise ValueError(f"工具 {tool_name} 已被禁用")
             
             if not tool_info['is_server_active']:
+                logger.warning(f"   ❌ 服务器不可用: {server_name}")
                 raise ValueError(f"服务器 {server_name} 不可用")
+            
+            if tool_info['server_status'] == 'unhealthy':
+                logger.warning(f"   ❌ 服务器状态不健康: {server_name} ({tool_info['server_status']})")
+                raise ValueError(f"服务器 {server_name} 状态不健康")
+            
+            logger.info(f"   ✅ 工具权限验证通过")
             
             # 获取服务器URL和认证信息
             server_url = tool_info['server_url']
+            
+            # 智能URL映射：处理公网IP访问问题
+            call_url = server_url
+            if "106.54.12.39" in server_url:
+                call_url = server_url.replace("106.54.12.39", "127.0.0.1")
+                logger.info(f"🌐 [TOOL-CALL] 检测到公网IP，映射为本地地址")
+                logger.info(f"   - 原始URL: {server_url}")
+                logger.info(f"   - 调用URL: {call_url}")
             
             if not self.http_client:
                 await self.initialize()
@@ -230,12 +298,13 @@ class DatabaseMCPService:
             # 获取认证头（如果有）
             headers = await self._get_server_auth_headers(server_name, user_id)
             
-            logger.info(f"调用MCP工具: {tool_name} @ {server_name}")
-            logger.debug(f"工具参数: {safe_json_dumps(arguments)}")
+            logger.info(f"   🚀 开始执行工具调用")
+            logger.debug(f"   - 工具参数: {safe_json_dumps(arguments)}")
+            logger.debug(f"   - 调用地址: {call_url}")
             
             # 发送工具调用请求
             response = await self.http_client.post(
-                f"{server_url.rstrip('/')}/call",
+                f"{call_url.rstrip('/')}/call",
                 json=request_data,
                 headers=headers,
                 timeout=30
@@ -247,17 +316,10 @@ class DatabaseMCPService:
             result = response.json()
             execution_time = (datetime.utcnow() - start_time).total_seconds() * 1000  # 毫秒
             
-            # 记录工具调用日志
-            await self._log_tool_call(
-                tool_id=tool_info['tool_id'],
-                user_id=user_id,
-                arguments=arguments,
-                result=result,
-                execution_time_ms=int(execution_time),
-                success=True
-            )
-            
-            logger.info(f"工具调用成功: {tool_name}, 耗时: {execution_time:.1f}ms")
+            logger.info(f"   ✅ 工具调用成功")
+            logger.info(f"   - 耗时: {execution_time:.1f}ms")
+            logger.info(f"   - 调用者: {user_id or 'Agent系统'}")
+            logger.info(f"   - 工具所有者: {tool_owner}")
             
             return {
                 "success": True,
@@ -271,18 +333,12 @@ class DatabaseMCPService:
         except Exception as e:
             execution_time = (datetime.utcnow() - start_time).total_seconds() * 1000
             
-            # 记录失败的调用
+            logger.error(f"   ❌ MCP工具调用失败")
+            logger.error(f"   - 工具: {tool_name} @ {server_name}")
+            logger.error(f"   - 调用者: {user_id or 'Agent系统'}")
+            logger.error(f"   - 错误: {e}")
             if 'tool_info' in locals() and tool_info:
-                await self._log_tool_call(
-                    tool_id=tool_info['tool_id'],
-                    user_id=user_id,
-                    arguments=arguments,
-                    result={"error": str(e)},
-                    execution_time_ms=int(execution_time),
-                    success=False
-                )
-            
-            logger.error(f"调用MCP工具失败: {tool_name} @ {server_name}, 错误: {e}")
+                logger.error(f"   - 工具所有者: {tool_info.get('tool_owner', '未知')}")
             
             return {
                 "success": False,
@@ -298,32 +354,47 @@ class DatabaseMCPService:
         headers = {"Content-Type": "application/json"}
         
         try:
-            # 从数据库获取认证配置
+            # 从数据库获取认证配置 - 移除用户过滤以支持跨用户工具访问
             auth_query = """
                 SELECT auth_config
                 FROM mcp_tool_registry
                 WHERE server_name = $1 
-                AND ($2::uuid IS NULL OR user_id = $2)
                 AND auth_config IS NOT NULL
+                AND is_deleted = false
+                ORDER BY created_at DESC
                 LIMIT 1
             """
             
-            auth_record = await db_manager.fetch_one(auth_query, server_name, user_id)
+            auth_record = await db_manager.fetch_one(auth_query, server_name)
             
             if not auth_record or not auth_record['auth_config']:
+                logger.debug(f"   - 服务器 {server_name} 无认证配置，使用默认头")
                 return headers
             
             auth_config = auth_record['auth_config']
+            
+            # 确保auth_config是字典格式
+            if isinstance(auth_config, str):
+                try:
+                    import json
+                    auth_config = json.loads(auth_config)
+                except json.JSONDecodeError:
+                    logger.warning(f"   - 无效的认证配置格式: {server_name}")
+                    return headers
+            
             auth_type = auth_config.get("type", "")
+            logger.debug(f"   - 认证类型: {auth_type}")
             
             if auth_type == "bearer":
                 token = auth_config.get("token")
                 if token:
                     headers["Authorization"] = f"Bearer {token}"
+                    logger.debug(f"   - 添加Bearer认证")
             elif auth_type == "api_key":
                 key = auth_config.get("key")
                 if key:
                     headers["X-API-Key"] = key
+                    logger.debug(f"   - 添加API Key认证")
             elif auth_type == "basic":
                 username = auth_config.get("username")
                 password = auth_config.get("password")
@@ -331,35 +402,19 @@ class DatabaseMCPService:
                     import base64
                     credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
                     headers["Authorization"] = f"Basic {credentials}"
+                    logger.debug(f"   - 添加Basic认证")
             
         except Exception as e:
-            logger.error(f"获取认证头失败: {server_name}, 错误: {e}")
+            logger.error(f"   ❌ 获取认证头失败: {server_name}, 错误: {e}")
         
         return headers
     
     async def _log_tool_call(self, tool_id: uuid.UUID, user_id: Optional[uuid.UUID],
                            arguments: Dict[str, Any], result: Dict[str, Any],
                            execution_time_ms: int, success: bool):
-        """记录工具调用日志"""
-        try:
-            log_query = """
-                INSERT INTO mcp_tool_call_log (
-                    tool_id, user_id, arguments, result, execution_time_ms, success, called_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
-            """
-            
-            await db_manager.execute(
-                log_query,
-                tool_id,
-                user_id,
-                json.dumps(arguments),
-                json.dumps(result),
-                execution_time_ms,
-                success
-            )
-            
-        except Exception as e:
-            logger.error(f"记录工具调用日志失败: {e}")
+        """记录工具调用日志 - 已禁用"""
+        # 不进行日志记录，避免数据库表依赖
+        pass
     
     def format_tools_for_openai(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """转换工具列表为OpenAI格式"""

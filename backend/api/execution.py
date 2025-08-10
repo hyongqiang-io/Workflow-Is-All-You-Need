@@ -234,7 +234,7 @@ async def get_workflow_status(
             ) FILTER (WHERE ni.node_instance_id IS NOT NULL) as node_instances
         FROM workflow_instance wi
         LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
-        LEFT JOIN "user" u ON wi.executor_id = u.user_id
+        LEFT JOIN "user" u ON wi.trigger_user_id = u.user_id
         LEFT JOIN node_instance ni ON wi.workflow_instance_id = ni.workflow_instance_id AND ni.is_deleted = FALSE
         LEFT JOIN node n ON ni.node_id = n.node_id
         WHERE wi.workflow_instance_id = $1
@@ -389,7 +389,7 @@ async def get_workflow_instances(
             ) as current_running_nodes
         FROM workflow_instance wi
         LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
-        LEFT JOIN "user" u ON wi.executor_id = u.user_id
+        LEFT JOIN "user" u ON wi.trigger_user_id = u.user_id
         LEFT JOIN node_instance ni ON wi.workflow_instance_id = ni.workflow_instance_id AND ni.is_deleted = FALSE
         LEFT JOIN node n ON ni.node_id = n.node_id
         WHERE wi.workflow_base_id = $1
@@ -472,7 +472,7 @@ async def get_workflow_task_flow(
             u.username as executor_username
         FROM workflow_instance wi
         LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
-        LEFT JOIN "user" u ON wi.executor_id = u.user_id
+        LEFT JOIN "user" u ON wi.trigger_user_id = u.user_id
         WHERE wi.workflow_instance_id = $1 AND wi.is_deleted = FALSE
         """
         
@@ -1488,7 +1488,7 @@ async def delete_workflow_instance(
         logger.info(f"📋 找到工作流实例详细信息:")
         logger.info(f"   - 实例名称: {instance.get('instance_name', '未命名')}")
         logger.info(f"   - 当前状态: {instance.get('status')}")
-        logger.info(f"   - 执行者ID: {instance.get('executor_id')}")
+        logger.info(f"   - 执行者ID: {instance.get('trigger_user_id')}")
         logger.info(f"   - 创建时间: {instance.get('created_at')}")
         logger.info(f"   - 更新时间: {instance.get('updated_at')}")
         logger.info(f"   - 是否已删除: {instance.get('is_deleted', False)}")
@@ -1496,7 +1496,8 @@ async def delete_workflow_instance(
         # 检查权限（只有执行者可以删除）
         logger.info(f"🔍 步骤2: 检查删除权限")
         current_user_id_str = str(current_user.user_id)
-        executor_id_str = str(instance.get('executor_id'))
+        # 数据库字段是 trigger_user_id，不是 executor_id
+        executor_id_str = str(instance.get('trigger_user_id'))
         logger.info(f"   - 当前用户ID: {current_user_id_str}")
         logger.info(f"   - 执行者ID: {executor_id_str}")
         
@@ -2042,7 +2043,7 @@ async def get_workflow_nodes_detail(
         LEFT JOIN node_instance ni_target ON n_target.node_id = ni_target.node_id 
             AND ni_target.workflow_instance_id = $1
         WHERE nc.workflow_id = (
-            SELECT workflow_id FROM workflow_instance WHERE instance_id = $1
+            SELECT workflow_id FROM workflow_instance WHERE workflow_instance_id = $1
         )
         """
         

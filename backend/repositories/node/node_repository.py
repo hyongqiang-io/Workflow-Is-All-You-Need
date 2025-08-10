@@ -119,11 +119,6 @@ class NodeRepository(BaseRepository[Node]):
                 # 没有字段需要更新
                 return await self.get_node_by_base_id(node_base_id, workflow_base_id)
             
-            # 添加更新时间
-            update_fields.append(f"updated_at = ${param_index}")
-            params.append(now_utc())
-            param_index += 1
-            
             # 添加WHERE条件参数
             params.extend([node_base_id, workflow_base_id])
             

@@ -111,7 +111,7 @@ class OpenAIClient:
             logger.info(f"[OPENAI-API] 开始调用 {model}")
             response = await asyncio.wait_for(
                 self.aclient.chat.completions.create(**api_params),
-                timeout=30.0  # 30秒超时
+                timeout=120.0  # 增加到120秒超时
             )
             
             logger.info(f"[OPENAI-API] API调用成功")

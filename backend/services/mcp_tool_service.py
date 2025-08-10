@@ -125,7 +125,8 @@ class MCPToolService:
                         auth_config=auth_config or {},
                         tool_name=tool['name'],
                         tool_description=tool['description'],
-                        tool_parameters=tool['parameters']
+                        tool_parameters=tool['parameters'],
+                        server_status=server_status  # 传入实际的服务器状态
                     )
                     added_tools.append({
                         'tool_id': str(tool_id),
@@ -289,6 +290,17 @@ class MCPToolService:
             server_url = server_config['server_url']
             auth_config = server_config['auth_config'] or {}
             
+            # 确保auth_config是字典类型
+            if isinstance(auth_config, str):
+                try:
+                    import json
+                    auth_config = json.loads(auth_config)
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning(f"无法解析auth_config JSON: {auth_config}")
+                    auth_config = {}
+            elif not isinstance(auth_config, dict):
+                auth_config = {}
+            
             logger.info(f"重新发现服务器工具: {server_name}")
             server_status, discovered_tools = await self._discover_server_tools(server_url, auth_config)
             
@@ -311,7 +323,8 @@ class MCPToolService:
                         auth_config=auth_config,
                         tool_name=tool['name'],
                         tool_description=tool['description'],
-                        tool_parameters=tool['parameters']
+                        tool_parameters=tool['parameters'],
+                        server_status=server_status  # 传入实际的服务器状态
                     )
                     new_tools.append(tool['name'])
                 else:
@@ -332,11 +345,17 @@ class MCPToolService:
             await db_manager.execute(
                 """
                 UPDATE mcp_tool_registry 
-                SET server_status = $1, last_health_check = NOW(), error_count = 0
+                SET server_status = $1, last_health_check = NOW()
                 WHERE user_id = $2 AND server_name = $3
                 """,
                 server_status, user_id, server_name
             )
+            
+            logger.info(f"📊 [STATUS-UPDATE] 服务器状态更新完成")
+            logger.info(f"   - 服务器名称: {server_name}")
+            logger.info(f"   - 新状态: {server_status}")
+            logger.info(f"   - 受影响用户: {user_id}")
+            logger.info(f"   - 更新时间: {datetime.now().isoformat()}")
             
             result = {
                 'server_name': server_name,
@@ -450,53 +469,112 @@ class MCPToolService:
         try:
             await self.initialize()
             
+            logger.info(f"🔍 [SERVER-HEALTH] 开始检查MCP服务器健康状态")
+            logger.info(f"   - 服务器URL: {server_url}")
+            logger.info(f"   - 认证配置: {bool(auth_config)}")
+            
             # 构建认证头
             headers = self._build_auth_headers(auth_config)
             
+            # URL映射：如果是本机外部IP，转换为内部访问
+            internal_url = server_url
+            if "106.54.12.39" in server_url:
+                internal_url = server_url.replace("106.54.12.39", "127.0.0.1")
+                logger.info(f"   - 外部URL映射: {server_url} -> {internal_url}")
+            
             # 健康检查
             try:
+                logger.trace(f"🏥 [HEALTH-CHECK] 发起健康检查请求")
+                logger.trace(f"   - 目标URL: {internal_url}/health")
+                logger.trace(f"   - 超时时间: 10.0秒")
+                
                 health_response = await self.http_client.get(
-                    f"{server_url}/health",
+                    f"{internal_url}/health",
                     headers=headers,
                     timeout=10.0
                 )
+                
+                logger.trace(f"🏥 [HEALTH-CHECK] 健康检查响应")
+                logger.trace(f"   - HTTP状态码: {health_response.status_code}")
+                logger.trace(f"   - 响应时间: {health_response.elapsed.total_seconds():.2f}秒")
+                
                 if health_response.status_code != 200:
+                    logger.warning(f"❌ [SERVER-HEALTH] 服务器健康检查失败")
+                    logger.warning(f"   - HTTP状态: {health_response.status_code}")
+                    logger.warning(f"   - 响应内容: {health_response.text[:200]}")
                     return 'unhealthy', []
-            except:
+                else:
+                    logger.info(f"✅ [SERVER-HEALTH] 服务器健康检查通过")
+                    
+            except Exception as health_error:
+                logger.error(f"❌ [SERVER-HEALTH] 健康检查异常")
+                logger.error(f"   - 错误类型: {type(health_error).__name__}")
+                logger.error(f"   - 错误信息: {health_error}")
                 return 'error', []
             
             # 发现工具
             try:
+                logger.trace(f"🔧 [TOOL-DISCOVERY] 发起工具发现请求")
+                logger.trace(f"   - 目标URL: {internal_url}/tools")
+                logger.trace(f"   - 超时时间: 15.0秒")
+                
                 tools_response = await self.http_client.get(
-                    f"{server_url}/tools",
+                    f"{internal_url}/tools",
                     headers=headers,
                     timeout=15.0
                 )
+                
+                logger.trace(f"🔧 [TOOL-DISCOVERY] 工具发现响应")
+                logger.trace(f"   - HTTP状态码: {tools_response.status_code}")
+                logger.trace(f"   - 响应时间: {tools_response.elapsed.total_seconds():.2f}秒")
                 
                 if tools_response.status_code == 200:
                     tools_data = tools_response.json()
                     tools = tools_data.get('tools', [])
                     
+                    logger.info(f"🔧 [TOOL-DISCOVERY] 成功获取工具定义")
+                    logger.info(f"   - 原始工具数量: {len(tools)}")
+                    
                     # 格式化工具定义
                     formatted_tools = []
-                    for tool in tools:
+                    for i, tool in enumerate(tools):
+                        tool_name = tool.get('name', f'unknown_tool_{i}')
+                        tool_desc = tool.get('description', '无描述')
+                        
                         formatted_tool = {
-                            'name': tool.get('name', ''),
-                            'description': tool.get('description', ''),
-                            'parameters': tool.get('inputSchema', {})
+                            'name': tool_name,
+                            'description': tool_desc,
+                            'parameters': tool.get('inputSchema', tool.get('parameters', {}))
                         }
                         formatted_tools.append(formatted_tool)
+                        
+                        logger.trace(f"   - 工具 {i+1}: {tool_name} ({tool_desc[:50]}...)")
+                    
+                    logger.info(f"✅ [TOOL-DISCOVERY] 工具格式化完成")
+                    logger.info(f"   - 格式化后工具数量: {len(formatted_tools)}")
+                    logger.info(f"   - 服务器最终状态: healthy")
                     
                     return 'healthy', formatted_tools
                 else:
+                    logger.warning(f"❌ [TOOL-DISCOVERY] 获取工具列表失败")
+                    logger.warning(f"   - HTTP状态: {tools_response.status_code}")
+                    logger.warning(f"   - 响应内容: {tools_response.text[:200]}")
+                    logger.warning(f"   - 服务器最终状态: error")
                     return 'error', []
                     
             except Exception as tools_error:
-                logger.warning(f"获取工具列表失败: {tools_error}")
+                logger.warning(f"⚠️ [TOOL-DISCOVERY] 获取工具列表异常")
+                logger.warning(f"   - 错误类型: {type(tools_error).__name__}")
+                logger.warning(f"   - 错误信息: {tools_error}")
+                logger.warning(f"   - 服务器最终状态: healthy (无工具)")
                 return 'healthy', []  # 服务器健康但无工具
                 
         except Exception as e:
-            logger.error(f"发现服务器工具失败: {e}")
+            logger.error(f"❌ [SERVER-HEALTH] 发现服务器工具总体失败")
+            logger.error(f"   - 服务器URL: {server_url}")
+            logger.error(f"   - 错误类型: {type(e).__name__}")
+            logger.error(f"   - 错误信息: {e}")
+            logger.error(f"   - 服务器最终状态: error")
             return 'error', []
     
     async def _call_tool(self, server_url: str, auth_config: Dict[str, Any],
@@ -513,7 +591,7 @@ class MCPToolService:
             }
             
             response = await self.http_client.post(
-                f"{server_url}/tools/call",
+                f"{server_url}/call",  # 修改为 /call 端点
                 json=call_data,
                 headers=headers,
                 timeout=30.0
@@ -559,34 +637,59 @@ class MCPToolService:
     async def _insert_tool(self, user_id: uuid.UUID, server_name: str,
                           server_url: str, server_description: Optional[str],
                           auth_config: Dict[str, Any], tool_name: str,
-                          tool_description: str, tool_parameters: Dict[str, Any]) -> uuid.UUID:
+                          tool_description: str, tool_parameters: Dict[str, Any],
+                          server_status: str = 'healthy') -> uuid.UUID:
         """插入工具到数据库"""
         try:
             tool_id = uuid.uuid4()
+            
+            # 根据服务器状态设置激活状态
+            is_server_active = server_status == 'healthy'
+            
+            logger.info(f"📝 [TOOL-INSERT] 插入工具到数据库")
+            logger.info(f"   - 工具名称: {tool_name}")
+            logger.info(f"   - 服务器名称: {server_name}")
+            logger.info(f"   - 服务器状态: {server_status}")
+            logger.info(f"   - 服务器激活: {is_server_active}")
+            logger.info(f"   - 用户ID: {user_id}")
             
             await db_manager.execute(
                 """
                 INSERT INTO mcp_tool_registry (
                     tool_id, user_id, server_name, server_url, server_description,
                     auth_config, tool_name, tool_description, tool_parameters,
-                    server_status, last_health_check, last_tool_discovery
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+                    server_status, is_server_active, is_tool_active, 
+                    last_health_check, last_tool_discovery
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
                 """,
                 tool_id, user_id, server_name, server_url, server_description,
                 json.dumps(auth_config), tool_name, tool_description,
-                json.dumps(tool_parameters), 'healthy'
+                json.dumps(tool_parameters), server_status, is_server_active, True
             )
             
+            logger.info(f"✅ [TOOL-INSERT] 工具插入成功: {tool_id}")
             return tool_id
             
         except Exception as e:
             if "duplicate key value violates unique constraint" in str(e):
-                # 工具已存在，获取现有ID
+                # 工具已存在，获取现有ID并更新状态
+                logger.info(f"🔄 [TOOL-INSERT] 工具已存在，更新状态: {tool_name}")
                 existing = await db_manager.fetch_one(
                     "SELECT tool_id FROM mcp_tool_registry WHERE user_id = $1 AND server_name = $2 AND tool_name = $3",
                     user_id, server_name, tool_name
                 )
                 if existing:
+                    # 更新现有工具的状态
+                    is_server_active = server_status == 'healthy'
+                    await db_manager.execute(
+                        """
+                        UPDATE mcp_tool_registry 
+                        SET server_status = $1, is_server_active = $2, is_deleted = FALSE, updated_at = NOW()
+                        WHERE tool_id = $3
+                        """,
+                        server_status, is_server_active, existing['tool_id']
+                    )
+                    logger.info(f"✅ [TOOL-INSERT] 现有工具状态已更新: {existing['tool_id']}")
                     return existing['tool_id']
             raise
 

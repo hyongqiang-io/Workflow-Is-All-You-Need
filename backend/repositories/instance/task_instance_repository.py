@@ -447,7 +447,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 query = """
                     SELECT ti.*, 
                            p.name as processor_name, p.type as processor_type,
-                           a.agent_name, a.endpoint as agent_endpoint
+                           a.agent_name, a.base_url as agent_endpoint
                     FROM task_instance ti
                     LEFT JOIN processor p ON p.processor_id = ti.processor_id
                     LEFT JOIN agent a ON a.agent_id = ti.assigned_agent_id
@@ -463,7 +463,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 query = """
                     SELECT ti.*, 
                            p.name as processor_name, p.type as processor_type,
-                           a.agent_name, a.endpoint as agent_endpoint
+                           a.agent_name, a.base_url as agent_endpoint
                     FROM task_instance ti
                     LEFT JOIN processor p ON p.processor_id = ti.processor_id
                     LEFT JOIN agent a ON a.agent_id = ti.assigned_agent_id

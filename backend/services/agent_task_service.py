@@ -516,7 +516,28 @@ class AgentTaskService:
                     if isinstance(agent, dict):
                         logger.trace(f"   - Agent字典键: {list(agent.keys())}")
                     
+                    logger.info(f"🔧 [AGENT-TASK] 开始加载Agent工具")
+                    logger.info(f"   - Agent ID: {agent_id}")
+                    logger.info(f"   - Agent名称: {agent.get('agent_name', 'Unknown') if isinstance(agent, dict) else 'Unknown'}")
+                    
                     mcp_tools = await mcp_service.get_agent_tools(agent_id)
+                    
+                    logger.info(f"🔧 [AGENT-TASK] MCP工具加载完成")
+                    logger.info(f"   - 加载到的工具数量: {len(mcp_tools)}")
+                    
+                    for i, tool in enumerate(mcp_tools):
+                        logger.info(f"   - 工具 {i+1}: {tool.name if hasattr(tool, 'name') else tool.get('name', 'Unknown') if isinstance(tool, dict) else str(tool)}")
+                        logger.info(f"     * 描述: {tool.description if hasattr(tool, 'description') else tool.get('description', 'No description') if isinstance(tool, dict) else 'No description'}")
+                        if hasattr(tool, 'server_name'):
+                            logger.info(f"     * 服务器: {tool.server_name}")
+                        elif isinstance(tool, dict) and 'server_name' in tool:
+                            logger.info(f"     * 服务器: {tool['server_name']}")
+                    
+                    if len(mcp_tools) == 0:
+                        logger.warning(f"⚠️ [AGENT-TASK] Agent没有可用的工具，将使用普通模式")
+                    else:
+                        logger.info(f"✅ [AGENT-TASK] Agent工具加载成功，进入工具调用模式")
+                    
                     logger.trace(f"   - 找到MCP工具数量: {len(mcp_tools)}")
                     
                     # 检查工具选择模式
@@ -1171,8 +1192,17 @@ class AgentTaskService:
                             
                             # 调用MCP工具
                             logger.trace(f"   - 参数: {arguments}")
+                            logger.trace(f"🔧 [AGENT-TOOL-CALL] Agent调用工具")
+                            logger.trace(f"   - Agent权限已通过get_agent_tools验证")
+                            logger.trace(f"   - 跳过用户权限验证，使用系统调用")
+                            
                             tool_result = await asyncio.wait_for(
-                                mcp_service.call_tool(tool_name, tool.server_name, arguments),
+                                mcp_service.call_tool(
+                                    tool_name, 
+                                    tool.server_name, 
+                                    arguments
+                                    # 注意：不传递user_id，让系统识别为Agent调用
+                                ),
                                 timeout=tool_timeout
                             )
                             

@@ -120,7 +120,7 @@ class UserSessionDiagnostic {
         console.log('\\n🌐 检查API连接...');
         
         try {
-            const response = await fetch('http://localhost:8001/api/auth/me', {
+            const response = await fetch('/api/auth/me', {
                 headers: {
                     'Authorization': `Bearer ${localStorage.getItem('token')}`,
                     'Content-Type': 'application/json'

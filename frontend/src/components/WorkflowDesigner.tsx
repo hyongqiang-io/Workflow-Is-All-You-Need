@@ -335,8 +335,12 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
       
       console.log('处理后的节点数据:', workflowNodes);
       
+      // 过滤掉已删除的节点
+      const activeNodes = workflowNodes.filter((node: any) => !node.is_deleted);
+      console.log('过滤删除节点后的数据:', activeNodes);
+      
       // 转换为ReactFlow节点
-      const flowNodes: Node[] = workflowNodes.map((node: any, index: number) => ({
+      const flowNodes: Node[] = activeNodes.map((node: any, index: number) => ({
         id: node.node_base_id || node.node_id,
         type: 'custom',
         position: { 
@@ -357,9 +361,10 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
       
       // 🔍 DEBUG: 检查processor_id是否正确加载
       console.log('🔍 DEBUG: 检查processor_id加载情况:');
-      workflowNodes.forEach((node: any, index: number) => {
+      activeNodes.forEach((node: any, index: number) => {
         console.log(`节点 ${index + 1}: ${node.name} (${node.type})`);
         console.log(`  - processor_id: ${node.processor_id || '未设置'}`);
+        console.log(`  - is_deleted: ${node.is_deleted}`);
         console.log(`  - 完整数据:`, node);
       });
       
@@ -835,38 +840,24 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
         return;
       }
       
-      console.log('从本地状态删除节点...');
-      // 先从本地删除（即使后端失败也能看到效果）
-      setNodes(prevNodes => {
-        const newNodes = prevNodes.filter(n => n.id !== nodeId);
-        console.log('更新后的节点数量:', newNodes.length);
-        return newNodes;
-      });
-      setEdges(prevEdges => {
-        const newEdges = prevEdges.filter(edge => edge.source !== nodeId && edge.target !== nodeId);
-        console.log('更新后的边数量:', newEdges.length);
-        return newEdges;
-      });
-      
-      // 尝试从后端删除
-      try {
-        if (workflowId && node.data.nodeId) {
-          console.log('调用后端删除API...');
-          await nodeAPI.deleteNode(node.data.nodeId, workflowId);
-          message.success('节点删除成功');
-        } else {
-          console.log('仅本地删除，workflowId:', workflowId, 'nodeId:', node.data.nodeId);
-          message.success('节点已删除（仅本地）');
-        }
-      } catch (deleteError) {
-        console.warn('后端删除失败，但本地已删除:', deleteError);
-        message.warning('节点已删除，但服务器同步失败');
+      // 调用后端删除API
+      if (workflowId && node.data.nodeId) {
+        console.log('调用后端删除API...');
+        await nodeAPI.deleteNode(node.data.nodeId, workflowId);
+        message.success('节点删除成功');
+        
+        // 删除成功后重新加载工作流数据
+        console.log('重新加载工作流数据...');
+        await loadWorkflow();
+      } else {
+        console.log('缺少必要参数，workflowId:', workflowId, 'nodeId:', node.data.nodeId);
+        message.error('删除失败：缺少必要参数');
       }
     } catch (error: any) {
       console.error('删除节点失败:', error);
       message.error('删除节点失败');
     }
-  }, [nodes, setNodes, setEdges, workflowId]);
+  }, [nodes, workflowId, loadWorkflow]);
 
   const handleDeleteEdge = useCallback(async (edgeId: string) => {
     try {

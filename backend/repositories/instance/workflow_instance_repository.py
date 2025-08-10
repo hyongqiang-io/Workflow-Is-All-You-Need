@@ -52,11 +52,9 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             workflow_instance_id = uuid.uuid4()
             data = {
                 "workflow_instance_id": workflow_instance_id,  # Primary key
-                "instance_id": workflow_instance_id,  # Keep both fields for compatibility
                 "workflow_base_id": instance_data.workflow_base_id,
                 "workflow_id": workflow['workflow_id'],
                 "trigger_user_id": instance_data.executor_id,  # Map executor_id to trigger_user_id for database
-                "executor_id": instance_data.executor_id,
                 "workflow_instance_name": instance_data.instance_name,
                 "input_data": safe_json_dumps(instance_data.input_data or {}),
                 "context_data": safe_json_dumps(instance_data.context_data or {}),
@@ -103,8 +101,8 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                 SELECT wi.*, w.name as workflow_name, u.username as executor_name
                 FROM workflow_instance wi
                 LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
-                LEFT JOIN "user" u ON u.user_id = wi.executor_id
-                WHERE wi.instance_id = $1 AND wi.is_deleted = FALSE
+                LEFT JOIN "user" u ON u.user_id = wi.trigger_user_id
+                WHERE wi.workflow_instance_id = $1 AND wi.is_deleted = FALSE
             """
             result = await self.db.fetch_one(query, instance_id)
             if result:
@@ -176,7 +174,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                 return await self.get_instance_by_id(instance_id)
             
             logger.info(f"💾 更新工作流实例数据库记录: {instance_id}")
-            result = await self.update(instance_id, data, "instance_id")
+            result = await self.update(instance_id, data, "workflow_instance_id")
             if result:
                 logger.info(f"✅ 工作流实例状态更新成功!")
                 logger.info(f"   - 实例ID: {instance_id}")
@@ -208,8 +206,8 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                     SELECT wi.*, w.name as workflow_name, u.username as executor_name
                     FROM workflow_instance wi
                     LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
-                    LEFT JOIN "user" u ON u.user_id = wi.executor_id
-                    WHERE wi.executor_id = $1 AND wi.status = $2 AND wi.is_deleted = FALSE
+                    LEFT JOIN "user" u ON u.user_id = wi.trigger_user_id
+                    WHERE wi.trigger_user_id = $1 AND wi.status = $2 AND wi.is_deleted = FALSE
                     ORDER BY wi.created_at DESC
                     LIMIT $3
                 """
@@ -219,8 +217,8 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                     SELECT wi.*, w.name as workflow_name, u.username as executor_name
                     FROM workflow_instance wi
                     LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
-                    LEFT JOIN "user" u ON u.user_id = wi.executor_id
-                    WHERE wi.executor_id = $1 AND wi.is_deleted = FALSE
+                    LEFT JOIN "user" u ON u.user_id = wi.trigger_user_id
+                    WHERE wi.trigger_user_id = $1 AND wi.is_deleted = FALSE
                     ORDER BY wi.created_at DESC
                     LIMIT $2
                 """
@@ -260,7 +258,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                 SELECT wi.*, w.name as workflow_name, u.username as executor_name
                 FROM workflow_instance wi
                 LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
-                LEFT JOIN "user" u ON u.user_id = wi.executor_id
+                LEFT JOIN "user" u ON u.user_id = wi.trigger_user_id
                 WHERE wi.workflow_base_id = $1 AND wi.is_deleted = FALSE
                 ORDER BY wi.created_at DESC
                 LIMIT $2
@@ -300,7 +298,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                 SELECT wi.*, w.name as workflow_name, u.username as executor_name
                 FROM workflow_instance wi
                 LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
-                LEFT JOIN "user" u ON u.user_id = wi.executor_id
+                LEFT JOIN "user" u ON u.user_id = wi.trigger_user_id
                 WHERE wi.status = $1 AND wi.is_deleted = FALSE
                 ORDER BY wi.started_at ASC
                 LIMIT $2
@@ -357,13 +355,13 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             
             if soft_delete:
                 logger.info(f"🎯 执行软删除操作")
-                logger.info(f"   - 调用 self.update({instance_id}, {{'is_deleted': True}}, 'instance_id')")
+                logger.info(f"   - 调用 self.update({instance_id}, {{'is_deleted': True}}, 'workflow_instance_id')")
                 
                 try:
                     result = await self.update(instance_id, {
                         "is_deleted": True,
                         "updated_at": now_utc()
-                    }, "instance_id")
+                    }, "workflow_instance_id")
                     
                     logger.info(f"   - update()方法返回结果: {result}")
                     success = result is not None
@@ -390,7 +388,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                     
             else:
                 logger.info(f"🎯 执行硬删除操作")
-                query = "DELETE FROM workflow_instance WHERE instance_id = $1"
+                query = "DELETE FROM workflow_instance WHERE workflow_instance_id = $1"
                 logger.info(f"   - SQL查询: {query}")
                 logger.info(f"   - 参数: {instance_id}")
                 
@@ -550,9 +548,9 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                     SELECT wi.*, w.name as workflow_name, u.username as executor_name
                     FROM workflow_instance wi
                     LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
-                    LEFT JOIN "user" u ON u.user_id = wi.executor_id
+                    LEFT JOIN "user" u ON u.user_id = wi.trigger_user_id
                     WHERE (wi.workflow_instance_name ILIKE $1 OR w.name ILIKE $1) 
-                          AND wi.executor_id = $2 AND wi.is_deleted = FALSE
+                          AND wi.trigger_user_id = $2 AND wi.is_deleted = FALSE
                     ORDER BY wi.created_at DESC
                     LIMIT $3
                 """
@@ -562,7 +560,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                     SELECT wi.*, w.name as workflow_name, u.username as executor_name
                     FROM workflow_instance wi
                     LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
-                    LEFT JOIN "user" u ON u.user_id = wi.executor_id
+                    LEFT JOIN "user" u ON u.user_id = wi.trigger_user_id
                     WHERE (wi.workflow_instance_name ILIKE $1 OR w.name ILIKE $1) 
                           AND wi.is_deleted = FALSE
                     ORDER BY wi.created_at DESC

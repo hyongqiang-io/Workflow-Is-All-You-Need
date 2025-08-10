@@ -3,8 +3,6 @@ import { Form, Input, Button, message, Card, Typography } from 'antd';
 import { UserOutlined, LockOutlined, LoginOutlined } from '@ant-design/icons';
 import { useAuthStore } from '../../stores/authStore';
 import { useNavigate } from 'react-router-dom';
-import ApiTest from '../../components/ApiTest';
-import AuthDebug from '../../components/AuthDebug';
 // import ReactFlowDebug from '../../components/ReactFlowDebug';
 
 const { Title, Text } = Typography;
@@ -46,8 +44,6 @@ const Login: React.FC = () => {
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
       padding: '20px'
     }}>
-      <ApiTest />
-      <AuthDebug />
       {/* <ReactFlowDebug /> */}
       
       {/* 欢迎信息 */}
