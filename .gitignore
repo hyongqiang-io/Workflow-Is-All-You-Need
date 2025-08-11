@@ -141,7 +141,6 @@ configure_*.py
 create_*.py
 debug_*.py
 enhanced_*.py
-execution_*.py
 final_*.py
 fix_*.py
 live_*.py
