@@ -154,11 +154,11 @@ class ExecutionEngine:
                 }
             
             # 2. 创建工作流实例
-            logger.trace(f"步骤2: 创建工作流实例 '{request.instance_name}'")
+            logger.trace(f"步骤2: 创建工作流实例 '{request.workflow_instance_name}'")
             instance_data = WorkflowInstanceCreate(
                 workflow_base_id=request.workflow_base_id,
                 executor_id=executor_id,
-                instance_name=request.instance_name,
+                workflow_instance_name=request.workflow_instance_name,
                 input_data=request.input_data,
                 context_data=request.context_data
             )
@@ -169,7 +169,7 @@ class ExecutionEngine:
                 raise RuntimeError("创建工作流实例失败")
             
             instance_id = instance['workflow_instance_id']
-            logger.trace(f"✅ 工作流实例创建成功: {request.instance_name} (ID: {instance_id})")
+            logger.trace(f"✅ 工作流实例创建成功: {request.workflow_instance_name} (ID: {instance_id})")
             
             # 3. 获取工作流的所有节点（使用具体版本ID）
             logger.trace(f"步骤3: 查询工作流版本 {workflow_id} 的所有节点")
@@ -225,7 +225,7 @@ class ExecutionEngine:
                 # 输出执行启动的完整状态
                 print(f"\n🚀 【工作流启动成功】")
                 print(f"工作流: {workflow.get('name', 'Unknown')}")
-                print(f"实例名称: {request.instance_name}")
+                print(f"实例名称: {request.workflow_instance_name}")
                 print(f"实例ID: {instance_id} - 新架构")
                 print(f"执行者: {executor_id}")
                 print(f"节点数量: {len(nodes)}")

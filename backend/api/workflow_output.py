@@ -353,7 +353,7 @@ async def get_instance_output_summary(
             "success": True,
             "data": {
                 "instance_id": instance_id,
-                "instance_name": instance.get('workflow_instance_name'),
+                "workflow_instance_name": instance.get('workflow_instance_name'),
                 "workflow_name": instance.get('workflow_name'),
                 "status": instance.get('status'),
                 "output_summary": instance.get('output_summary'),
@@ -406,7 +406,7 @@ async def validate_workflow_outputs(
             
             validation_results.append({
                 "instance_id": instance_id,
-                "instance_name": instance.get('workflow_instance_name'),
+                "workflow_instance_name": instance.get('workflow_instance_name'),
                 "validation_result": result.to_dict()
             })
         

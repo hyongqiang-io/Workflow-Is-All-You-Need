@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // 创建axios实例
 const api = axios.create({
-  baseURL: '/api', // 使用相对路径通过nginx代理
+  baseURL: process.env.REACT_APP_API_BASE_URL || '/api', // 优先使用环境变量，否则使用nginx代理
   timeout: 60000, // 增加到60秒，因为工作流执行可能需要更长时间
   headers: {
     'Content-Type': 'application/json',
@@ -402,8 +402,19 @@ export const testAPI = {
 // 执行相关API
 export const executionAPI = {
   // 执行工作流
-  executeWorkflow: (data: { workflow_base_id: string; workflow_instance_name: string; input_data?: any; context_data?: any }) =>
-    api.post('/execution/workflows/execute', data),
+  executeWorkflow: (data: { workflow_base_id: string; workflow_instance_name: string; input_data?: any; context_data?: any }) => {
+    // 确保字段名正确，防止任何可能的字段名错误
+    const requestData = {
+      workflow_base_id: data.workflow_base_id,
+      workflow_instance_name: data.workflow_instance_name,
+      input_data: data.input_data || {},
+      context_data: data.context_data || {}
+    };
+    
+    console.log('🔧 API层发送的数据:', requestData);
+    
+    return api.post('/execution/workflows/execute', requestData);
+  },
 
   // 控制工作流
   controlWorkflow: (instanceId: string, data: { action: 'pause' | 'resume' | 'cancel'; reason?: string }) =>

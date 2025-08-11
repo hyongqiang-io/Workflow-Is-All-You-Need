@@ -28,7 +28,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
     
     async def create_instance(self, instance_data: WorkflowInstanceCreate) -> Optional[Dict[str, Any]]:
         """创建工作流实例"""
-        logger.info(f"🚀 开始创建工作流实例: {instance_data.instance_name}")
+        logger.info(f"🚀 开始创建工作流实例: {instance_data.workflow_instance_name}")
         logger.info(f"   - 工作流Base ID: {instance_data.workflow_base_id}")
         logger.info(f"   - 执行者ID: {instance_data.executor_id}")
         logger.info(f"   - 输入数据: {len(instance_data.input_data or {})} 个字段")
@@ -55,7 +55,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                 "workflow_base_id": instance_data.workflow_base_id,
                 "workflow_id": workflow['workflow_id'],
                 "executor_id": instance_data.executor_id,
-                "workflow_instance_name": instance_data.instance_name,
+                "workflow_instance_name": instance_data.workflow_instance_name,
                 "input_data": safe_json_dumps(instance_data.input_data or {}),
                 "context_data": safe_json_dumps(instance_data.context_data or {}),
                 "status": WorkflowInstanceStatus.PENDING.value,
@@ -65,7 +65,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             }
             
             logger.info(f"💾 写入数据库: 工作流实例 {workflow_instance_id}")
-            logger.info(f"   - 实例名称: {instance_data.instance_name}")
+            logger.info(f"   - 实例名称: {instance_data.workflow_instance_name}")
             logger.info(f"   - 初始状态: {WorkflowInstanceStatus.PENDING.value}")
             logger.info(f"   - 关联工作流: {workflow['name']}")
             
@@ -73,7 +73,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             if result:
                 logger.info(f"✅ 工作流实例创建成功!")
                 logger.info(f"   - 实例ID: {result['workflow_instance_id']}")
-                logger.info(f"   - 实例名称: {instance_data.instance_name}")
+                logger.info(f"   - 实例名称: {instance_data.workflow_instance_name}")
                 logger.info(f"   - 状态: {result.get('status', 'unknown')}")
                 logger.info(f"   - 创建时间: {result.get('created_at', 'unknown')}")
                 
@@ -88,7 +88,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             return result
         except Exception as e:
             logger.error(f"❌ 创建工作流实例失败: {e}")
-            logger.error(f"   - 实例名称: {instance_data.instance_name}")
+            logger.error(f"   - 实例名称: {instance_data.workflow_instance_name}")
             logger.error(f"   - 工作流Base ID: {instance_data.workflow_base_id}")
             import traceback
             logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
@@ -135,8 +135,8 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             # 准备更新数据
             data = {"updated_at": now_utc()}
             
-            if update_data.instance_name is not None:
-                data["workflow_instance_name"] = update_data.instance_name
+            if update_data.workflow_instance_name is not None:
+                data["workflow_instance_name"] = update_data.workflow_instance_name
             if update_data.status is not None:
                 data["status"] = update_data.status.value
             if update_data.input_data is not None:

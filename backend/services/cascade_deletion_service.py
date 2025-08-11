@@ -80,9 +80,9 @@ class CascadeDeletionService:
             
             for instance in instances:
                 instance_id = instance['workflow_instance_id']
-                instance_name = instance.get('workflow_instance_name', '未命名')
+                workflow_instance_name = instance.get('workflow_instance_name', '未命名')
                 
-                logger.info(f"📋 删除工作流实例: {instance_name} ({instance_id})")
+                logger.info(f"📋 删除工作流实例: {workflow_instance_name} ({instance_id})")
                 
                 # 级联删除单个工作流实例
                 instance_deletion = await self.delete_workflow_instance_cascade(
@@ -93,7 +93,7 @@ class CascadeDeletionService:
                 total_deleted_nodes += instance_deletion['deleted_nodes']
                 deletion_stats['instance_details'].append({
                     'instance_id': str(instance_id),
-                    'instance_name': instance_name,
+                    'workflow_instance_name': workflow_instance_name,
                     'deleted_tasks': instance_deletion['deleted_tasks'],
                     'deleted_nodes': instance_deletion['deleted_nodes'],
                     'success': instance_deletion['deleted_workflow']
@@ -175,7 +175,7 @@ class CascadeDeletionService:
                 'instance_details': [
                     {
                         'instance_id': str(inst['workflow_instance_id']),
-                        'instance_name': inst.get('workflow_instance_name', '未命名'),
+                        'workflow_instance_name': inst.get('workflow_instance_name', '未命名'),
                         'status': inst.get('status'),
                         'node_count': int(inst.get('node_count', 0)),
                         'task_count': int(inst.get('task_count', 0))

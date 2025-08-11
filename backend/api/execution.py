@@ -51,6 +51,30 @@ class TaskAssignmentRequest(BaseModel):
 
 # ==================== 工作流执行端点 ====================
 
+@router.post("/workflows/execute/debug")
+async def debug_execute_workflow(request: Request):
+    """调试执行工作流请求"""
+    from loguru import logger
+    try:
+        # 获取原始请求体
+        raw_body = await request.body()
+        logger.info(f"🔍 调试 - 原始请求体: {raw_body.decode('utf-8')}")
+        
+        # 解析JSON
+        import json
+        json_data = json.loads(raw_body)
+        logger.info(f"🔍 调试 - 解析后的JSON: {json_data}")
+        
+        # 检查每个字段
+        for key, value in json_data.items():
+            logger.info(f"🔍 调试 - 字段 '{key}': {value} (类型: {type(value)})")
+        
+        return {"status": "debug", "received_data": json_data}
+    except Exception as e:
+        logger.error(f"调试端点错误: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @router.post("/workflows/execute")
 async def execute_workflow(
     request: WorkflowExecuteRequest,
@@ -59,7 +83,12 @@ async def execute_workflow(
     """执行工作流"""
     try:
         from loguru import logger
-        logger.info(f"执行工作流请求: workflow_base_id={request.workflow_base_id}, workflow_instance_name={request.workflow_instance_name}, user_id={current_user.user_id}")
+        logger.info(f"🚀 收到工作流执行请求")
+        logger.info(f"   - workflow_base_id: {request.workflow_base_id} (类型: {type(request.workflow_base_id)})")
+        logger.info(f"   - workflow_instance_name: {request.workflow_instance_name} (类型: {type(request.workflow_instance_name)})")
+        logger.info(f"   - user_id: {current_user.user_id}")
+        logger.info(f"   - input_data: {request.input_data}")
+        logger.info(f"   - context_data: {request.context_data}")
         
         # 尝试执行工作流，如果失败则返回详细错误
         try:
@@ -325,7 +354,7 @@ async def get_workflow_status(
         
         formatted_instance = {
             "instance_id": str(result["workflow_instance_id"]),
-            "instance_name": result.get("workflow_instance_name"),
+            "workflow_instance_name": result.get("workflow_instance_name"),
             "workflow_name": result.get("workflow_name"),
             "status": result.get("status"),
             "executor_id": str(result.get("executor_id")) if result.get("executor_id") else None,
@@ -416,7 +445,7 @@ async def get_workflow_instances(
             
             formatted_instances.append({
                 "instance_id": str(instance["workflow_instance_id"]),
-                "instance_name": instance.get("workflow_instance_name"),
+                "workflow_instance_name": instance.get("workflow_instance_name"),
                 "workflow_name": instance.get("workflow_name"),
                 "status": instance.get("status"),
                 "executor_id": str(instance.get("executor_id")) if instance.get("executor_id") else None,
@@ -2084,7 +2113,7 @@ async def get_workflow_nodes_detail(
         workflow_statistics = {
             "workflow_instance_id": str(instance_id),
             "workflow_name": workflow_instance.get('workflow_name'),
-            "instance_name": workflow_instance.get('workflow_instance_name'),
+            "workflow_instance_name": workflow_instance.get('workflow_instance_name'),
             "status": workflow_instance.get('status'),
             "node_statistics": {
                 "total_nodes": total_nodes,
@@ -2257,7 +2286,7 @@ async def get_workflow_instance_deletion_preview(
         
         preview = {
             'workflow_instance_id': str(workflow_instance_id),
-            'instance_name': existing_instance.get('workflow_instance_name', '未命名'),
+            'workflow_instance_name': existing_instance.get('workflow_instance_name', '未命名'),
             'status': existing_instance.get('status'),
             'total_node_instances': int(node_result.get('node_count', 0)),
             'total_task_instances': int(task_result.get('task_count', 0)),

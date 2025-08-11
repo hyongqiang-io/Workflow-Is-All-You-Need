@@ -160,7 +160,12 @@
       "Bash(dos2unix:*)",
       "Bash(docker-compose:*)",
       "Bash(kill:*)",
-      "Bash(powershell.exe:*)"
+      "Bash(powershell.exe:*)",
+      "Bash(docker inspect:*)",
+      "Bash(docker logs:*)",
+      "Bash(docker rm:*)",
+      "Bash(docker build:*)",
+      "Bash(docker run:*)"
     ],
     "deny": []
   }

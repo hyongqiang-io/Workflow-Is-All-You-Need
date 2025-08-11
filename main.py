@@ -6,6 +6,8 @@ Workflow Framework Main Application
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from loguru import logger
 import sys
 import time
@@ -82,6 +84,46 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Pydantic请求验证错误处理器"""
+    logger.error(f"🚨 请求验证失败: {request.method} {request.url.path}")
+    logger.error(f"🚨 验证错误详情: {exc.errors()}")
+    
+    # 获取原始请求体用于调试
+    try:
+        if hasattr(request, '_body'):
+            body = request._body
+        else:
+            body = await request.body()
+        logger.error(f"🚨 原始请求体: {body.decode('utf-8')}")
+    except Exception as e:
+        logger.error(f"🚨 无法读取请求体: {e}")
+    
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "message": "请求数据验证失败"
+        }
+    )
+
+
+@app.exception_handler(ValidationError)
+async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
+    """Pydantic数据验证错误处理器"""
+    logger.error(f"🚨 数据验证失败: {request.method} {request.url.path}")
+    logger.error(f"🚨 Pydantic错误详情: {exc.errors()}")
+    
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "message": "数据格式验证失败"
+        }
+    )
 
 
 @app.exception_handler(BusinessException)
@@ -282,7 +324,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8001,  # 恢复为8001端口
+        port=8002,  # 使用8002端口避免冲突
         reload=False,  # 禁用自动重载以防止服务自动关闭
         log_level="info"
     )

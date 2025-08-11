@@ -189,15 +189,73 @@ const WorkflowPage: React.FC = () => {
 
   const handleExecute = async (workflow: WorkflowItem) => {
     try {
-      await executionAPI.executeWorkflow({
-        workflow_base_id: workflow.baseId, // 使用workflow_base_id执行
-        workflow_instance_name: `${workflow.name}_执行_${Date.now()}`
-      });
+      // 确保workflow_base_id是有效的UUID格式
+      const workflowBaseId = workflow.baseId || workflow.id; // fallback to workflow.id if baseId is missing
+      
+      // 验证UUID格式
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!workflowBaseId || !uuidRegex.test(workflowBaseId)) {
+        throw new Error(`无效的工作流ID格式: ${workflowBaseId}`);
+      }
+      
+      // 确保workflow_instance_name不为空
+      const instanceName = `${workflow.name}_执行_${Date.now()}`;
+      if (!instanceName || instanceName.length === 0) {
+        throw new Error('实例名称不能为空');
+      }
+      
+      const requestData = {
+        workflow_base_id: workflowBaseId,
+        workflow_instance_name: instanceName,
+        input_data: {},  // 添加空的input_data
+        context_data: {}  // 添加空的context_data
+      };
+      
+      console.log('发送的请求数据:', requestData);
+      console.log('workflow对象:', workflow);
+      console.log('workflow.baseId:', workflow.baseId);
+      console.log('workflow.id:', workflow.id);
+      console.log('UUID验证结果:', uuidRegex.test(workflowBaseId));
+      
+      await executionAPI.executeWorkflow(requestData);
       message.success('工作流执行已启动');
       loadWorkflows();
     } catch (error: any) {
       console.error('执行失败:', error);
-      message.error(error.response?.data?.detail || '执行工作流失败');
+      console.error('错误详情:', error.response?.data);
+      
+      // 特别展开detail数组的内容
+      if (error.response?.data?.detail && Array.isArray(error.response.data.detail)) {
+        console.error('Pydantic验证错误详情:');
+        error.response.data.detail.forEach((item: any, index: number) => {
+          console.error(`错误 ${index + 1}:`, {
+            type: item.type,
+            location: item.loc,
+            message: item.msg,
+            input: item.input
+          });
+        });
+      }
+      
+      // 详细的错误信息处理
+      let errorMessage = '执行工作流失败';
+      if (error.response?.data?.detail) {
+        if (Array.isArray(error.response.data.detail)) {
+          // FastAPI验证错误格式
+          const details = error.response.data.detail.map((item: any) => 
+            `${item.loc?.join('.')} - ${item.msg}`
+          ).join('; ');
+          errorMessage = `验证错误: ${details}`;
+        } else {
+          errorMessage = error.response.data.detail;
+        }
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      message.error(errorMessage);
     }
   };
 

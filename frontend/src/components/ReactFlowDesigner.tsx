@@ -281,9 +281,29 @@ const ReactFlowDesigner: React.FC<ReactFlowDesignerProps> = ({ workflowId, onSav
       } else {
         message.error(response.data?.message || '工作流执行失败');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('执行工作流失败:', error);
-      message.error('执行工作流失败');
+      console.error('错误详情:', error.response?.data);
+      
+      // 详细的错误信息处理
+      let errorMessage = '执行工作流失败';
+      if (error.response?.data?.detail) {
+        if (Array.isArray(error.response.data.detail)) {
+          // FastAPI验证错误格式
+          const details = error.response.data.detail.map((item: any) => 
+            `${item.loc?.join('.')} - ${item.msg}`
+          ).join('; ');
+          errorMessage = `验证错误: ${details}`;
+        } else {
+          errorMessage = error.response.data.detail;
+        }
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      message.error(errorMessage);
     }
   };
 
