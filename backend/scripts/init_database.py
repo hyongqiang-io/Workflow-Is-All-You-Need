@@ -260,7 +260,6 @@ CREATE TABLE IF NOT EXISTS workflow_instance (
     workflow_base_id UUID NOT NULL,
     executor_id UUID NOT NULL,
     workflow_instance_name VARCHAR(255),
-    instance_name VARCHAR(255) NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'paused', 'completed', 'failed', 'cancelled')),
     input_data JSONB,
     context_data JSONB,
@@ -779,7 +778,6 @@ SELECT
     wi.workflow_base_id,
     wi.executor_id,
     wi.workflow_instance_name,
-    wi.instance_name,
     wi.status,
     wi.input_data,
     wi.context_data,
@@ -808,7 +806,7 @@ JOIN "user" u ON u.user_id = wi.executor_id
 LEFT JOIN node_instance ni ON ni.workflow_instance_id = wi.workflow_instance_id AND ni.is_deleted = FALSE
 WHERE wi.is_deleted = FALSE
 GROUP BY wi.workflow_instance_id, wi.workflow_id, wi.workflow_base_id, wi.executor_id,
-         wi.workflow_instance_name, wi.instance_name, wi.status, wi.input_data, 
+         wi.workflow_instance_name, wi.status, wi.input_data, 
          wi.context_data, wi.output_data, wi.started_at, wi.completed_at, 
          wi.error_message, wi.current_node_id, wi.retry_count, wi.execution_summary,
          wi.quality_metrics, wi.data_lineage, wi.output_summary, wi.created_at, wi.updated_at,

@@ -474,7 +474,7 @@ class WorkflowContextManager:
                     created_at = workflow_instance.get('created_at')
                     context_data['workflow'] = {
                         'name': workflow_instance.get('workflow_name'),
-                        'instance_name': workflow_instance.get('instance_name'), 
+                        'instance_name': workflow_instance.get('workflow_instance_name'), 
                         'status': workflow_instance.get('status'),
                         'input_data': workflow_instance.get('input_data', {}),
                         'created_at': created_at.isoformat() if hasattr(created_at, 'isoformat') else str(created_at),

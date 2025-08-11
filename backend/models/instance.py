@@ -54,7 +54,7 @@ class TaskInstanceType(str, Enum):
 
 class WorkflowInstanceBase(BaseModel):
     """工作流实例基础模型"""
-    instance_name: str = Field(..., min_length=1, max_length=255, description="实例名称")
+    workflow_instance_name: str = Field(..., min_length=1, max_length=255, description="实例名称")
     input_data: Optional[Dict[str, Any]] = Field(None, description="输入数据")
     context_data: Optional[Dict[str, Any]] = Field(None, description="上下文数据")
 
@@ -86,7 +86,7 @@ class WorkflowInstanceCreate(WorkflowInstanceBase, CreateRequest):
 
 class WorkflowInstanceUpdate(UpdateRequest):
     """工作流实例更新模型"""
-    instance_name: Optional[str] = Field(None, min_length=1, max_length=255, description="实例名称")
+    workflow_instance_name: Optional[str] = Field(None, min_length=1, max_length=255, description="实例名称")
     status: Optional[WorkflowInstanceStatus] = Field(None, description="执行状态")
     input_data: Optional[Dict[str, Any]] = Field(None, description="输入数据")
     context_data: Optional[Dict[str, Any]] = Field(None, description="上下文数据")
@@ -264,7 +264,7 @@ class TaskInstanceResponse(TaskInstanceBase):
 class WorkflowExecuteRequest(BaseModel):
     """工作流执行请求模型"""
     workflow_base_id: uuid.UUID = Field(..., description="工作流基础ID")
-    instance_name: str = Field(..., min_length=1, max_length=255, description="实例名称")
+    workflow_instance_name: str = Field(..., min_length=1, max_length=255, description="实例名称")
     input_data: Optional[Dict[str, Any]] = Field(None, description="输入数据")
     context_data: Optional[Dict[str, Any]] = Field(None, description="上下文数据")
 

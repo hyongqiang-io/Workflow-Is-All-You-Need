@@ -64,7 +64,7 @@ class CascadeDeletionService:
             # 1. 查找所有基于此工作流的实例
             logger.info(f"📋 步骤1: 查找所有相关的工作流实例")
             instances_query = """
-                SELECT workflow_instance_id, instance_name, status 
+                SELECT workflow_instance_id, workflow_instance_name, status 
                 FROM workflow_instance 
                 WHERE workflow_base_id = $1 AND is_deleted = FALSE
             """
@@ -80,7 +80,7 @@ class CascadeDeletionService:
             
             for instance in instances:
                 instance_id = instance['workflow_instance_id']
-                instance_name = instance.get('instance_name', '未命名')
+                instance_name = instance.get('workflow_instance_name', '未命名')
                 
                 logger.info(f"📋 删除工作流实例: {instance_name} ({instance_id})")
                 
@@ -139,7 +139,7 @@ class CascadeDeletionService:
             
             # 查询所有相关的工作流实例
             instances_query = """
-                SELECT wi.workflow_instance_id, wi.instance_name, wi.status,
+                SELECT wi.workflow_instance_id, wi.workflow_instance_name, wi.status,
                        COUNT(DISTINCT ni.node_instance_id) as node_count,
                        COUNT(DISTINCT ti.task_instance_id) as task_count
                 FROM workflow_instance wi
@@ -148,7 +148,7 @@ class CascadeDeletionService:
                 LEFT JOIN task_instance ti ON wi.workflow_instance_id = ti.workflow_instance_id 
                                              AND ti.is_deleted = FALSE
                 WHERE wi.workflow_base_id = $1 AND wi.is_deleted = FALSE
-                GROUP BY wi.workflow_instance_id, wi.instance_name, wi.status
+                GROUP BY wi.workflow_instance_id, wi.workflow_instance_name, wi.status
             """
             instances = await self.workflow_instance_repo.db.fetch_all(
                 instances_query, workflow_base_id
@@ -175,7 +175,7 @@ class CascadeDeletionService:
                 'instance_details': [
                     {
                         'instance_id': str(inst['workflow_instance_id']),
-                        'instance_name': inst.get('instance_name', '未命名'),
+                        'instance_name': inst.get('workflow_instance_name', '未命名'),
                         'status': inst.get('status'),
                         'node_count': int(inst.get('node_count', 0)),
                         'task_count': int(inst.get('task_count', 0))

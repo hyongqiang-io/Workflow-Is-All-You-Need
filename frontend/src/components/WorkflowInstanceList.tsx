@@ -17,7 +17,7 @@ import { executionAPI } from '../services/api';
 
 interface WorkflowInstance {
   instance_id: string;
-  instance_name: string;
+  workflow_instance_name: string;
   workflow_name: string;
   status: string;
   executor_id: string;
@@ -531,7 +531,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
       const instance = instances.find(i => i.instance_id === instanceId);
       setPendingAction({
         instanceId,
-        instanceName: instance?.instance_name || '未知实例',
+        instanceName: instance?.workflow_instance_name || '未知实例',
         action: 'cancel'
       });
       setCancelModalVisible(true);
@@ -702,8 +702,8 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
   const columns = [
     {
       title: '实例名称',
-      dataIndex: 'instance_name',
-      key: 'instance_name',
+      dataIndex: 'workflow_instance_name',
+      key: 'workflow_instance_name',
       ellipsis: true,
       render: (text: string, record: WorkflowInstance) => (
         <div>
@@ -824,7 +824,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                 type="text"
                 danger
                 icon={<DeleteOutlined />}
-                onClick={() => handleDeleteInstance(record.instance_id, record.instance_name)}
+                onClick={() => handleDeleteInstance(record.instance_id, record.workflow_instance_name)}
               />
             </Tooltip>
           )}
@@ -1025,7 +1025,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
               <strong>实例ID:</strong> {selectedInstance.instance_id}
             </div>
             <div style={{ marginBottom: 16 }}>
-              <strong>实例名称:</strong> {selectedInstance.instance_name}
+              <strong>实例名称:</strong> {selectedInstance.workflow_instance_name}
             </div>
             <div style={{ marginBottom: 16 }}>
               <strong>工作流名称:</strong> {selectedInstance.workflow_name}

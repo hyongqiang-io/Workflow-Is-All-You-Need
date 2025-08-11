@@ -1083,7 +1083,7 @@ class ExecutionEngine:
                 logger.error(f"❌ 工作流实例不存在: {instance_id}")
                 return False
                 
-            logger.trace(f"📋 找到工作流实例: {instance.get('instance_name', '未命名')}")
+            logger.trace(f"📋 找到工作流实例: {instance.get('workflow_instance_name', '未命名')}")
             logger.trace(f"   - 当前状态: {instance.get('status')}")
             logger.trace(f"   - 执行者: {instance.get('executor_id')}")
             logger.trace(f"   - 创建时间: {instance.get('created_at')}")

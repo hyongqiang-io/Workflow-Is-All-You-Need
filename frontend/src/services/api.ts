@@ -402,7 +402,7 @@ export const testAPI = {
 // 执行相关API
 export const executionAPI = {
   // 执行工作流
-  executeWorkflow: (data: { workflow_base_id: string; instance_name: string; input_data?: any; context_data?: any }) =>
+  executeWorkflow: (data: { workflow_base_id: string; workflow_instance_name: string; input_data?: any; context_data?: any }) =>
     api.post('/execution/workflows/execute', data),
 
   // 控制工作流

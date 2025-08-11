@@ -272,7 +272,7 @@ const ReactFlowDesigner: React.FC<ReactFlowDesignerProps> = ({ workflowId, onSav
 
       const response = await executionAPI.executeWorkflow({
         workflow_base_id: workflowId,
-        instance_name: `执行_${Date.now()}`,
+        workflow_instance_name: `执行_${Date.now()}`,
         input_data: { test: 'data' },
       });
 

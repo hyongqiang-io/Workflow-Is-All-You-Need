@@ -353,7 +353,7 @@ async def get_instance_output_summary(
             "success": True,
             "data": {
                 "instance_id": instance_id,
-                "instance_name": instance.get('instance_name'),
+                "instance_name": instance.get('workflow_instance_name'),
                 "workflow_name": instance.get('workflow_name'),
                 "status": instance.get('status'),
                 "output_summary": instance.get('output_summary'),
@@ -406,7 +406,7 @@ async def validate_workflow_outputs(
             
             validation_results.append({
                 "instance_id": instance_id,
-                "instance_name": instance.get('instance_name'),
+                "instance_name": instance.get('workflow_instance_name'),
                 "validation_result": result.to_dict()
             })
         
@@ -492,7 +492,7 @@ async def get_quality_report(
         issues_query = f"""
         SELECT 
             wi.instance_id,
-            wi.instance_name,
+            wi.workflow_instance_name,
             wi.quality_metrics->>'validation_errors' as validation_errors,
             CAST(wi.quality_metrics->>'overall_quality_score' AS FLOAT) as quality_score
         FROM workflow_instance wi

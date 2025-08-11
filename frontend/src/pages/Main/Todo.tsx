@@ -520,7 +520,7 @@ const Todo: React.FC = () => {
                         <Panel header="工作流信息" key="workflow_info">
                           <div>
                             <p><Text strong>工作流名称:</Text> {currentTask.context_data.workflow.name}</p>
-                            <p><Text strong>实例名称:</Text> {currentTask.context_data.workflow.instance_name}</p>
+                            <p><Text strong>实例名称:</Text> {currentTask.context_data.workflow.workflow_instance_name}</p>
                             <p><Text strong>状态:</Text> {currentTask.context_data.workflow.status}</p>
                             <p><Text strong>创建时间:</Text> {currentTask.context_data.workflow.created_at}</p>
                             {currentTask.context_data.workflow.input_data && Object.keys(currentTask.context_data.workflow.input_data).length > 0 && (

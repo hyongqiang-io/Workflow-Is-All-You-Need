@@ -735,3 +735,29 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
         except Exception as e:
             logger.error(f"搜索任务实例失败: {e}")
             raise
+    
+    async def delete_tasks_by_workflow_instance(self, workflow_instance_id: uuid.UUID, soft_delete: bool = True) -> int:
+        """批量删除指定工作流实例下的所有任务实例"""
+        try:
+            logger.info(f"🗑️ 开始删除工作流实例 {workflow_instance_id} 下的所有任务实例 (软删除: {soft_delete})")
+            
+            if soft_delete:
+                query = """
+                    UPDATE task_instance 
+                    SET is_deleted = TRUE, updated_at = $1
+                    WHERE workflow_instance_id = $2 AND is_deleted = FALSE
+                """
+                result = await self.db.execute(query, now_utc(), workflow_instance_id)
+            else:
+                query = "DELETE FROM task_instance WHERE workflow_instance_id = $1"
+                result = await self.db.execute(query, workflow_instance_id)
+            
+            # 提取影响的行数
+            deleted_count = int(result.split()[-1]) if "DELETE" in result or "UPDATE" in result else 0
+            
+            logger.info(f"✅ 删除工作流实例 {workflow_instance_id} 下的任务实例完成，影响 {deleted_count} 个任务实例")
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"批量删除工作流任务实例失败: {e}")
+            raise

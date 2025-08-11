@@ -56,7 +56,6 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                 "workflow_id": workflow['workflow_id'],
                 "executor_id": instance_data.executor_id,
                 "workflow_instance_name": instance_data.instance_name,
-                "instance_name": instance_data.instance_name,  # Fix: Set required instance_name field
                 "input_data": safe_json_dumps(instance_data.input_data or {}),
                 "context_data": safe_json_dumps(instance_data.context_data or {}),
                 "status": WorkflowInstanceStatus.PENDING.value,
@@ -138,7 +137,6 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             
             if update_data.instance_name is not None:
                 data["workflow_instance_name"] = update_data.instance_name
-                data["instance_name"] = update_data.instance_name  # Update both fields
             if update_data.status is not None:
                 data["status"] = update_data.status.value
             if update_data.input_data is not None:
@@ -347,7 +345,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                 return False
             
             logger.info(f"📋 找到待删除实例:")
-            logger.info(f"   - 实例名称: {existing_instance.get('instance_name', '未命名')}")
+            logger.info(f"   - 实例名称: {existing_instance.get('workflow_instance_name', '未命名')}")
             logger.info(f"   - 当前状态: {existing_instance.get('status')}")
             logger.info(f"   - is_deleted: {existing_instance.get('is_deleted', False)}")
             

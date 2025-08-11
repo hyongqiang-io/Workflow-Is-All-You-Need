@@ -69,7 +69,7 @@ class WorkflowInstanceManager:
                             workflow_instance_id: uuid.UUID, 
                             workflow_base_id: uuid.UUID,
                             executor_id: uuid.UUID,
-                            instance_name: str = None) -> WorkflowInstanceContext:
+                            workflow_instance_name: str = None) -> WorkflowInstanceContext:
         """创建新的工作流实例上下文"""
         with self._lock:
             try:
@@ -89,7 +89,7 @@ class WorkflowInstanceManager:
                 self._instance_metadata[workflow_instance_id] = {
                     'workflow_base_id': workflow_base_id,
                     'executor_id': executor_id,
-                    'instance_name': instance_name or f"Instance_{workflow_instance_id}",
+                    'workflow_instance_name': workflow_instance_name or f"Instance_{workflow_instance_id}",
                     'created_at': datetime.utcnow(),
                     'last_activity': datetime.utcnow(),
                     'status': 'RUNNING'
@@ -183,7 +183,7 @@ class WorkflowInstanceManager:
                     instance_info = {
                         'workflow_instance_id': str(instance_id),
                         'workflow_base_id': str(metadata.get('workflow_base_id', '')),
-                        'instance_name': metadata.get('instance_name', ''),
+                        'workflow_instance_name': metadata.get('workflow_instance_name', ''),
                         'executor_id': str(metadata.get('executor_id', '')),
                         'created_at': metadata.get('created_at'),
                         'last_activity': metadata.get('last_activity'),
@@ -210,7 +210,7 @@ class WorkflowInstanceManager:
             
             # 合并状态和元数据
             status.update({
-                'instance_name': metadata.get('instance_name', ''),
+                'workflow_instance_name': metadata.get('workflow_instance_name', ''),
                 'executor_id': str(metadata.get('executor_id', '')),
                 'created_at': metadata.get('created_at'),
                 'last_activity': metadata.get('last_activity')
@@ -354,11 +354,11 @@ class WorkflowInstanceManager:
                 logger.error(f"Error during force cleanup: {e}")
                 return 0
     
-    async def get_instance_by_name(self, instance_name: str) -> Optional[WorkflowInstanceContext]:
+    async def get_instance_by_name(self, workflow_instance_name: str) -> Optional[WorkflowInstanceContext]:
         """根据实例名称查找工作流实例"""
         with self._lock:
             for instance_id, metadata in self._instance_metadata.items():
-                if metadata.get('instance_name') == instance_name:
+                if metadata.get('workflow_instance_name') == workflow_instance_name:
                     return self._instances.get(instance_id)
             return None
     

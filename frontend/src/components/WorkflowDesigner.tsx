@@ -806,13 +806,13 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
       console.log('执行工作流请求:', {
         workflow_base_id: workflowId,
         input_data: {},
-        instance_name: `执行_${Date.now()}`
+        workflow_instance_name: `执行_${Date.now()}`
       });
       
       const result: any = await executionAPI.executeWorkflow({
         workflow_base_id: workflowId,
         input_data: {},
-        instance_name: `执行_${Date.now()}`
+        workflow_instance_name: `执行_${Date.now()}`
       });
       
       console.log('执行工作流响应:', result);

@@ -393,7 +393,7 @@ class MonitoringService:
             try:
                 # 获取所有运行中的工作流
                 running_workflows = await self.workflow_instance_repo.db.fetch_all("""
-                    SELECT workflow_instance_id, instance_name, status, updated_at
+                    SELECT workflow_instance_id, workflow_instance_name, status, updated_at
                     FROM workflow_instance 
                     WHERE status IN ('RUNNING', 'PENDING')
                     AND is_deleted = FALSE
@@ -420,7 +420,7 @@ class MonitoringService:
                         
                         # 如果所有节点都完成了，但工作流状态还是RUNNING，立即更新
                         if total_nodes > 0 and completed_nodes == total_nodes and workflow['status'] == 'RUNNING':
-                            logger.info(f"🎯 [实时同步] 发现完成的工作流需要状态更新: {workflow['instance_name']}")
+                            logger.info(f"🎯 [实时同步] 发现完成的工作流需要状态更新: {workflow['workflow_instance_name']}")
                             
                             # 触发状态更新（通过执行引擎）
                             try:

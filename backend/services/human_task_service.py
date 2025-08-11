@@ -816,7 +816,7 @@ class HumanTaskService:
             
             # 1. 验证工作流实例是否存在和权限
             workflow_query = '''
-            SELECT workflow_instance_id, executor_id, status, instance_name
+            SELECT workflow_instance_id, executor_id, status, workflow_instance_name
             FROM workflow_instance 
             WHERE workflow_instance_id = $1 AND is_deleted = FALSE
             '''
@@ -827,7 +827,7 @@ class HumanTaskService:
                 raise ValueError("工作流实例不存在")
             
             logger.info(f"✅ 工作流实例查询成功:")
-            logger.info(f"  实例名称: {workflow['instance_name']}")
+            logger.info(f"  实例名称: {workflow['workflow_instance_name']}")
             logger.info(f"  当前状态: {workflow['status']}")
             logger.info(f"  执行者: {workflow['executor_id']}")
             
@@ -1173,8 +1173,8 @@ class HumanTaskService:
             workflow_info = parsed_context['workflow']
             if workflow_info.get('name'):
                 enhanced_parts.append(f"\n📋 **工作流**: {workflow_info['name']}")
-                if workflow_info.get('instance_name'):
-                    enhanced_parts.append(f"   实例: {workflow_info['instance_name']}")
+                if workflow_info.get('workflow_instance_name'):
+                    enhanced_parts.append(f"   实例: {workflow_info['workflow_instance_name']}")
         
         # 添加上游节点输出信息
         upstream_outputs = parsed_context.get('upstream_outputs', [])

@@ -191,7 +191,7 @@ const WorkflowPage: React.FC = () => {
     try {
       await executionAPI.executeWorkflow({
         workflow_base_id: workflow.baseId, // 使用workflow_base_id执行
-        instance_name: `${workflow.name}_执行_${Date.now()}`
+        workflow_instance_name: `${workflow.name}_执行_${Date.now()}`
       });
       message.success('工作流执行已启动');
       loadWorkflows();

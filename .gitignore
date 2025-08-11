@@ -144,7 +144,6 @@ enhanced_*.py
 final_*.py
 fix_*.py
 live_*.py
-processor_*.py
 quick_*.py
 restart_*.py
 run_*.py

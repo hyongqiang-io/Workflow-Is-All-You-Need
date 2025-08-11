@@ -59,7 +59,7 @@ async def execute_workflow(
     """执行工作流"""
     try:
         from loguru import logger
-        logger.info(f"执行工作流请求: workflow_base_id={request.workflow_base_id}, instance_name={request.instance_name}, user_id={current_user.user_id}")
+        logger.info(f"执行工作流请求: workflow_base_id={request.workflow_base_id}, workflow_instance_name={request.workflow_instance_name}, user_id={current_user.user_id}")
         
         # 尝试执行工作流，如果失败则返回详细错误
         try:
@@ -76,7 +76,7 @@ async def execute_workflow(
             result = {
                 "instance_id": str(uuid.uuid4()),
                 "workflow_base_id": str(request.workflow_base_id),
-                "instance_name": request.instance_name,
+                "workflow_instance_name": request.workflow_instance_name,
                 "status": "pending",
                 "message": "工作流执行请求已接收（模拟模式）"
             }
@@ -325,7 +325,7 @@ async def get_workflow_status(
         
         formatted_instance = {
             "instance_id": str(result["workflow_instance_id"]),
-            "instance_name": result.get("instance_name"),
+            "instance_name": result.get("workflow_instance_name"),
             "workflow_name": result.get("workflow_name"),
             "status": result.get("status"),
             "executor_id": str(result.get("executor_id")) if result.get("executor_id") else None,
@@ -416,7 +416,7 @@ async def get_workflow_instances(
             
             formatted_instances.append({
                 "instance_id": str(instance["workflow_instance_id"]),
-                "instance_name": instance.get("instance_name"),
+                "instance_name": instance.get("workflow_instance_name"),
                 "workflow_name": instance.get("workflow_name"),
                 "status": instance.get("status"),
                 "executor_id": str(instance.get("executor_id")) if instance.get("executor_id") else None,
@@ -739,7 +739,7 @@ async def debug_get_all_tasks(
         query = """
         SELECT 
             ti.*,
-            wi.instance_name as workflow_instance_name,
+            wi.workflow_instance_name as workflow_instance_name,
             w.name as workflow_name,
             p.name as processor_name,
             p.type as processor_type,
@@ -877,7 +877,7 @@ async def get_task_details(
                 "input_data_keys": list(task_details.get('input_data', {}).keys()) if isinstance(task_details.get('input_data'), dict) else [],
                 "task_instance_id": str(task_details.get('task_instance_id', '')),
                 "node_instance_id": str(task_details.get('node_context', {}).get('node_instance_id', '')),
-                "workflow_instance_id": str(task_details.get('workflow_context', {}).get('instance_name', '')),
+                "workflow_instance_id": str(task_details.get('workflow_context', {}).get('workflow_instance_name', '')),
                 "has_upstream_data": upstream_ctx.get('has_upstream_data', False),
                 "upstream_node_count": upstream_ctx.get('upstream_node_count', 0),
                 "upstream_results_preview": str(upstream_ctx.get('immediate_upstream_results', {}))[:200] + "..." if len(str(upstream_ctx.get('immediate_upstream_results', {}))) > 200 else str(upstream_ctx.get('immediate_upstream_results', {}))
@@ -1486,7 +1486,7 @@ async def delete_workflow_instance(
             )
         
         logger.info(f"📋 找到工作流实例详细信息:")
-        logger.info(f"   - 实例名称: {instance.get('instance_name', '未命名')}")
+        logger.info(f"   - 实例名称: {instance.get('workflow_instance_name', '未命名')}")
         logger.info(f"   - 当前状态: {instance.get('status')}")
         logger.info(f"   - 执行者ID: {instance.get('executor_id')}")
         logger.info(f"   - 创建时间: {instance.get('created_at')}")
@@ -1598,7 +1598,7 @@ async def get_workflow_context(
         
         # 验证工作流实例是否存在和权限
         workflow_query = '''
-        SELECT workflow_instance_id, executor_id, status, instance_name
+        SELECT workflow_instance_id, executor_id, status, workflow_instance_name
         FROM workflow_instance 
         WHERE workflow_instance_id = $1 AND is_deleted = FALSE
         '''
@@ -1644,7 +1644,7 @@ async def get_workflow_context(
             "data": {
                 "workflow_instance_id": str(instance_id),
                 "workflow_status": workflow['status'],
-                "workflow_name": workflow['instance_name'],
+                "workflow_name": workflow['workflow_instance_name'],
                 "context_summary": context,
                 "end_node_output": end_node_output,
                 "has_complete_context": end_node_output is not None
@@ -2084,7 +2084,7 @@ async def get_workflow_nodes_detail(
         workflow_statistics = {
             "workflow_instance_id": str(instance_id),
             "workflow_name": workflow_instance.get('workflow_name'),
-            "instance_name": workflow_instance.get('instance_name'),
+            "instance_name": workflow_instance.get('workflow_instance_name'),
             "status": workflow_instance.get('status'),
             "node_statistics": {
                 "total_nodes": total_nodes,
@@ -2257,7 +2257,7 @@ async def get_workflow_instance_deletion_preview(
         
         preview = {
             'workflow_instance_id': str(workflow_instance_id),
-            'instance_name': existing_instance.get('instance_name', '未命名'),
+            'instance_name': existing_instance.get('workflow_instance_name', '未命名'),
             'status': existing_instance.get('status'),
             'total_node_instances': int(node_result.get('node_count', 0)),
             'total_task_instances': int(task_result.get('task_count', 0)),
