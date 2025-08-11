@@ -86,7 +86,7 @@ async def query_workflow_outputs(
         SELECT wi.*, w.name as workflow_name, u.username as executor_name
         FROM workflow_instance wi
         LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
-        LEFT JOIN "user" u ON u.user_id = wi.trigger_user_id
+        LEFT JOIN "user" u ON u.user_id = wi.executor_id
         WHERE wi.is_deleted = FALSE
         """
         
@@ -100,7 +100,7 @@ async def query_workflow_outputs(
         if executor_ids:
             executor_id_list = [uuid.UUID(eid.strip()) for eid in executor_ids.split(',')]
             param_count += 1
-            conditions.append(f"wi.trigger_user_id = ANY(${param_count})")
+            conditions.append(f"wi.executor_id = ANY(${param_count})")
             params.append(executor_id_list)
         
         if status:

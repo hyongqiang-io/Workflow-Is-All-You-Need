@@ -160,3 +160,5 @@ update_*.py
 # 批处理文件
 *.bat
 !fix_and_start_frontend.bat
+
+.gitignore

@@ -259,7 +259,6 @@ CREATE TABLE IF NOT EXISTS workflow_instance (
     workflow_id UUID NOT NULL,
     workflow_base_id UUID NOT NULL,
     executor_id UUID NOT NULL,
-    trigger_user_id UUID NOT NULL,
     workflow_instance_name VARCHAR(255),
     instance_name VARCHAR(255) NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'paused', 'completed', 'failed', 'cancelled')),
@@ -284,8 +283,6 @@ CREATE TABLE IF NOT EXISTS workflow_instance (
         FOREIGN KEY (workflow_id) REFERENCES workflow(workflow_id),
     CONSTRAINT fk_workflow_instance_executor 
         FOREIGN KEY (executor_id) REFERENCES "user"(user_id),
-    CONSTRAINT fk_workflow_instance_trigger_user 
-        FOREIGN KEY (trigger_user_id) REFERENCES "user"(user_id),
     CONSTRAINT fk_workflow_instance_current_node 
         FOREIGN KEY (current_node_id) REFERENCES node(node_id)
 );
@@ -403,7 +400,6 @@ CREATE INDEX IF NOT EXISTS idx_workflow_instance_workflow_id ON workflow_instanc
 CREATE INDEX IF NOT EXISTS idx_workflow_instance_workflow_base_id ON workflow_instance(workflow_base_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_instance_status ON workflow_instance(status);
 CREATE INDEX IF NOT EXISTS idx_workflow_instance_executor ON workflow_instance(executor_id);
-CREATE INDEX IF NOT EXISTS idx_workflow_instance_trigger_user ON workflow_instance(trigger_user_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_instance_current_node ON workflow_instance(current_node_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_instance_created_status ON workflow_instance(created_at DESC, status);
 CREATE INDEX IF NOT EXISTS idx_workflow_instance_completed ON workflow_instance(completed_at DESC) WHERE completed_at IS NOT NULL;
@@ -782,7 +778,6 @@ SELECT
     wi.workflow_id,
     wi.workflow_base_id,
     wi.executor_id,
-    wi.trigger_user_id,
     wi.workflow_instance_name,
     wi.instance_name,
     wi.status,
@@ -803,7 +798,6 @@ SELECT
     w.name as workflow_name,
     w.description as workflow_description,
     u.username as executor_name,
-    tu.username as trigger_user_name,
     COUNT(ni.node_instance_id) as total_nodes,
     COUNT(CASE WHEN ni.status = 'completed' THEN 1 END) as completed_nodes,
     COUNT(CASE WHEN ni.status = 'failed' THEN 1 END) as failed_nodes,
@@ -811,15 +805,14 @@ SELECT
 FROM workflow_instance wi
 JOIN workflow w ON w.workflow_id = wi.workflow_id
 JOIN "user" u ON u.user_id = wi.executor_id
-LEFT JOIN "user" tu ON tu.user_id = wi.trigger_user_id
 LEFT JOIN node_instance ni ON ni.workflow_instance_id = wi.workflow_instance_id AND ni.is_deleted = FALSE
 WHERE wi.is_deleted = FALSE
-GROUP BY wi.workflow_instance_id, wi.workflow_id, wi.workflow_base_id, wi.executor_id, wi.trigger_user_id,
+GROUP BY wi.workflow_instance_id, wi.workflow_id, wi.workflow_base_id, wi.executor_id,
          wi.workflow_instance_name, wi.instance_name, wi.status, wi.input_data, 
          wi.context_data, wi.output_data, wi.started_at, wi.completed_at, 
          wi.error_message, wi.current_node_id, wi.retry_count, wi.execution_summary,
          wi.quality_metrics, wi.data_lineage, wi.output_summary, wi.created_at, wi.updated_at,
-         w.name, w.description, u.username, tu.username;
+         w.name, w.description, u.username;
 
 -- 任务实例详情视图
 CREATE OR REPLACE VIEW task_instance_detail_view AS

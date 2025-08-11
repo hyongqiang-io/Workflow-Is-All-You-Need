@@ -69,14 +69,14 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
                 raise ValueError(f"工作流实例 {instance_data.workflow_instance_id} 不存在")
             logger.trace(f"✅ 工作流实例验证成功")
             
-            # 验证节点是否存在
+            # 验证节点是否存在，同时获取node_base_id用于版本控制
             logger.trace(f"🔍 验证节点: {instance_data.node_id}")
-            node_query = "SELECT node_id, name, type FROM node WHERE node_id = $1 AND is_deleted = FALSE"
+            node_query = "SELECT node_id, node_base_id, name, type FROM node WHERE node_id = $1 AND is_deleted = FALSE"
             node_result = await self.db.fetch_one(node_query, instance_data.node_id)
             if not node_result:
                 logger.error(f"❌ 节点不存在: {instance_data.node_id}")
                 raise ValueError(f"节点 {instance_data.node_id} 不存在")
-            logger.trace(f"✅ 节点验证成功: {node_result['name']} (类型: {node_result['type']})")
+            logger.trace(f"✅ 节点验证成功: {node_result['name']} (类型: {node_result['type']}, base_id: {node_result['node_base_id']})")
             
             # 准备数据
             logger.trace(f"📝 准备节点实例数据")
@@ -84,6 +84,7 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
                 "node_instance_id": node_instance_id,
                 "workflow_instance_id": instance_data.workflow_instance_id,
                 "node_id": instance_data.node_id,
+                "node_base_id": node_result['node_base_id'],  # 添加required node_base_id字段
                 "node_instance_name": instance_data.node_instance_name or node_result['name'],
                 "task_description": instance_data.task_description,
                 "status": instance_data.status.value,
@@ -197,7 +198,7 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
             
             # 根据状态设置时间字段
             if status == NodeInstanceStatus.RUNNING:
-                update_data["start_at"] = now_utc()
+                update_data["started_at"] = now_utc()
             elif status in [NodeInstanceStatus.COMPLETED, NodeInstanceStatus.FAILED, NodeInstanceStatus.CANCELLED]:
                 update_data["completed_at"] = now_utc()
             
@@ -320,7 +321,7 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
                 JOIN node n ON n.node_id = ni.node_id
                 JOIN workflow_instance wi ON wi.workflow_instance_id = ni.workflow_instance_id
                 WHERE ni.status = $1
-                ORDER BY ni.start_at ASC
+                ORDER BY ni.started_at ASC
             """
             results = await self.db.fetch_all(query, NodeInstanceStatus.RUNNING.value)
             return results
@@ -406,15 +407,15 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
                        n.name as node_name,
                        n.type as node_type,
                        CASE 
-                           WHEN ni.completed_at IS NOT NULL AND ni.start_at IS NOT NULL 
-                           THEN EXTRACT(EPOCH FROM (ni.completed_at - ni.start_at))::INTEGER
+                           WHEN ni.completed_at IS NOT NULL AND ni.started_at IS NOT NULL 
+                           THEN EXTRACT(EPOCH FROM (ni.completed_at - ni.started_at))::INTEGER
                            ELSE NULL
                        END as duration_seconds
                 FROM node_instance ni
                 JOIN node n ON n.node_id = ni.node_id
                 WHERE ni.workflow_instance_id = $1
                 ORDER BY 
-                    CASE WHEN ni.start_at IS NOT NULL THEN ni.start_at ELSE ni.created_at END ASC
+                    CASE WHEN ni.started_at IS NOT NULL THEN ni.started_at ELSE ni.created_at END ASC
             """
             results = await self.db.fetch_all(query, workflow_instance_id)
             return results
