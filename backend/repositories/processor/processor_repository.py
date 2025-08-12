@@ -235,9 +235,9 @@ class NodeProcessorRepository:
     async def create_node_processor(self, data: NodeProcessorCreate) -> Optional[Dict[str, Any]]:
         """创建节点处理器关联"""
         try:
-            # 获取当前版本的节点ID
+            # 获取当前版本的节点ID和workflow_id
             node_query = """
-                SELECT node_id FROM "node" 
+                SELECT node_id, workflow_id FROM "node" 
                 WHERE node_base_id = $1 AND workflow_base_id = $2
                 AND is_current_version = true 
                 AND is_deleted = false
@@ -254,20 +254,41 @@ class NodeProcessorRepository:
             if not processor_result:
                 raise ValueError("处理器不存在")
             
-            # 创建关联
+            # 创建关联 - MySQL兼容版本
+            # 先检查是否已存在
+            check_query = """
+                SELECT * FROM node_processor 
+                WHERE node_id = $1 AND processor_id = $2
+            """
+            existing = await self.db.fetch_one(check_query, node_result['node_id'], data.processor_id)
+            
+            if existing:
+                logger.info(f"节点处理器关联已存在: {node_result['node_id']} -> {data.processor_id}")
+                return existing
+            
+            # 不存在则创建 - 包含所有必需字段
+            node_processor_id = uuid.uuid4()
             query = """
-                INSERT INTO node_processor (node_id, processor_id, created_at)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (node_id, processor_id) DO NOTHING
-                RETURNING *
+                INSERT INTO node_processor (
+                    node_processor_id, node_id, node_base_id, workflow_id, 
+                    workflow_base_id, processor_id, created_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
             """
             
-            result = await self.db.fetch_one(
+            await self.db.execute(
                 query,
+                node_processor_id,
                 node_result['node_id'],
+                data.node_base_id,
+                node_result['workflow_id'],
+                data.workflow_base_id,
                 data.processor_id,
                 now_utc()
             )
+            
+            # 查询创建的记录
+            result = await self.db.fetch_one(check_query, node_result['node_id'], data.processor_id)
             
             if result:
                 logger.info(f"创建了节点处理器关联: {node_result['node_id']} -> {data.processor_id}")

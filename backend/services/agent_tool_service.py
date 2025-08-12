@@ -495,7 +495,7 @@ class AgentToolService:
                 """
                 SELECT 
                     COUNT(*) as total_bound_tools,
-                    COUNT(*) FILTER (WHERE is_enabled = TRUE) as enabled_tools,
+                    SUM(CASE WHEN is_enabled = TRUE THEN 1 ELSE 0 END) as enabled_tools,
                     SUM(total_calls) as total_tool_calls,
                     SUM(successful_calls) as successful_tool_calls,
                     AVG(CASE WHEN total_calls > 0 THEN successful_calls::float / total_calls ELSE 0 END) * 100 as avg_success_rate,

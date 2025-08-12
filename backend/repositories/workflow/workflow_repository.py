@@ -63,7 +63,7 @@ class WorkflowRepository(BaseRepository[Workflow]):
                              editor_user_id: Optional[uuid.UUID] = None) -> Optional[Dict[str, Any]]:
         """更新工作流（创建新版本）"""
         try:
-            # 创建新版本
+            # 先创建新版本
             new_workflow_id = await self.db.call_function(
                 "create_workflow_version",
                 workflow_base_id,
@@ -74,7 +74,7 @@ class WorkflowRepository(BaseRepository[Workflow]):
             if not new_workflow_id:
                 raise ValueError("创建工作流新版本失败")
             
-            # 更新基本信息
+            # 如果有需要更新的数据，直接使用SQL更新新创建的记录
             update_data = {}
             if workflow_data.name is not None:
                 update_data["name"] = workflow_data.name
@@ -82,7 +82,27 @@ class WorkflowRepository(BaseRepository[Workflow]):
                 update_data["description"] = workflow_data.description
             
             if update_data:
-                await self.update(new_workflow_id, update_data, "workflow_id")
+                # 直接使用SQL更新，确保使用正确的workflow_id
+                set_clauses = []
+                values = []
+                for key, value in update_data.items():
+                    set_clauses.append(f"{key} = %s")
+                    values.append(value)
+                
+                if set_clauses:
+                    set_clause = ", ".join(set_clauses)
+                    values.append(new_workflow_id)  # 确保使用新创建的workflow_id
+                    
+                    query = f"""
+                        UPDATE `workflow` 
+                        SET {set_clause}, updated_at = CURRENT_TIMESTAMP 
+                        WHERE workflow_id = %s AND is_deleted = 0
+                    """
+                    
+                    logger.debug(f"执行workflow更新SQL: {query}")
+                    logger.debug(f"更新参数: {values}")
+                    
+                    await self.db.execute(query, *values)
             
             return await self.get_workflow_by_id(new_workflow_id)
         except Exception as e:

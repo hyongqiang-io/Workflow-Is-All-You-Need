@@ -408,7 +408,7 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
                        n.type as node_type,
                        CASE 
                            WHEN ni.completed_at IS NOT NULL AND ni.started_at IS NOT NULL 
-                           THEN EXTRACT(EPOCH FROM (ni.completed_at - ni.started_at))::INTEGER
+                           THEN CAST(TIMESTAMPDIFF(SECOND, ni.started_at, ni.completed_at) AS SIGNED)
                            ELSE NULL
                        END as duration_seconds
                 FROM node_instance ni

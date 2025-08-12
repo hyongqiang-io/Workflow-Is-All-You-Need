@@ -55,6 +55,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                 "workflow_base_id": instance_data.workflow_base_id,
                 "workflow_id": workflow['workflow_id'],
                 "executor_id": instance_data.executor_id,
+                "created_by": instance_data.executor_id,  # 创建者设为执行者
                 "workflow_instance_name": instance_data.workflow_instance_name,
                 "input_data": safe_json_dumps(instance_data.input_data or {}),
                 "context_data": safe_json_dumps(instance_data.context_data or {}),

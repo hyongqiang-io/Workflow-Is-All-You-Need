@@ -37,8 +37,41 @@ class BaseRepository(ABC, Generic[T]):
             """
             
             result = await self.db.fetch_one(query, *values)
-            logger.info(f"在表 {self.table_name} 中创建了新记录")
-            return result
+            
+            # 处理DatabaseManager返回的fallback响应
+            if result and result.get("_insert_success"):
+                logger.warning(f"数据库插入成功但无法获取完整记录，表: {self.table_name}")
+                # 尝试查询刚插入的记录
+                try:
+                    # 如果有主键字段可以查询
+                    if 'id' in data:
+                        fallback_result = await self.get_by_id(data['id'])
+                        if fallback_result:
+                            logger.info(f"通过fallback查询成功获取创建记录")
+                            return fallback_result
+                    
+                    # 如果有其他唯一字段可以查询
+                    if 'name' in data:
+                        fallback_query = f"SELECT * FROM {self.table_name} WHERE name = $1 AND is_deleted = FALSE ORDER BY created_at DESC LIMIT 1"
+                        fallback_result = await self.db.fetch_one(fallback_query, data['name'])
+                        if fallback_result:
+                            logger.info(f"通过name字段fallback查询成功获取创建记录")
+                            return fallback_result
+                    
+                    # 如果都失败，至少返回插入的数据
+                    logger.warning(f"Fallback查询失败，返回原始插入数据")
+                    return data
+                except Exception as fallback_e:
+                    logger.error(f"Fallback查询失败: {fallback_e}")
+                    return data
+            
+            if result:
+                logger.info(f"在表 {self.table_name} 中创建了新记录")
+                return result
+            else:
+                logger.error(f"创建记录失败，数据库返回None")
+                return None
+                
         except Exception as e:
             logger.error(f"创建记录失败: {e}")
             raise
@@ -68,9 +101,36 @@ class BaseRepository(ABC, Generic[T]):
             """
             
             result = await self.db.fetch_one(query, *values, record_id)
+            
+            # 处理DatabaseManager返回的UPDATE成功响应
+            if result and result.get("_update_success"):
+                logger.warning(f"数据库更新成功但无法获取完整记录，表: {self.table_name}")
+                # 尝试查询刚更新的记录
+                try:
+                    fallback_result = await self.get_by_id(record_id, id_column)
+                    if fallback_result:
+                        logger.info(f"通过fallback查询成功获取更新记录")
+                        return fallback_result
+                    else:
+                        logger.warning(f"Fallback查询失败，返回更新前的数据加上新值")
+                        # 合并原数据和更新数据作为返回值
+                        merged_data = data.copy()
+                        merged_data[id_column] = record_id
+                        return merged_data
+                except Exception as fallback_e:
+                    logger.error(f"Fallback查询失败: {fallback_e}")
+                    # 返回合并的数据
+                    merged_data = data.copy()
+                    merged_data[id_column] = record_id
+                    return merged_data
+            
             if result:
                 logger.info(f"更新了表 {self.table_name} 中的记录 {record_id}")
-            return result
+                return result
+            else:
+                logger.warning(f"更新记录失败，可能记录不存在: {record_id}")
+                return None
+                
         except Exception as e:
             logger.error(f"更新记录失败: {e}")
             raise

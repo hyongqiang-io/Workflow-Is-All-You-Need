@@ -81,7 +81,7 @@ class HumanTaskService:
                 return None
             
             # 验证任务是否分配给当前用户
-            if task.get('assigned_user_id') != user_id:
+            if task.get('assigned_user_id') != str(user_id):
                 raise PermissionError("无权访问此任务")
             
             # 丰富任务信息
@@ -259,8 +259,19 @@ class HumanTaskService:
                             }
                             logger.info(f"找到上游节点数据: {node_base_id} - {node_data.get('node_name', '未知节点')}")
             
-            # 从input_data获取补充信息（保持兼容性）
-            input_data = task.get('input_data', {})
+            # 从input_data获取补充信息（处理文本格式）
+            input_data_raw = task.get('input_data', '{}')
+            try:
+                # 尝试将字符串解析为字典
+                if isinstance(input_data_raw, str):
+                    import json
+                    input_data = json.loads(input_data_raw) if input_data_raw.strip() else {}
+                else:
+                    input_data = input_data_raw if isinstance(input_data_raw, dict) else {}
+            except (json.JSONDecodeError, AttributeError):
+                logger.warning(f"无法解析input_data: {input_data_raw}")
+                input_data = {}
+                
             workflow_global = input_data.get('workflow_global', {})
             
             result = {
@@ -325,7 +336,7 @@ class HumanTaskService:
             if not task:
                 raise ValueError("任务不存在")
             
-            if task.get('assigned_user_id') != user_id:
+            if task.get('assigned_user_id') != str(user_id):
                 raise PermissionError("无权执行此任务")
             
             if task['status'] not in [TaskInstanceStatus.ASSIGNED.value, TaskInstanceStatus.PENDING.value]:
@@ -374,7 +385,7 @@ class HumanTaskService:
             logger.info(f"  分配用户: {task.get('assigned_user_id')}")
             logger.info(f"  开始时间: {task.get('started_at')}")
             
-            if task.get('assigned_user_id') != user_id:
+            if task.get('assigned_user_id') != str(user_id):
                 logger.error(f"❌ 权限不足: 任务分配给 {task.get('assigned_user_id')}，但提交用户为 {user_id}")
                 raise PermissionError("无权提交此任务")
             
@@ -469,7 +480,7 @@ class HumanTaskService:
             if not task:
                 raise ValueError("任务不存在")
             
-            if task.get('assigned_user_id') != user_id:
+            if task.get('assigned_user_id') != str(user_id):
                 raise PermissionError("无权暂停此任务")
             
             if task['status'] != TaskInstanceStatus.IN_PROGRESS.value:
@@ -506,7 +517,7 @@ class HumanTaskService:
             if not task:
                 raise ValueError("任务不存在")
             
-            if task.get('assigned_user_id') != user_id:
+            if task.get('assigned_user_id') != str(user_id):
                 raise PermissionError("无权为此任务请求帮助")
             
             # 记录帮助请求（这里简化处理，实际可以创建帮助请求表）
@@ -539,7 +550,7 @@ class HumanTaskService:
             if not task:
                 raise ValueError("任务不存在")
             
-            if task.get('assigned_user_id') != user_id:
+            if task.get('assigned_user_id') != str(user_id):
                 raise PermissionError("无权拒绝此任务")
             
             if task['status'] not in [TaskInstanceStatus.ASSIGNED.value, TaskInstanceStatus.PENDING.value]:
@@ -581,7 +592,7 @@ class HumanTaskService:
             if not task:
                 raise ValueError("任务不存在")
             
-            if task.get('assigned_user_id') != user_id:
+            if task.get('assigned_user_id') != str(user_id):
                 raise PermissionError("无权取消此任务")
             
             if task['status'] in [TaskInstanceStatus.COMPLETED.value, TaskInstanceStatus.FAILED.value, TaskInstanceStatus.CANCELLED.value]:

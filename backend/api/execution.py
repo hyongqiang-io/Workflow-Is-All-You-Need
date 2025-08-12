@@ -240,27 +240,31 @@ async def get_workflow_status(
         
         workflow_instance_repo = WorkflowInstanceRepository()
         
-        # 查询工作流实例详细信息
+        # 查询工作流实例详细信息 (MySQL兼容版本)
         query = """
         SELECT 
             wi.*,
             w.name as workflow_name,
             u.username as executor_username,
-            -- 节点实例统计
-            json_agg(
-                json_build_object(
-                    'node_instance_id', ni.node_instance_id,
-                    'node_name', n.name,
-                    'node_type', n.type,
-                    'status', ni.status,
-                    'started_at', ni.started_at,
-                    'completed_at', ni.completed_at,
-                    'error_message', ni.error_message,
-                    'input_data', ni.input_data,
-                    'output_data', ni.output_data,
-                    'retry_count', ni.retry_count
-                ) ORDER BY ni.created_at
-            ) FILTER (WHERE ni.node_instance_id IS NOT NULL) as node_instances
+            -- 节点实例统计 (MySQL语法)
+            CASE 
+                WHEN COUNT(ni.node_instance_id) > 0 THEN
+                    JSON_ARRAYAGG(
+                        JSON_OBJECT(
+                            'node_instance_id', ni.node_instance_id,
+                            'node_name', n.name,
+                            'node_type', n.type,
+                            'status', ni.status,
+                            'started_at', ni.started_at,
+                            'completed_at', ni.completed_at,
+                            'error_message', ni.error_message,
+                            'input_data', ni.input_data,
+                            'output_data', ni.output_data,
+                            'retry_count', ni.retry_count
+                        )
+                    )
+                ELSE JSON_ARRAY()
+            END as node_instances
         FROM workflow_instance wi
         LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
         LEFT JOIN "user" u ON wi.executor_id = u.user_id
@@ -411,10 +415,10 @@ async def get_workflow_instances(
             COUNT(CASE WHEN ni.status = 'completed' THEN 1 END) as completed_nodes,
             COUNT(CASE WHEN ni.status = 'running' THEN 1 END) as running_nodes,
             COUNT(CASE WHEN ni.status = 'failed' THEN 1 END) as failed_nodes,
-            -- 获取当前运行的节点名称
-            STRING_AGG(
-                CASE WHEN ni.status = 'running' THEN n.name END, 
-                ', '
+            -- 获取当前运行的节点名称 (MySQL版本)
+            GROUP_CONCAT(
+                CASE WHEN ni.status = 'running' THEN n.name END
+                SEPARATOR ', '
             ) as current_running_nodes
         FROM workflow_instance wi
         LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
@@ -518,12 +522,12 @@ async def get_workflow_task_flow(
             ni.*,
             n.name as node_name,
             n.type as node_type,
-            -- 计算节点执行时间
+            -- 计算节点执行时间 (MySQL兼容)
             CASE 
                 WHEN ni.started_at IS NOT NULL AND ni.completed_at IS NOT NULL 
-                THEN EXTRACT(EPOCH FROM (ni.completed_at - ni.started_at))::INTEGER
+                THEN CAST(TIMESTAMPDIFF(SECOND, ni.started_at, ni.completed_at) AS SIGNED)
                 WHEN ni.started_at IS NOT NULL 
-                THEN EXTRACT(EPOCH FROM (NOW() - ni.started_at))::INTEGER
+                THEN CAST(TIMESTAMPDIFF(SECOND, ni.started_at, NOW()) AS SIGNED)
                 ELSE NULL
             END as execution_duration_seconds
         FROM node_instance ni
@@ -547,20 +551,20 @@ async def get_workflow_task_flow(
             p.type as processor_type,
             u.username as assigned_username,
             a.agent_name as assigned_agent_name,
-            -- 计算任务执行时间
+            -- 计算任务执行时间 (MySQL兼容)
             CASE 
                 WHEN ti.started_at IS NOT NULL AND ti.completed_at IS NOT NULL 
-                THEN EXTRACT(EPOCH FROM (ti.completed_at - ti.started_at))::INTEGER
+                THEN CAST(TIMESTAMPDIFF(SECOND, ti.started_at, ti.completed_at) AS SIGNED)
                 WHEN ti.started_at IS NOT NULL 
-                THEN EXTRACT(EPOCH FROM (NOW() - ti.started_at))::INTEGER
+                THEN CAST(TIMESTAMPDIFF(SECOND, ti.started_at, NOW()) AS SIGNED)
                 ELSE NULL
             END as actual_duration_seconds,
-            -- 任务是否超时
+            -- 任务是否超时 (MySQL兼容)
             CASE 
                 WHEN ti.estimated_duration IS NOT NULL 
                      AND ti.started_at IS NOT NULL 
                      AND ti.completed_at IS NULL
-                     AND EXTRACT(EPOCH FROM (NOW() - ti.started_at)) > ti.estimated_duration * 60
+                     AND TIMESTAMPDIFF(SECOND, ti.started_at, NOW()) > ti.estimated_duration * 60
                 THEN TRUE
                 ELSE FALSE
             END as is_overdue
@@ -1894,12 +1898,12 @@ async def get_workflow_nodes_detail(
             -- 处理器信息（通过node_processor关联表）
             p.name as processor_name,
             p.type as processor_type,
-            -- 执行时长计算
+            -- 执行时长计算 (MySQL兼容)
             CASE 
                 WHEN ni.started_at IS NOT NULL AND ni.completed_at IS NOT NULL 
-                THEN EXTRACT(EPOCH FROM (ni.completed_at - ni.started_at))::INTEGER
+                THEN CAST(TIMESTAMPDIFF(SECOND, ni.started_at, ni.completed_at) AS SIGNED)
                 WHEN ni.started_at IS NOT NULL 
-                THEN EXTRACT(EPOCH FROM (NOW() - ni.started_at))::INTEGER
+                THEN CAST(TIMESTAMPDIFF(SECOND, ni.started_at, NOW()) AS SIGNED)
                 ELSE NULL
             END as execution_duration_seconds
         FROM node_instance ni
@@ -2076,7 +2080,7 @@ async def get_workflow_nodes_detail(
         )
         """
         
-        edges_data = await node_repo.db.fetch_all(edges_query, instance_id)
+        edges_data = await node_repo.db.fetch_all(edges_query, instance_id, instance_id, instance_id)
         
         # 格式化连接边数据
         formatted_edges = []

@@ -102,12 +102,22 @@ const ReactFlowDesigner: React.FC<ReactFlowDesignerProps> = ({ workflowId, onSav
     
     try {
       setLoading(true);
-      const response = await nodeAPI.getWorkflowNodes(workflowId);
-      if (response.data && response.data.nodes) {
-        const workflowNodes = response.data.nodes.map((node: any, index: number) => ({
+      
+      // 并行加载节点和连接
+      const [nodesResponse, connectionsResponse] = await Promise.all([
+        nodeAPI.getWorkflowNodes(workflowId),
+        nodeAPI.getWorkflowConnections(workflowId)
+      ]);
+      
+      // 处理节点数据
+      if (nodesResponse.data && nodesResponse.data.nodes) {
+        const workflowNodes = nodesResponse.data.nodes.map((node: any) => ({
           id: node.node_id,
           type: 'custom',
-          position: { x: 100 + index * 200, y: 100 },
+          position: { 
+            x: node.position_x || 100, 
+            y: node.position_y || 100 
+          },
           data: {
             label: node.name,
             type: node.type,
@@ -117,13 +127,27 @@ const ReactFlowDesigner: React.FC<ReactFlowDesignerProps> = ({ workflowId, onSav
         }));
         setNodes(workflowNodes);
       }
+      
+      // 处理连接数据
+      if (connectionsResponse.data && connectionsResponse.data.connections) {
+        const workflowEdges = connectionsResponse.data.connections.map((connection: any, index: number) => ({
+          id: `edge-${index}`,
+          source: connection.from_node_id,
+          target: connection.to_node_id,
+          type: 'default',
+          animated: false,
+        }));
+        setEdges(workflowEdges);
+        console.log('加载连接边:', workflowEdges);
+      }
+      
     } catch (error) {
       console.error('加载工作流数据失败:', error);
       message.error('加载工作流数据失败');
     } finally {
       setLoading(false);
     }
-  }, [workflowId, setNodes]);
+  }, [workflowId, setNodes, setEdges]);
 
   // 加载工作流数据
   useEffect(() => {
@@ -133,10 +157,42 @@ const ReactFlowDesigner: React.FC<ReactFlowDesignerProps> = ({ workflowId, onSav
   }, [workflowId, loadWorkflowData]);
 
   const onConnect = useCallback(
-    (params: Connection) => {
-      setEdges((eds) => addEdge(params, eds));
+    async (params: Connection) => {
+      try {
+        if (!workflowId) {
+          message.error('请先选择工作流');
+          return;
+        }
+
+        // 获取源节点和目标节点数据
+        const sourceNode = getNode(params.source!);
+        const targetNode = getNode(params.target!);
+        
+        if (!sourceNode || !targetNode) {
+          message.error('连接的节点无效');
+          return;
+        }
+
+        // 创建连接数据
+        const connectionData = {
+          from_node_base_id: sourceNode.data.nodeData.node_base_id,
+          to_node_base_id: targetNode.data.nodeData.node_base_id,
+          workflow_base_id: workflowId,
+        };
+
+        // 保存到后端
+        await nodeAPI.createConnection(connectionData);
+        
+        // 在前端添加边
+        setEdges((eds) => addEdge(params, eds));
+        message.success('连接创建成功');
+        
+      } catch (error) {
+        console.error('创建连接失败:', error);
+        message.error('创建连接失败');
+      }
     },
-    [setEdges]
+    [setEdges, workflowId, getNode]
   );
 
   const handleAddNode = () => {

@@ -19,6 +19,23 @@ class WorkflowService:
     def __init__(self):
         self.workflow_repository = WorkflowRepository()
     
+    def _check_workflow_permission(self, workflow: Dict[str, Any], user_id: uuid.UUID) -> bool:
+        """
+        检查工作流权限
+        
+        Args:
+            workflow: 工作流记录
+            user_id: 用户ID
+            
+        Returns:
+            是否有权限
+        """
+        workflow_creator_id = workflow['creator_id']
+        if isinstance(workflow_creator_id, str):
+            workflow_creator_id = uuid.UUID(workflow_creator_id)
+        
+        return workflow_creator_id == user_id
+    
     def _format_workflow_response(self, workflow_record: Dict[str, Any]) -> WorkflowResponse:
         """格式化工作流响应"""
         return WorkflowResponse(
@@ -185,7 +202,7 @@ class WorkflowService:
             if not workflow:
                 raise ValueError("工作流不存在")
             
-            if workflow['creator_id'] != user_id:
+            if not self._check_workflow_permission(workflow, user_id):
                 raise ValueError("只有工作流创建者可以删除工作流")
             
             # 执行删除

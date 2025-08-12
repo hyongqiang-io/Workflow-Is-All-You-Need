@@ -46,10 +46,18 @@ class DatabaseManager:
         converted_query = converted_query.replace('gen_random_uuid()', 'UUID()')
         converted_query = converted_query.replace('NOW()', 'CURRENT_TIMESTAMP')
         
+        # 处理布尔值比较 - MySQL中TRUE/FALSE需要转换为1/0
+        converted_query = re.sub(r'=\s*TRUE\b', '= 1', converted_query, flags=re.IGNORECASE)
+        converted_query = re.sub(r'=\s*FALSE\b', '= 0', converted_query, flags=re.IGNORECASE)
+        converted_query = re.sub(r'\bIS\s+TRUE\b', '= 1', converted_query, flags=re.IGNORECASE)
+        converted_query = re.sub(r'\bIS\s+FALSE\b', '= 0', converted_query, flags=re.IGNORECASE)
+        
         # 处理RETURNING子句（MySQL不支持，需要特殊处理）
         if 'RETURNING *' in converted_query.upper():
             converted_query = converted_query.replace('RETURNING *', '')
-            # 标记需要获取最后插入的记录
+            # 移除可能的尾随空白和换行
+            converted_query = converted_query.rstrip()
+            # 标记需要获取受影响的记录
             converted_query += ' -- NEEDS_LAST_INSERT'
         
         return converted_query
@@ -108,16 +116,99 @@ class DatabaseManager:
         async with self.get_connection() as conn:
             async with conn.connection.cursor(aiomysql.DictCursor) as cursor:
                 if needs_last_insert:
-                    # 处理INSERT ... RETURNING的情况
-                    await cursor.execute(converted_query, args)
-                    last_id = cursor.lastrowid
-                    if last_id:
+                    # 检查是INSERT还是UPDATE查询
+                    original_query = query.strip().upper()
+                    if original_query.startswith('INSERT'):
+                        # 处理INSERT ... RETURNING的情况
+                        await cursor.execute(converted_query, args)
+                        
                         # 获取刚插入的记录
                         table_name = self._extract_table_name_from_insert(query)
                         if table_name:
-                            await cursor.execute(f"SELECT * FROM {table_name} WHERE id = %s OR uuid = %s", (last_id, last_id))
-                            result = await cursor.fetchone()
-                            return result
+                            # 尝试多种主键字段查询策略
+                            primary_key_queries = [
+                                # 方案1: 使用UUID主键字段（常见于工作流系统）
+                                f"SELECT * FROM `{table_name}` ORDER BY created_at DESC LIMIT 1",
+                                # 方案2: 使用AUTO_INCREMENT主键
+                                f"SELECT * FROM `{table_name}` WHERE id = LAST_INSERT_ID()",
+                                # 方案3: 通用查询最新记录
+                                f"SELECT * FROM `{table_name}` ORDER BY COALESCE(created_at, NOW()) DESC LIMIT 1"
+                            ]
+                            
+                            for pk_query in primary_key_queries:
+                                try:
+                                    await cursor.execute(pk_query)
+                                    result = await cursor.fetchone()
+                                    if result:
+                                        logger.debug(f"成功获取插入记录 from {table_name}: {pk_query[:50]}...")
+                                        return result
+                                except Exception as e:
+                                    logger.debug(f"主键查询失败 {pk_query[:50]}...: {e}")
+                                    continue
+                            
+                            # 如果所有查询都失败，记录警告但返回空字典表示成功插入
+                            logger.warning(f"无法查询刚插入的记录，表名: {table_name}")
+                            return {"_insert_success": True, "table": table_name}
+                        else:
+                            logger.error(f"无法提取表名from INSERT查询: {query[:100]}")
+                            return {"_insert_success": True, "_error": "table_name_extraction_failed"}
+                    
+                    elif original_query.startswith('UPDATE'):
+                        # 处理UPDATE ... RETURNING的情况
+                        logger.debug(f"[DEBUG] 原始UPDATE查询完整内容: {query}")
+                        logger.debug(f"[DEBUG] 转换UPDATE查询完整内容: {converted_query}")
+                        logger.debug(f"[DEBUG] UPDATE参数: {args}")
+                        
+                        await cursor.execute(converted_query, args)
+                        affected_rows = cursor.rowcount
+                        
+                        logger.debug(f"[DEBUG] UPDATE影响行数: {affected_rows}")
+                        
+                        if affected_rows > 0:
+                            # 尝试从WHERE子句中提取主键信息来查询更新后的记录
+                            table_name = self._extract_table_name_from_update(query)
+                            where_conditions = self._extract_where_conditions_from_update(query, args)
+                            
+                            logger.debug(f"[DEBUG] 提取的表名: {table_name}")
+                            logger.debug(f"[DEBUG] 提取的WHERE条件: {where_conditions}")
+                            
+                            if table_name and where_conditions:
+                                try:
+                                    # 构建查询语句来获取更新后的记录
+                                    where_clause = " AND ".join([f"`{key}` = %s" for key in where_conditions.keys()])
+                                    query_values = list(where_conditions.values())
+                                    
+                                    select_query = f"SELECT * FROM `{table_name}` WHERE {where_clause} LIMIT 1"
+                                    logger.debug(f"[DEBUG] 查询更新后记录SQL: {select_query}")
+                                    logger.debug(f"[DEBUG] 查询参数: {query_values}")
+                                    
+                                    await cursor.execute(select_query, query_values)
+                                    result = await cursor.fetchone()
+                                    
+                                    if result:
+                                        logger.debug(f"[DEBUG] 成功获取更新记录: {list(result.keys())[:5]}...")
+                                        return result
+                                    else:
+                                        logger.warning(f"[DEBUG] 查询更新后记录返回空")
+                                except Exception as e:
+                                    logger.error(f"[DEBUG] UPDATE后查询失败: {e}")
+                            
+                            # 如果无法查询更新后的记录，返回成功标记
+                            logger.info(f"[DEBUG] UPDATE成功，影响行数: {affected_rows}")
+                            return {"_update_success": True, "affected_rows": affected_rows}
+                        else:
+                            # 没有记录被更新
+                            logger.warning(f"[DEBUG] UPDATE操作未影响任何记录，可能是WHERE条件不匹配")
+                            logger.warning(f"[DEBUG] 原始查询完整内容: {query}")
+                            logger.warning(f"[DEBUG] 转换查询完整内容: {converted_query}")
+                            logger.warning(f"[DEBUG] 查询参数: {args}")
+                            return None
+                    
+                    else:
+                        # 对于其他查询，正常执行
+                        await cursor.execute(converted_query, args)
+                        result = await cursor.fetchone()
+                        return result
                 else:
                     await cursor.execute(converted_query, args)
                     result = await cursor.fetchone()
@@ -169,8 +260,94 @@ class DatabaseManager:
     def _extract_table_name_from_insert(self, query: str) -> Optional[str]:
         """从INSERT语句中提取表名"""
         import re
-        match = re.search(r'INSERT\s+INTO\s+["`]?(\w+)["`]?', query, re.IGNORECASE)
-        return match.group(1) if match else None
+        # 支持各种表名格式: "table", `table`, table, "schema"."table"
+        patterns = [
+            r'INSERT\s+INTO\s+["`]?(\w+)["`]?',  # 简单表名
+            r'INSERT\s+INTO\s+"([^"]+)"',  # 带双引号的表名
+            r'INSERT\s+INTO\s+`([^`]+)`',  # 带反引号的表名
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, query, re.IGNORECASE)
+            if match:
+                table_name = match.group(1)
+                # 移除可能的模式引号
+                table_name = table_name.strip('"').strip('`')
+                logger.debug(f"从INSERT语句中提取表名: {table_name}")
+                return table_name
+        
+        logger.warning(f"无法从INSERT语句中提取表名: {query[:100]}...")
+        return None
+    
+    def _extract_table_name_from_update(self, query: str) -> Optional[str]:
+        """从UPDATE语句中提取表名"""
+        import re
+        # 支持各种表名格式: "table", `table`, table
+        patterns = [
+            r'UPDATE\s+["`]?(\w+)["`]?\s+SET',  # 简单表名
+            r'UPDATE\s+"([^"]+)"\s+SET',  # 带双引号的表名
+            r'UPDATE\s+`([^`]+)`\s+SET',  # 带反引号的表名
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, query, re.IGNORECASE)
+            if match:
+                table_name = match.group(1)
+                # 移除可能的引号
+                table_name = table_name.strip('"').strip('`')
+                logger.debug(f"从UPDATE语句中提取表名: {table_name}")
+                return table_name
+        
+        logger.warning(f"无法从UPDATE语句中提取表名: {query[:100]}...")
+        return None
+    
+    def _extract_where_conditions_from_update(self, query: str, args: tuple) -> Optional[Dict[str, Any]]:
+        """从UPDATE语句的WHERE子句中提取条件"""
+        import re
+        try:
+            # 查找WHERE子句，排除RETURNING
+            where_match = re.search(r'WHERE\s+(.+?)(?:\s+RETURNING|\s+ORDER\s+BY|\s+LIMIT|\s*$)', query, re.IGNORECASE | re.DOTALL)
+            if not where_match:
+                return None
+            
+            where_clause = where_match.group(1).strip()
+            
+            # 提取字段名（简单匹配 field = $n 的模式）
+            field_patterns = re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*\$(\d+)', where_clause, re.IGNORECASE)
+            
+            conditions = {}
+            for field_name, param_num in field_patterns:
+                param_index = int(param_num) - 1  # $1 对应 args[0]
+                # 确保参数索引在范围内
+                if param_index < len(args):
+                    # 移除字段名的引号
+                    clean_field_name = field_name.strip('"`')
+                    conditions[clean_field_name] = args[param_index]
+                else:
+                    logger.warning(f"[DEBUG] 参数索引超出范围: ${param_num} (索引{param_index}) >= args长度{len(args)}")
+                    logger.warning(f"[DEBUG] 完整args: {args}")
+                    # 尝试从args末尾获取可能的UUID参数
+                    if clean_field_name in ['node_base_id', 'workflow_base_id'] and len(args) >= 2:
+                        if clean_field_name == 'node_base_id':
+                            conditions[clean_field_name] = args[-2]  # 倒数第二个参数
+                        elif clean_field_name == 'workflow_base_id':
+                            conditions[clean_field_name] = args[-1]  # 最后一个参数
+            
+            # 处理布尔值字段的特殊情况 (PostgreSQL TRUE/FALSE -> MySQL 1/0)
+            for field_name in ['is_current_version', 'is_deleted']:
+                if field_name not in conditions:
+                    # 从WHERE子句中查找布尔值条件
+                    bool_pattern = re.search(rf'{field_name}\s*=\s*(TRUE|FALSE)', where_clause, re.IGNORECASE)
+                    if bool_pattern:
+                        bool_value = bool_pattern.group(1).upper()
+                        conditions[field_name] = 1 if bool_value == 'TRUE' else 0
+            
+            logger.debug(f"从UPDATE WHERE中提取条件: {conditions}")
+            return conditions if conditions else None
+            
+        except Exception as e:
+            logger.debug(f"提取WHERE条件失败: {e}")
+            return None
 
 
 class MySQLConnectionWrapper:

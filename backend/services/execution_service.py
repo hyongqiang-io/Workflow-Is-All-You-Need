@@ -258,20 +258,54 @@ class ExecutionEngine:
             raise
     
     async def _get_workflow_nodes_by_version_id(self, workflow_id: uuid.UUID) -> List[Dict[str, Any]]:
-        """通过工作流版本ID获取所有节点（修复版本）"""
+        """通过工作流版本ID获取所有节点（修复版本 - 使用当前版本逻辑）"""
         try:
+            # 首先获取workflow_base_id，然后查询当前版本的节点
+            workflow_query = """
+                SELECT workflow_base_id 
+                FROM workflow 
+                WHERE workflow_id = $1 AND is_deleted = FALSE
+            """
+            workflow_result = await self.node_repo.db.fetch_one(workflow_query, workflow_id)
+            
+            if not workflow_result:
+                logger.error(f"工作流版本不存在: {workflow_id}")
+                return []
+            
+            workflow_base_id = workflow_result['workflow_base_id']
+            logger.trace(f"工作流版本 {workflow_id} 对应的base_id: {workflow_base_id}")
+            
+            # 查询当前版本的所有节点
             query = """
                 SELECT 
                     n.*,
                     np.processor_id
                 FROM "node" n
                 LEFT JOIN node_processor np ON np.node_id = n.node_id
-                WHERE n.workflow_id = $1 
-                AND n.is_deleted = false
+                WHERE n.workflow_base_id = $1 
+                AND n.is_current_version = TRUE
+                AND n.is_deleted = FALSE
                 ORDER BY n.created_at ASC
             """
-            results = await self.node_repo.db.fetch_all(query, workflow_id)
-            logger.trace(f"✅ 通过版本ID {workflow_id} 获取到 {len(results)} 个节点")
+            results = await self.node_repo.db.fetch_all(query, workflow_base_id)
+            logger.trace(f"✅ 通过base_id {workflow_base_id} 获取当前版本节点 {len(results)} 个")
+            
+            # 如果没有找到当前版本节点，尝试直接用workflow_id查询
+            if not results:
+                logger.warning(f"通过base_id未找到节点，尝试直接查询workflow_id: {workflow_id}")
+                fallback_query = """
+                    SELECT 
+                        n.*,
+                        np.processor_id
+                    FROM "node" n
+                    LEFT JOIN node_processor np ON np.node_id = n.node_id
+                    WHERE n.workflow_id = $1 
+                    AND n.is_deleted = FALSE
+                    ORDER BY n.created_at ASC
+                """
+                results = await self.node_repo.db.fetch_all(fallback_query, workflow_id)
+                logger.trace(f"✅ 通过workflow_id {workflow_id} fallback查询获取到 {len(results)} 个节点")
+            
             return results
         except Exception as e:
             logger.error(f"获取工作流节点列表失败: {e}")
@@ -3326,40 +3360,106 @@ class ExecutionEngine:
         try:
             node_type = node_instance.get('node_type', '').lower()
             node_instance_id = node_instance['node_instance_id']
+            node_id = node_instance.get('node_id')
             
-            # 根据节点类型创建相应的任务
-            if node_type == 'human':
+            # 对于START, END等节点，不需要创建任务实例
+            if node_type in ['start', 'end']:
+                logger.trace(f"   节点类型 {node_type} 不需要任务实例，跳过")
+                return
+            
+            # 对于processor类型节点，需要查询处理器类型来确定任务类型
+            task_type = None
+            if node_type == 'processor':
+                # 查询节点关联的处理器信息
+                processor_query = """
+                    SELECT p.type as processor_type, p.user_id, p.agent_id
+                    FROM node_processor np
+                    LEFT JOIN processor p ON np.processor_id = p.processor_id
+                    WHERE np.node_id = %s
+                    LIMIT 1
+                """
+                processor_info = await self.task_instance_repo.db.fetch_one(processor_query, node_id)
+                
+                if processor_info:
+                    processor_type = processor_info['processor_type'].lower() if processor_info['processor_type'] else None
+                    if processor_type == 'human':
+                        task_type = TaskInstanceType.HUMAN
+                    elif processor_type == 'agent':
+                        task_type = TaskInstanceType.AGENT
+                    elif processor_type == 'mixed':
+                        task_type = TaskInstanceType.MIXED
+                    else:
+                        logger.warning(f"未知的处理器类型: {processor_type}")
+                        return
+                else:
+                    logger.warning(f"节点 {node_id} 没有关联的处理器，无法创建任务")
+                    return
+            elif node_type == 'human':
                 task_type = TaskInstanceType.HUMAN
             elif node_type == 'agent':
                 task_type = TaskInstanceType.AGENT
             elif node_type == 'mixed':
                 task_type = TaskInstanceType.MIXED
             else:
-                # 对于START, END等节点，创建SYSTEM任务
-                task_type = TaskInstanceType.SYSTEM
+                logger.trace(f"   节点类型 {node_type} 不需要任务实例，跳过")
+                return
+                
+            if not task_type:
+                logger.error(f"无法确定节点 {node_id} 的任务类型")
+                return
             
-            # 创建任务实例
+            # 创建任务实例 - 需要获取更多必要的信息
+            workflow_instance_id = node_instance['workflow_instance_id']
+            
+            # 获取处理器信息用于任务分配
+            processor_info = None
+            if task_type == TaskInstanceType.HUMAN:
+                processor_query = """
+                    SELECT p.processor_id, p.user_id
+                    FROM node_processor np
+                    LEFT JOIN processor p ON np.processor_id = p.processor_id
+                    WHERE np.node_id = %s AND p.type = 'human'
+                    LIMIT 1
+                """
+                processor_info = await self.task_instance_repo.db.fetch_one(processor_query, node_id)
+            elif task_type == TaskInstanceType.AGENT:
+                processor_query = """
+                    SELECT p.processor_id, p.agent_id
+                    FROM node_processor np
+                    LEFT JOIN processor p ON np.processor_id = p.processor_id
+                    WHERE np.node_id = %s AND p.type = 'agent'
+                    LIMIT 1
+                """
+                processor_info = await self.task_instance_repo.db.fetch_one(processor_query, node_id)
+            
+            if not processor_info:
+                logger.error(f"找不到节点 {node_id} 的处理器信息")
+                return
+                
+            # 构造符合TaskInstanceCreate模型的数据
             task_data = TaskInstanceCreate(
                 node_instance_id=node_instance_id,
-                type=task_type,
-                name=f"Task for {node_instance.get('node_name', 'Unknown')}",
-                description=f"Auto-generated task for node {node_instance_id}",
-                status=TaskInstanceStatus.PENDING,
-                input_data=node_instance.get('input_data', {}),
-                config=node_instance.get('config', {})
+                workflow_instance_id=workflow_instance_id,
+                processor_id=processor_info['processor_id'],
+                task_type=task_type,
+                task_title=f"Task for {node_instance.get('node_instance_name', 'Unknown')}",
+                task_description=node_instance.get('task_description', f"Auto-generated task for node {node_instance_id}"),
+                input_data=str(node_instance.get('input_data', {})),  # 转换为文本格式
+                assigned_user_id=processor_info.get('user_id') if task_type == TaskInstanceType.HUMAN else None,
+                assigned_agent_id=processor_info.get('agent_id') if task_type == TaskInstanceType.AGENT else None,
+                estimated_duration=30  # 默认30分钟
             )
             
             task_instance = await self.task_instance_repo.create_task(task_data)
-            logger.trace(f"为节点 {node_instance_id} 创建了 {task_type} 类型的任务: {task_instance.task_instance_id}")
-            
-            # 将任务加入执行队列
-            await self.execution_queue.put({
-                'workflow_instance_id': node_instance['workflow_instance_id'],
-                'node_instance_id': node_instance_id,
-                'task_instance_id': task_instance.task_instance_id,
-                'type': task_type,
-                'node_type': node_type
-            })
+            if task_instance:
+                # task_instance is a dict, get the ID from it
+                task_instance_id = task_instance.get('task_instance_id') if isinstance(task_instance, dict) else task_instance.task_instance_id
+                logger.trace(f"✅ 为节点 {node_instance_id} 创建了 {task_type} 类型的任务: {task_instance_id}")
+                
+                if task_type == TaskInstanceType.HUMAN and processor_info.get('user_id'):
+                    logger.info(f"🎯 人工任务已分配给用户 {processor_info['user_id']}: {task_data.task_title}")
+            else:
+                logger.error(f"❌ 任务创建失败")
             
         except Exception as e:
             logger.error(f"为pending节点创建任务失败: {e}")

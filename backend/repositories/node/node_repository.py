@@ -85,42 +85,73 @@ class NodeRepository(BaseRepository[Node]):
                          node_data: NodeUpdate) -> Optional[Dict[str, Any]]:
         """更新节点（直接更新当前版本）"""
         try:
-            # 构建更新字段
+            logger.info(f"[DEBUG] 开始更新节点，node_base_id={node_base_id}, workflow_base_id={workflow_base_id}")
+            
+            # 先查询当前节点信息
+            existing_node = await self.get_node_by_base_id(node_base_id, workflow_base_id)
+            if not existing_node:
+                logger.error(f"[DEBUG] 节点不存在: node_base_id={node_base_id}")
+                return None
+            
+            logger.info(f"[DEBUG] 找到现有节点: node_id={existing_node.get('node_id')}, node_base_id={existing_node.get('node_base_id')}")
+            logger.info(f"[DEBUG] 节点当前版本: {existing_node.get('is_current_version')}, 已删除: {existing_node.get('is_deleted')}")
+            
+            # 构建更新字段 - 检查是否真的需要更新
             update_fields = []
             params = []
             param_index = 1
+            has_changes = False
             
-            if node_data.name is not None:
+            logger.info(f"[DEBUG] 更新数据: name={node_data.name}, type={node_data.type}, position=({node_data.position_x}, {node_data.position_y})")
+            logger.info(f"[DEBUG] 当前数据: name={existing_node.get('name')}, type={existing_node.get('type')}, position=({existing_node.get('position_x')}, {existing_node.get('position_y')})")
+            
+            if node_data.name is not None and node_data.name != existing_node.get('name'):
                 update_fields.append(f"name = ${param_index}")
                 params.append(node_data.name)
                 param_index += 1
+                has_changes = True
             
-            if node_data.type is not None:
+            if node_data.type is not None and node_data.type.value != existing_node.get('type'):
                 update_fields.append(f"type = ${param_index}")
                 params.append(node_data.type.value)
                 param_index += 1
+                has_changes = True
             
-            if node_data.task_description is not None:
+            if node_data.task_description is not None and node_data.task_description != existing_node.get('task_description'):
                 update_fields.append(f"task_description = ${param_index}")
                 params.append(node_data.task_description)
                 param_index += 1
+                has_changes = True
             
             if node_data.position_x is not None:
-                update_fields.append(f"position_x = ${param_index}")
-                params.append(int(node_data.position_x))  # 转换为整数存储
-                param_index += 1
+                new_x = int(node_data.position_x)
+                current_x = int(existing_node.get('position_x', 0))
+                if new_x != current_x:
+                    update_fields.append(f"position_x = ${param_index}")
+                    params.append(new_x)
+                    param_index += 1
+                    has_changes = True
             
             if node_data.position_y is not None:
-                update_fields.append(f"position_y = ${param_index}")
-                params.append(int(node_data.position_y))  # 转换为整数存储
-                param_index += 1
+                new_y = int(node_data.position_y)
+                current_y = int(existing_node.get('position_y', 0))
+                if new_y != current_y:
+                    update_fields.append(f"position_y = ${param_index}")
+                    params.append(new_y)
+                    param_index += 1
+                    has_changes = True
             
-            if not update_fields:
-                # 没有字段需要更新
-                return await self.get_node_by_base_id(node_base_id, workflow_base_id)
+            if not has_changes:
+                # 没有实际变化，直接返回现有数据
+                logger.info(f"[DEBUG] 节点数据无变化，跳过更新: {node_base_id}")
+                return existing_node
             
             # 添加WHERE条件参数
             params.extend([node_base_id, workflow_base_id])
+            
+            logger.info(f"[DEBUG] 更新字段: {update_fields}")
+            logger.info(f"[DEBUG] 更新参数: {params}")
+            logger.info(f"[DEBUG] WHERE条件: node_base_id={node_base_id}, workflow_base_id={workflow_base_id}")
             
             # 构建和执行更新查询
             query = f"""
@@ -133,13 +164,48 @@ class NodeRepository(BaseRepository[Node]):
                 RETURNING *
             """
             
+            logger.info(f"[DEBUG] 执行UPDATE查询: {query}")
+            
             result = await self.db.fetch_one(query, *params)
+            
+            logger.info(f"[DEBUG] UPDATE查询结果类型: {type(result)}")
+            logger.info(f"[DEBUG] UPDATE查询结果: {result}")
+            
+            # 处理DatabaseManager返回的UPDATE成功响应
+            if result and result.get("_update_success"):
+                logger.warning(f"数据库更新成功但无法获取完整记录，节点: {node_base_id}")
+                # 尝试查询刚更新的记录
+                try:
+                    fallback_result = await self.get_node_by_base_id(node_base_id, workflow_base_id)
+                    if fallback_result:
+                        logger.info(f"通过fallback查询成功获取更新节点")
+                        return fallback_result
+                except Exception as fallback_e:
+                    logger.error(f"Fallback查询失败: {fallback_e}")
+                
+                logger.warning(f"Fallback查询失败，返回成功标记")
+                return {"_update_success": True, "node_base_id": str(node_base_id)}
             
             if result:
                 logger.info(f"更新节点成功: {node_base_id}")
                 return result
             else:
                 logger.warning(f"未找到要更新的节点: {node_base_id}")
+                logger.warning(f"[DEBUG] 可能的原因:")
+                logger.warning(f"[DEBUG] 1. node_base_id不存在: {node_base_id}")
+                logger.warning(f"[DEBUG] 2. workflow_base_id不匹配: {workflow_base_id}")
+                logger.warning(f"[DEBUG] 3. is_current_version != TRUE")
+                logger.warning(f"[DEBUG] 4. is_deleted = TRUE")
+                
+                # 执行诊断查询
+                diagnostic_query = """
+                    SELECT node_id, node_base_id, workflow_base_id, is_current_version, is_deleted
+                    FROM node 
+                    WHERE node_base_id = $1 AND workflow_base_id = $2
+                """
+                diagnostic_result = await self.db.fetch_all(diagnostic_query, node_base_id, workflow_base_id)
+                logger.warning(f"[DEBUG] 诊断查询结果: {diagnostic_result}")
+                
                 return None
                 
         except Exception as e:
@@ -389,8 +455,13 @@ class NodeConnectionRepository:
     async def get_workflow_connections(self, workflow_base_id: uuid.UUID) -> List[Dict[str, Any]]:
         """获取工作流的所有连接"""
         try:
+            # 修改查询逻辑：使用node_base_id来查找连接，而不是依赖workflow_id版本
             query = """
-                SELECT nc.*, 
+                SELECT DISTINCT
+                       nc.from_node_id,
+                       nc.to_node_id,
+                       nc.connection_type,
+                       nc.created_at,
                        fn.node_base_id as from_node_base_id,
                        tn.node_base_id as to_node_base_id,
                        fn.name as from_node_name,
@@ -398,11 +469,15 @@ class NodeConnectionRepository:
                 FROM node_connection nc
                 JOIN node fn ON fn.node_id = nc.from_node_id
                 JOIN node tn ON tn.node_id = nc.to_node_id
-                JOIN workflow w ON w.workflow_id = nc.workflow_id
-                WHERE w.workflow_base_id = $1 AND w.is_current_version = TRUE
+                WHERE fn.workflow_base_id = $1 
+                  AND tn.workflow_base_id = $2
+                  AND fn.is_current_version = TRUE
+                  AND tn.is_current_version = TRUE
+                  AND fn.is_deleted = FALSE
+                  AND tn.is_deleted = FALSE
                 ORDER BY nc.created_at ASC
             """
-            results = await self.db.fetch_all(query, workflow_base_id)
+            results = await self.db.fetch_all(query, workflow_base_id, workflow_base_id)
             return results
         except Exception as e:
             logger.error(f"获取工作流连接列表失败: {e}")

@@ -28,25 +28,60 @@ class NodeService:
         self.node_processor_repository = NodeProcessorRepository()
         self.workflow_repository = WorkflowRepository()
     
+    def _check_workflow_permission(self, workflow: Dict[str, Any], user_id: uuid.UUID) -> bool:
+        """
+        检查工作流权限
+        
+        Args:
+            workflow: 工作流记录
+            user_id: 用户ID
+            
+        Returns:
+            是否有权限
+        """
+        workflow_creator_id = workflow['creator_id']
+        if isinstance(workflow_creator_id, str):
+            workflow_creator_id = uuid.UUID(workflow_creator_id)
+        
+        return workflow_creator_id == user_id
+    
     def _format_node_response(self, node_record: Dict[str, Any]) -> NodeResponse:
         """格式化节点响应"""
-        return NodeResponse(
-            node_id=node_record['node_id'],
-            node_base_id=node_record['node_base_id'],
-            workflow_id=node_record['workflow_id'],
-            workflow_base_id=node_record['workflow_base_id'],
-            name=node_record['name'],
-            type=NodeType(node_record['type']),
-            task_description=node_record.get('task_description'),
-            position_x=node_record.get('position_x'),
-            position_y=node_record.get('position_y'),
-            version=node_record['version'],
-            parent_version_id=node_record.get('parent_version_id'),
-            is_current_version=node_record['is_current_version'],
-            created_at=node_record['created_at'].isoformat() if node_record['created_at'] else None,
-            workflow_name=node_record.get('workflow_name'),
-            processor_id=str(node_record['processor_id']) if node_record.get('processor_id') else None
-        )
+        try:
+            # 安全地处理created_at时间戳
+            created_at_str = None
+            if node_record.get('created_at'):
+                created_at = node_record['created_at']
+                if hasattr(created_at, 'isoformat'):
+                    created_at_str = created_at.isoformat()
+                elif isinstance(created_at, str):
+                    created_at_str = created_at
+            
+            # 安全地处理processor_id
+            processor_id_str = None
+            if node_record.get('processor_id'):
+                processor_id_str = str(node_record['processor_id'])
+            
+            return NodeResponse(
+                node_id=node_record['node_id'],
+                node_base_id=node_record['node_base_id'],
+                workflow_id=node_record['workflow_id'],
+                workflow_base_id=node_record['workflow_base_id'],
+                name=node_record['name'],
+                type=NodeType(node_record['type']),
+                task_description=node_record.get('task_description'),
+                position_x=node_record.get('position_x'),
+                position_y=node_record.get('position_y'),
+                version=node_record.get('version', 1),
+                parent_version_id=node_record.get('parent_version_id'),
+                is_current_version=node_record.get('is_current_version', True),
+                created_at=created_at_str,
+                workflow_name=node_record.get('workflow_name'),
+                processor_id=processor_id_str
+            )
+        except Exception as e:
+            logger.error(f"格式化节点响应时出错: {e}, 节点记录: {node_record}")
+            raise
     
     async def create_node(self, node_data: NodeCreate, user_id: uuid.UUID) -> NodeResponse:
         """
@@ -63,6 +98,8 @@ class NodeService:
             ValidationError: 输入数据无效
         """
         try:
+            logger.info(f"开始创建节点 - 用户: {user_id}, 工作流: {node_data.workflow_base_id}")
+            
             # 验证输入数据
             if not node_data.name or len(node_data.name.strip()) < 1:
                 raise ValidationError("节点名称不能为空", "name")
@@ -72,18 +109,40 @@ class NodeService:
             if not workflow:
                 raise ValidationError("工作流不存在", "workflow_base_id")
             
-            # 检查权限 - 只有工作流创建者可以添加节点
-            if workflow['creator_id'] != user_id:
+            # 检查权限 - 只有工作流创建者可以添加节点  
+            if not self._check_workflow_permission(workflow, user_id):
                 raise ValueError("只有工作流创建者可以添加节点")
             
             # 创建节点
-            node_record = await self.node_repository.create_node(node_data)
+            logger.info(f"[DEBUG] 开始调用node_repository.create_node")
+            try:
+                node_record = await self.node_repository.create_node(node_data)
+                logger.info(f"[DEBUG] node_repository.create_node返回成功: {node_record is not None}")
+                if node_record:
+                    logger.info(f"[DEBUG] 返回的节点记录字段: {list(node_record.keys())}")
+                    logger.info(f"[DEBUG] 节点记录内容: {node_record}")
+            except Exception as repo_e:
+                logger.error(f"[DEBUG] node_repository.create_node异常: {repo_e}")
+                raise repo_e
+            
             if not node_record:
+                logger.error(f"[DEBUG] 节点创建返回None")
                 raise ValueError("创建节点失败")
             
             logger.info(f"用户 {user_id} 在工作流 {node_data.workflow_base_id} 中创建了节点: {node_data.name}")
             
-            return self._format_node_response(node_record)
+            # 格式化节点响应
+            logger.info(f"[DEBUG] 开始调用_format_node_response")
+            try:
+                response = self._format_node_response(node_record)
+                logger.info(f"[DEBUG] _format_node_response返回成功")
+                return response
+            except Exception as format_e:
+                logger.error(f"[DEBUG] _format_node_response异常: {format_e}")
+                logger.error(f"[DEBUG] 异常类型: {type(format_e)}")
+                import traceback
+                logger.error(f"[DEBUG] 异常堆栈: {traceback.format_exc()}")
+                raise format_e
             
         except ValidationError:
             raise
@@ -129,14 +188,17 @@ class NodeService:
             节点列表
         """
         try:
+            logger.info(f"获取工作流节点 - 用户: {user_id}, 工作流: {workflow_base_id}")
+            
             # 检查工作流权限
             workflow = await self.workflow_repository.get_workflow_by_base_id(workflow_base_id)
             if not workflow:
                 raise ValueError("工作流不存在")
             
-            if workflow['creator_id'] != user_id:
+            # 权限检查
+            if not self._check_workflow_permission(workflow, user_id):
                 raise ValueError("无权访问此工作流的节点")
-            
+
             # 获取节点列表
             node_records = await self.node_repository.get_workflow_nodes(workflow_base_id)
             
@@ -180,7 +242,7 @@ class NodeService:
             
             # 检查工作流权限
             workflow = await self.workflow_repository.get_workflow_by_base_id(workflow_base_id)
-            if not workflow or workflow['creator_id'] != user_id:
+            if not workflow or not self._check_workflow_permission(workflow, user_id):
                 raise ValueError("无权修改此节点")
             
             # 处理和验证更新数据
@@ -197,6 +259,38 @@ class NodeService:
             updated_node = await self.node_repository.update_node(
                 node_base_id, workflow_base_id, processed_data
             )
+            
+            # 处理UPDATE成功但无法获取完整记录的情况
+            if updated_node and updated_node.get("_update_success"):
+                logger.info(f"节点更新成功但使用fallback响应: {node_base_id}")
+                # 尝试重新查询节点信息
+                try:
+                    refreshed_node = await self.node_repository.get_node_by_base_id(node_base_id, workflow_base_id)
+                    if refreshed_node:
+                        updated_node = refreshed_node
+                        logger.info(f"成功刷新节点数据: {node_base_id}")
+                    else:
+                        # 如果查询失败，构造基本的返回数据
+                        logger.warning(f"无法刷新节点数据，使用基本信息: {node_base_id}")
+                        updated_node = {
+                            "node_base_id": node_base_id,
+                            "workflow_base_id": workflow_base_id,
+                            "name": processed_data.name,
+                            "type": processed_data.type.value if processed_data.type else "processor",
+                            "position_x": processed_data.position_x,
+                            "position_y": processed_data.position_y,
+                            "task_description": processed_data.task_description,
+                            "_fallback": True
+                        }
+                except Exception as refresh_e:
+                    logger.error(f"刷新节点数据失败: {refresh_e}")
+                    # 仍然返回基本信息表示更新成功
+                    updated_node = {
+                        "node_base_id": node_base_id,
+                        "workflow_base_id": workflow_base_id,
+                        "name": processed_data.name,
+                        "_fallback": True
+                    }
             
             if not updated_node:
                 raise ValueError("更新节点失败")
@@ -261,7 +355,7 @@ class NodeService:
             
             # 检查工作流权限
             workflow = await self.workflow_repository.get_workflow_by_base_id(workflow_base_id)
-            if not workflow or workflow['creator_id'] != user_id:
+            if not workflow or not self._check_workflow_permission(workflow, user_id):
                 raise ValueError("无权删除此节点")
             
             # 执行删除
@@ -289,11 +383,16 @@ class NodeService:
             连接信息
         """
         try:
+            logger.info(f"创建节点连接 - 用户: {user_id}, 从 {connection_data.from_node_base_id} 到 {connection_data.to_node_base_id}")
+            
             # 检查工作流权限
             workflow = await self.workflow_repository.get_workflow_by_base_id(
                 connection_data.workflow_base_id
             )
-            if not workflow or workflow['creator_id'] != user_id:
+            if not workflow:
+                raise ValueError("工作流不存在")
+            
+            if not self._check_workflow_permission(workflow, user_id):
                 raise ValueError("无权在此工作流中创建连接")
             
             # 检查源节点和目标节点是否存在
@@ -304,8 +403,10 @@ class NodeService:
                 connection_data.to_node_base_id, connection_data.workflow_base_id
             )
             
-            if not from_node or not to_node:
-                raise ValueError("源节点或目标节点不存在")
+            if not from_node:
+                raise ValueError("源节点不存在")
+            if not to_node:
+                raise ValueError("目标节点不存在")
             
             # 检查不能自己连接自己
             if connection_data.from_node_base_id == connection_data.to_node_base_id:
@@ -318,8 +419,11 @@ class NodeService:
             
             logger.info(f"用户 {user_id} 创建了节点连接: {connection_data.from_node_base_id} -> {connection_data.to_node_base_id}")
             
-            # 格式化返回数据
-            connection['created_at'] = connection['created_at'].isoformat() if connection['created_at'] else None
+            # 格式化返回数据 - 确保创建的和现有的连接都正确格式化
+            if connection and 'created_at' in connection and connection['created_at']:
+                if hasattr(connection['created_at'], 'isoformat'):
+                    connection['created_at'] = connection['created_at'].isoformat()
+                # 如果已经是字符串格式，保持不变
             
             return connection
             
@@ -346,7 +450,7 @@ class NodeService:
                 raise ValueError("工作流不存在")
             
             # 权限检查
-            if workflow['creator_id'] != user_id:
+            if not self._check_workflow_permission(workflow, user_id):
                 raise ValueError("无权访问此工作流的连接")
             
             # 获取连接列表
@@ -382,7 +486,7 @@ class NodeService:
         try:
             # 检查工作流权限
             workflow = await self.workflow_repository.get_workflow_by_base_id(workflow_base_id)
-            if not workflow or workflow['creator_id'] != user_id:
+            if not workflow or not self._check_workflow_permission(workflow, user_id):
                 raise ValueError("无权删除此工作流的连接")
             
             # 删除连接
@@ -418,7 +522,7 @@ class NodeService:
         try:
             # 检查工作流权限
             workflow = await self.workflow_repository.get_workflow_by_base_id(workflow_base_id)
-            if not workflow or workflow['creator_id'] != user_id:
+            if not workflow or not self._check_workflow_permission(workflow, user_id):
                 raise ValueError("无权为此工作流的节点分配处理器")
             
             # 检查节点是否存在
@@ -465,7 +569,7 @@ class NodeService:
         try:
             # 检查工作流权限
             workflow = await self.workflow_repository.get_workflow_by_base_id(workflow_base_id)
-            if not workflow or workflow['creator_id'] != user_id:
+            if not workflow or not self._check_workflow_permission(workflow, user_id):
                 raise ValueError("无权访问此工作流的节点处理器")
             
             # 获取处理器列表
@@ -503,7 +607,7 @@ class NodeService:
         try:
             # 检查工作流权限
             workflow = await self.workflow_repository.get_workflow_by_base_id(workflow_base_id)
-            if not workflow or workflow['creator_id'] != user_id:
+            if not workflow or not self._check_workflow_permission(workflow, user_id):
                 raise ValueError("无权移除此工作流节点的处理器")
             
             # 移除处理器
