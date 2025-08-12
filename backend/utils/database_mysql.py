@@ -95,7 +95,7 @@ class DatabaseManager:
         converted_query = self._convert_postgresql_query(query)
         
         async with self.get_connection() as conn:
-            async with conn.connection.cursor() as cursor:
+            async with conn.cursor() as cursor:
                 affected_rows = await cursor.execute(converted_query, args)
                 return f"UPDATE {affected_rows}" if affected_rows > 0 else "UPDATE 0"
     
@@ -106,7 +106,7 @@ class DatabaseManager:
         converted_query = converted_query.replace(' -- NEEDS_LAST_INSERT', '')
         
         async with self.get_connection() as conn:
-            async with conn.connection.cursor(aiomysql.DictCursor) as cursor:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
                 if needs_last_insert:
                     # 处理INSERT ... RETURNING的情况
                     await cursor.execute(converted_query, args)
@@ -130,7 +130,7 @@ class DatabaseManager:
         converted_query = self._convert_postgresql_query(query)
         
         async with self.get_connection() as conn:
-            async with conn.connection.cursor(aiomysql.DictCursor) as cursor:
+            async with conn.cursor(aiomysql.DictCursor) as cursor:
                 await cursor.execute(converted_query, args)
                 results = await cursor.fetchall()
                 return results or []
@@ -140,7 +140,7 @@ class DatabaseManager:
         converted_query = self._convert_postgresql_query(query)
         
         async with self.get_connection() as conn:
-            async with conn.connection.cursor() as cursor:
+            async with conn.cursor() as cursor:
                 await cursor.execute(converted_query, args)
                 result = await cursor.fetchone()
                 return result[0] if result else None
@@ -148,15 +148,15 @@ class DatabaseManager:
     async def execute_transaction(self, queries: List[Tuple[str, tuple]]) -> None:
         """执行事务 - 兼容PostgreSQL接口"""
         async with self.get_connection() as conn:
-            async with conn.connection.cursor() as cursor:
+            async with conn.cursor() as cursor:
                 try:
-                    await conn.connection.begin()
+                    await conn.begin()
                     for query, args in queries:
                         converted_query = self._convert_postgresql_query(query)
                         await cursor.execute(converted_query, args)
-                    await conn.connection.commit()
+                    await conn.commit()
                 except Exception as e:
-                    await conn.connection.rollback()
+                    await conn.rollback()
                     raise
     
     async def call_function(self, function_name: str, *args) -> Any:

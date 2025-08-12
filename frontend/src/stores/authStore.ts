@@ -222,38 +222,42 @@ export const useAuthStore = create<AuthState>()(
 
       // 自动登录检查（增强版）
       checkAuth: async () => {
+        console.log('checkAuth: 开始检查认证状态');
         const token = localStorage.getItem('token');
-        if (token) {
-          try {
-            // 先验证Token格式
-            const payload = JSON.parse(atob(token.split('.')[1]));
-            const now = Math.floor(Date.now() / 1000);
-            
-            if (payload.exp <= now) {
-              console.warn('⚠️  Token已过期，清理状态');
-              localStorage.removeItem('token');
-              return false;
-            }
-            
-            // 获取用户信息
-            await get().getCurrentUser();
-            
-            // 验证一致性
-            const isConsistent = await get().validateUserConsistency();
-            if (isConsistent) {
-              console.log('✅ 自动登录成功');
-              return true;
-            } else {
-              console.warn('⚠️  用户状态不一致');
-              return false;
-            }
-          } catch (error) {
-            console.error('❌ 自动登录失败:', error);
+        
+        if (!token) {
+          console.log('checkAuth: 没有token，返回false');
+          set({ isAuthenticated: false, loading: false });
+          return false;
+        }
+
+        try {
+          // 简单的token格式验证
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          const now = Math.floor(Date.now() / 1000);
+          
+          if (payload.exp <= now) {
+            console.warn('checkAuth: Token已过期，清理状态');
             localStorage.removeItem('token');
+            set({ isAuthenticated: false, loading: false, user: null, token: null });
             return false;
           }
+          
+          // 设置认证状态为true，不调用API验证（避免循环）
+          console.log('checkAuth: Token有效，设置认证状态');
+          set({ 
+            isAuthenticated: true, 
+            loading: false,
+            token: token
+          });
+          return true;
+          
+        } catch (error) {
+          console.error('checkAuth: Token验证失败:', error);
+          localStorage.removeItem('token');
+          set({ isAuthenticated: false, loading: false, user: null, token: null });
+          return false;
         }
-        return false;
       },
 
       setUser: (user: User) => {

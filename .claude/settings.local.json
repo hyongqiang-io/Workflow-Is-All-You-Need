@@ -165,7 +165,10 @@
       "Bash(docker logs:*)",
       "Bash(docker rm:*)",
       "Bash(docker build:*)",
-      "Bash(docker run:*)"
+      "Bash(docker run:*)",
+      "Bash(pip install:*)",
+      "Bash(mysql:*)",
+      "Bash(/home/ubuntu/Workflow-Is-All-You-Need/check_cross_machine_access.sh:*)"
     ],
     "deny": []
   }

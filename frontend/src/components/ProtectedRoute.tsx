@@ -14,18 +14,26 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
 
   useEffect(() => {
     const verifyAuth = async () => {
+      console.log('ProtectedRoute: 开始验证身份', { isAuthenticated });
+      
       if (!isAuthenticated) {
         try {
-          const isAuth = await checkAuth();
-          if (!isAuth) {
-            setIsChecking(false);
-          } else {
-            setIsChecking(false);
-          }
+          // 添加超时处理
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('认证检查超时')), 10000)
+          );
+          
+          const authPromise = checkAuth();
+          const isAuth = await Promise.race([authPromise, timeoutPromise]);
+          
+          console.log('ProtectedRoute: 认证检查结果', isAuth);
+          setIsChecking(false);
         } catch (error) {
+          console.error('ProtectedRoute: 认证检查失败', error);
           setIsChecking(false);
         }
       } else {
+        console.log('ProtectedRoute: 已认证，跳过检查');
         setIsChecking(false);
       }
     };

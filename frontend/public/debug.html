@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug - Frontend to Backend Connection</title>
+</head>
+<body>
+    <h1>前后端连接调试</h1>
+    <button onclick="testAPI()">测试API连接</button>
+    <div id="result"></div>
+
+    <script>
+        async function testAPI() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '测试中...';
+            
+            try {
+                console.log('开始测试API连接...');
+                const response = await fetch('http://localhost:8002/api/auth/me', {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': 'Bearer test'
+                    }
+                });
+                
+                console.log('响应状态:', response.status);
+                const data = await response.json();
+                console.log('响应数据:', data);
+                
+                resultDiv.innerHTML = `
+                    <h3>API测试结果:</h3>
+                    <p>状态码: ${response.status}</p>
+                    <p>响应: ${JSON.stringify(data, null, 2)}</p>
+                `;
+            } catch (error) {
+                console.error('请求失败:', error);
+                resultDiv.innerHTML = `
+                    <h3>请求失败:</h3>
+                    <p>${error.message}</p>
+                `;
+            }
+        }
+    </script>
+</body>
+</html>

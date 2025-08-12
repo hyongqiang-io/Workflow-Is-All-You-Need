@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API连接测试</title>
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        .result { margin: 10px 0; padding: 10px; border-radius: 4px; }
+        .success { background-color: #d4edda; color: #155724; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        .info { background-color: #d1ecf1; color: #0c5460; }
+        button { padding: 10px 20px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>🔧 工作流系统API连接测试</h1>
+    
+    <div class="info">
+        <strong>测试目的：</strong>验证跨机器访问时的API连接状况
+    </div>
+    
+    <button onclick="testAPI()">🚀 开始测试</button>
+    <button onclick="clearResults()">🗑️ 清除结果</button>
+    
+    <div id="results"></div>
+    
+    <script>
+        const API_BASE = 'http://10.0.16.5:8002';
+        const resultsDiv = document.getElementById('results');
+        
+        function log(message, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `result ${type}`;
+            div.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+            resultsDiv.appendChild(div);
+            console.log(message);
+        }
+        
+        function clearResults() {
+            resultsDiv.innerHTML = '';
+        }
+        
+        async function testAPI() {
+            log('🧪 开始API连接测试...', 'info');
+            
+            // 测试1: 健康检查
+            try {
+                log('测试1: 健康检查端点...', 'info');
+                const start = Date.now();
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                const time = Date.now() - start;
+                
+                if (response.ok) {
+                    log(`✅ 健康检查成功 (${time}ms): ${JSON.stringify(data)}`, 'success');
+                } else {
+                    log(`❌ 健康检查失败: ${response.status} ${response.statusText}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ 健康检查异常: ${error.message}`, 'error');
+            }
+            
+            // 测试2: API端点
+            try {
+                log('测试2: API认证端点...', 'info');
+                const start = Date.now();
+                const response = await fetch(`${API_BASE}/api/auth/me`);
+                const data = await response.json();
+                const time = Date.now() - start;
+                
+                if (response.status === 401) {
+                    log(`✅ API端点正常 (${time}ms): 返回预期的401未认证状态`, 'success');
+                } else {
+                    log(`⚠️ API端点异常状态: ${response.status} - ${JSON.stringify(data)}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ API端点异常: ${error.message}`, 'error');
+            }
+            
+            // 测试3: CORS
+            try {
+                log('测试3: CORS预检请求...', 'info');
+                const response = await fetch(`${API_BASE}/api/auth/me`, {
+                    method: 'OPTIONS',
+                    headers: {
+                        'Origin': window.location.origin,
+                        'Access-Control-Request-Method': 'GET',
+                        'Access-Control-Request-Headers': 'authorization'
+                    }
+                });
+                
+                if (response.ok) {
+                    log(`✅ CORS配置正常`, 'success');
+                } else {
+                    log(`❌ CORS配置异常: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ CORS测试异常: ${error.message}`, 'error');
+            }
+            
+            log('🏁 API连接测试完成', 'info');
+        }
+        
+        // 页面加载时自动测试
+        window.onload = () => {
+            log('🌐 页面已加载，检测API连接...', 'info');
+            testAPI();
+        };
+    </script>
+</body>
+</html>

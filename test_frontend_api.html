@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>前端API连接测试</title>
+</head>
+<body>
+    <h1>前端API连接测试</h1>
+    <div id="results"></div>
+    
+    <script>
+        const resultsDiv = document.getElementById('results');
+        
+        function log(message) {
+            console.log(message);
+            resultsDiv.innerHTML += '<p>' + message + '</p>';
+        }
+        
+        async function testAPI() {
+            log('开始测试API连接...');
+            
+            try {
+                // 测试健康检查
+                log('测试 1: 健康检查 /health');
+                const healthResponse = await fetch('http://127.0.0.1:8002/health');
+                const healthData = await healthResponse.json();
+                log('健康检查结果: ' + JSON.stringify(healthData));
+                
+                // 测试API端点
+                log('测试 2: API端点 /api/auth/me');
+                const authResponse = await fetch('http://127.0.0.1:8002/api/auth/me');
+                const authData = await authResponse.json();
+                log('认证端点结果: ' + JSON.stringify(authData));
+                
+                // 测试前端配置的URL
+                log('测试 3: 前端环境变量指向的URL');
+                const envUrl = 'http://127.0.0.1:8002/api';
+                const envResponse = await fetch(envUrl + '/auth/me');
+                const envData = await envResponse.json();
+                log('环境变量URL结果: ' + JSON.stringify(envData));
+                
+                log('✅ 所有API测试完成');
+                
+            } catch (error) {
+                log('❌ API测试失败: ' + error.message);
+                console.error('API测试错误:', error);
+            }
+        }
+        
+        // 开始测试
+        testAPI();
+    </script>
+</body>
+</html>
