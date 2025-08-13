@@ -18,6 +18,7 @@ from ...models.instance import (
     WorkflowInstanceStatus, ExecutionStatistics
 )
 from ...utils.helpers import now_utc, safe_json_dumps, safe_json_serializer
+from ...utils.database import db_manager
 
 
 class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
@@ -594,3 +595,356 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
         except Exception as e:
             logger.error(f"搜索工作流实例失败: {e}")
             raise
+    
+    # ================== 工作流持久化功能 ==================
+    
+    async def save_workflow_context_snapshot(self, 
+                                           workflow_instance_id: uuid.UUID,
+                                           context_data: Dict[str, Any],
+                                           node_states: Dict[str, Any] = None,
+                                           snapshot_type: str = 'auto',
+                                           description: str = None,
+                                           created_by: uuid.UUID = None) -> Optional[uuid.UUID]:
+        """保存工作流上下文快照"""
+        try:
+            logger.info(f"💾 [持久化] 保存工作流上下文快照: {workflow_instance_id}")
+            logger.info(f"   - 快照类型: {snapshot_type}")
+            logger.info(f"   - 描述: {description or '自动快照'}")
+            
+            snapshot_id = uuid.uuid4()
+            
+            # 获取当前工作流状态用于快照
+            workflow_instance = await self.get_instance_by_id(workflow_instance_id)
+            if not workflow_instance:
+                logger.error(f"❌ [持久化] 工作流实例不存在: {workflow_instance_id}")
+                return None
+            
+            current_status = workflow_instance.get('status', 'unknown')
+            
+            data = {
+                'snapshot_id': snapshot_id,
+                'workflow_instance_id': workflow_instance_id,
+                'snapshot_type': snapshot_type,
+                'context_data': safe_json_dumps(context_data or {}),
+                'node_states': safe_json_dumps(node_states or {}),
+                'execution_state': current_status,
+                'created_at': now_utc(),
+                'created_by': created_by,
+                'description': description,
+                'is_deleted': False
+            }
+            
+            # MySQL兼容的插入语句
+            insert_query = """
+                INSERT INTO workflow_context_snapshot 
+                (snapshot_id, workflow_instance_id, snapshot_type, context_data, 
+                 node_states, execution_state, created_at, created_by, description, is_deleted)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            
+            await self.db.execute(insert_query, 
+                                snapshot_id, workflow_instance_id, snapshot_type,
+                                data['context_data'], data['node_states'], 
+                                current_status, data['created_at'], created_by, 
+                                description, False)
+            
+            logger.info(f"✅ [持久化] 工作流上下文快照已保存: {snapshot_id}")
+            return snapshot_id
+            
+        except Exception as e:
+            logger.error(f"❌ [持久化] 保存工作流上下文快照失败: {e}")
+            import traceback
+            logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
+            return None
+
+    async def get_latest_context_snapshot(self, workflow_instance_id: uuid.UUID) -> Optional[Dict[str, Any]]:
+        """获取最新的上下文快照"""
+        try:
+            logger.debug(f"📸 [持久化] 获取最新上下文快照: {workflow_instance_id}")
+            
+            query = """
+                SELECT snapshot_id, workflow_instance_id, snapshot_type, 
+                       context_data, node_states, execution_state, 
+                       created_at, created_by, description
+                FROM workflow_context_snapshot
+                WHERE workflow_instance_id = %s AND is_deleted = FALSE
+                ORDER BY created_at DESC
+                LIMIT 1
+            """
+            
+            result = await self.db.fetch_one(query, workflow_instance_id)
+            
+            if result:
+                logger.debug(f"✅ [持久化] 找到最新快照: {result['snapshot_id']}")
+                return dict(result)
+            else:
+                logger.debug(f"📸 [持久化] 没有找到快照: {workflow_instance_id}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ [持久化] 获取最新上下文快照失败: {e}")
+            return None
+    
+    async def load_workflow_context_snapshot(self, 
+                                           workflow_instance_id: uuid.UUID,
+                                           snapshot_id: uuid.UUID = None) -> Optional[Dict[str, Any]]:
+        """加载工作流上下文快照（默认加载最新的）"""
+        try:
+            if snapshot_id:
+                # 加载指定快照
+                query = """
+                    SELECT * FROM workflow_context_snapshot 
+                    WHERE snapshot_id = %s AND workflow_instance_id = %s AND is_deleted = FALSE
+                """
+                result = await self.db.fetch_one(query, snapshot_id, workflow_instance_id)
+            else:
+                # 加载最新快照
+                query = """
+                    SELECT * FROM workflow_context_snapshot 
+                    WHERE workflow_instance_id = %s AND is_deleted = FALSE
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """
+                result = await self.db.fetch_one(query, workflow_instance_id)
+            
+            if result:
+                # 解析JSON字段
+                snapshot_data = dict(result)
+                snapshot_data['context_data'] = json.loads(snapshot_data.get('context_data', '{}'))
+                snapshot_data['node_states'] = json.loads(snapshot_data.get('node_states', '{}'))
+                
+                logger.info(f"✅ [持久化] 成功加载工作流上下文快照")
+                logger.info(f"   - 快照ID: {snapshot_data.get('snapshot_id')}")
+                logger.info(f"   - 创建时间: {snapshot_data.get('created_at')}")
+                logger.info(f"   - 快照类型: {snapshot_data.get('snapshot_type')}")
+                
+                return snapshot_data
+            else:
+                logger.warning(f"⚠️ [持久化] 未找到工作流上下文快照: {workflow_instance_id}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ [持久化] 加载工作流上下文快照失败: {e}")
+            return None
+    
+    async def log_workflow_event(self, 
+                               workflow_instance_id: uuid.UUID,
+                               event_type: str,
+                               event_data: Dict[str, Any] = None,
+                               node_instance_id: uuid.UUID = None,
+                               task_instance_id: uuid.UUID = None,
+                               user_id: uuid.UUID = None) -> Optional[uuid.UUID]:
+        """记录工作流事件到事件日志"""
+        try:
+            event_id = uuid.uuid4()
+            
+            # 获取下一个序列号（简化实现）
+            sequence_number = int(datetime.now().timestamp() * 1000000)  # 微秒级时间戳作为序列号
+            
+            data = {
+                'event_id': event_id,
+                'workflow_instance_id': workflow_instance_id,
+                'event_type': event_type,
+                'event_data': safe_json_dumps(event_data or {}),
+                'node_instance_id': node_instance_id,
+                'task_instance_id': task_instance_id,
+                'user_id': user_id,
+                'timestamp': now_utc(),
+                'sequence_number': sequence_number,
+                'is_deleted': False
+            }
+            
+            # MySQL兼容的插入语句
+            insert_query = """
+                INSERT INTO workflow_instance_event_log 
+                (event_id, workflow_instance_id, event_type, event_data, 
+                 node_instance_id, task_instance_id, user_id, timestamp, 
+                 sequence_number, is_deleted)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            
+            await self.db.execute(insert_query,
+                                event_id, workflow_instance_id, event_type,
+                                data['event_data'], node_instance_id, 
+                                task_instance_id, user_id, data['timestamp'],
+                                sequence_number, False)
+            
+            logger.debug(f"📝 [事件日志] 记录工作流事件: {event_type}")
+            logger.debug(f"   - 工作流: {workflow_instance_id}")
+            logger.debug(f"   - 事件ID: {event_id}")
+            
+            return event_id
+            
+        except Exception as e:
+            logger.error(f"❌ [事件日志] 记录工作流事件失败: {e}")
+            return None
+    
+    async def get_workflow_event_history(self, 
+                                       workflow_instance_id: uuid.UUID,
+                                       event_types: List[str] = None,
+                                       limit: int = 100) -> List[Dict[str, Any]]:
+        """获取工作流事件历史"""
+        try:
+            if event_types:
+                placeholders = ', '.join(['%s'] * len(event_types))
+                query = f"""
+                    SELECT * FROM workflow_instance_event_log 
+                    WHERE workflow_instance_id = %s 
+                    AND event_type IN ({placeholders})
+                    AND is_deleted = FALSE
+                    ORDER BY sequence_number DESC
+                    LIMIT %s
+                """
+                params = [workflow_instance_id] + event_types + [limit]
+            else:
+                query = """
+                    SELECT * FROM workflow_instance_event_log 
+                    WHERE workflow_instance_id = %s AND is_deleted = FALSE
+                    ORDER BY sequence_number DESC
+                    LIMIT %s
+                """
+                params = [workflow_instance_id, limit]
+            
+            results = await self.db.fetch_all(query, *params)
+            
+            # 解析JSON字段
+            formatted_events = []
+            for result in results:
+                event = dict(result)
+                event['event_data'] = json.loads(event.get('event_data', '{}'))
+                formatted_events.append(event)
+            
+            logger.debug(f"📋 [事件历史] 获取到 {len(formatted_events)} 条事件记录")
+            return formatted_events
+            
+        except Exception as e:
+            logger.error(f"❌ [事件历史] 获取工作流事件历史失败: {e}")
+            return []
+    
+    async def update_workflow_persistence_fields(self, 
+                                                workflow_instance_id: uuid.UUID,
+                                                execution_context: Dict[str, Any] = None,
+                                                node_dependencies: Dict[str, Any] = None,
+                                                completed_nodes: List[str] = None,
+                                                execution_trace: List[Dict[str, Any]] = None,
+                                                instance_metadata: Dict[str, Any] = None) -> bool:
+        """更新工作流实例的持久化字段"""
+        try:
+            update_fields = []
+            params = []
+            
+            if execution_context is not None:
+                update_fields.append('execution_context = %s')
+                params.append(safe_json_dumps(execution_context))
+            
+            if node_dependencies is not None:
+                update_fields.append('node_dependencies = %s')
+                params.append(safe_json_dumps(node_dependencies))
+            
+            if completed_nodes is not None:
+                update_fields.append('completed_nodes = %s')
+                params.append(safe_json_dumps(completed_nodes))
+            
+            if execution_trace is not None:
+                update_fields.append('execution_trace = %s')
+                params.append(safe_json_dumps(execution_trace))
+            
+            if instance_metadata is not None:
+                update_fields.append('instance_metadata = %s')
+                params.append(safe_json_dumps(instance_metadata))
+            
+            if not update_fields:
+                return True  # 没有字段需要更新
+            
+            # 添加更新时间
+            update_fields.append('updated_at = %s')
+            params.append(now_utc())
+            
+            # 添加WHERE条件参数
+            params.append(workflow_instance_id)
+            
+            query = f"""
+                UPDATE workflow_instance 
+                SET {', '.join(update_fields)}
+                WHERE workflow_instance_id = %s
+            """
+            
+            result = await self.db.execute(query, *params)
+            
+            logger.debug(f"📊 [持久化] 更新工作流持久化字段成功: {workflow_instance_id}")
+            logger.debug(f"   - 更新字段: {len(update_fields) - 1} 个")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ [持久化] 更新工作流持久化字段失败: {e}")
+            return False
+    
+    async def auto_save_workflow_context(self, 
+                                       workflow_instance_id: uuid.UUID,
+                                       context_data: Dict[str, Any],
+                                       save_threshold: int = 10) -> bool:
+        """自动保存工作流上下文（批量优化）"""
+        try:
+            # 检查是否需要创建新快照（简化逻辑：每隔一定操作数保存一次）
+            should_save = True  # 简化实现，每次调用都保存
+            
+            if should_save:
+                snapshot_id = await self.save_workflow_context_snapshot(
+                    workflow_instance_id=workflow_instance_id,
+                    context_data=context_data,
+                    snapshot_type='auto',
+                    description=f'自动保存 - {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+                )
+                
+                if snapshot_id:
+                    # 记录自动保存事件
+                    await self.log_workflow_event(
+                        workflow_instance_id=workflow_instance_id,
+                        event_type='context_auto_saved',
+                        event_data={'snapshot_id': str(snapshot_id)}
+                    )
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ [自动保存] 自动保存工作流上下文失败: {e}")
+            return False
+    
+    async def cleanup_old_snapshots(self, 
+                                  workflow_instance_id: uuid.UUID,
+                                  keep_count: int = 50) -> int:
+        """清理旧的工作流快照，保留最新的N个"""
+        try:
+            # 查询要删除的快照
+            query = """
+                SELECT snapshot_id FROM workflow_context_snapshot 
+                WHERE workflow_instance_id = %s AND is_deleted = FALSE
+                ORDER BY created_at DESC
+                LIMIT 18446744073709551615 OFFSET %s
+            """
+            
+            old_snapshots = await self.db.fetch_all(query, workflow_instance_id, keep_count)
+            
+            if old_snapshots:
+                # 批量标记为删除
+                snapshot_ids = [row['snapshot_id'] for row in old_snapshots]
+                placeholders = ', '.join(['%s'] * len(snapshot_ids))
+                
+                delete_query = f"""
+                    UPDATE workflow_context_snapshot 
+                    SET is_deleted = TRUE, updated_at = %s
+                    WHERE snapshot_id IN ({placeholders})
+                """
+                
+                await self.db.execute(delete_query, now_utc(), *snapshot_ids)
+                
+                logger.info(f"🧹 [清理] 清理了 {len(snapshot_ids)} 个旧快照")
+                return len(snapshot_ids)
+            
+            return 0
+            
+        except Exception as e:
+            logger.error(f"❌ [清理] 清理旧快照失败: {e}")
+            return 0

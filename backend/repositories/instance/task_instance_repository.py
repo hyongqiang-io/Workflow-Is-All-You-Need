@@ -183,6 +183,10 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                             if isinstance(start_time, str):
                                 from datetime import datetime
                                 start_time = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                            elif start_time.tzinfo is None:
+                                # 如果开始时间没有时区信息，假设为UTC
+                                start_time = start_time.replace(tzinfo=data["completed_at"].tzinfo)
+                                
                             actual_duration = int((data["completed_at"] - start_time).total_seconds() / 60)
                             data["actual_duration"] = actual_duration
                             logger.info(f"   ⏱️  计算实际执行时间: {actual_duration}分钟")

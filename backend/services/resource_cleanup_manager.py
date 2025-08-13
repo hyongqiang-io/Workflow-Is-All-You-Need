@@ -255,28 +255,22 @@ class ResourceCleanupManager:
     async def _cleanup_workflow_instances(self):
         """清理工作流实例"""
         try:
-            # 这里需要与WorkflowInstanceManager集成
-            from .workflow_instance_manager import get_instance_manager
+            # 使用统一的上下文管理器进行清理
+            from .workflow_execution_context import get_context_manager
             
-            manager = await get_instance_manager()
+            context_manager = get_context_manager()
             policy = self.cleanup_policies['workflow_instances']
             
             # 清理已完成的实例
-            completed_cleaned = await manager.cleanup_completed_instances(
-                policy['max_completed_age']
-            )
+            if hasattr(context_manager, 'cleanup_completed_workflows'):
+                await context_manager.cleanup_completed_workflows(policy)
+            else:
+                logger.trace("上下文管理器不支持cleanup_completed_workflows方法")
             
-            # 清理失败的实例（保留更长时间用于调试）
-            failed_cleaned = await manager.cleanup_completed_instances(
-                policy['max_failed_age']
-            )
-            
-            total_cleaned = completed_cleaned + failed_cleaned
-            
-            if total_cleaned > 0:
-                self._stats['workflow_cleanups'] += total_cleaned
-                self._stats['total_cleanups'] += total_cleaned
-                logger.info(f"Cleaned up {total_cleaned} workflow instances")
+            # 记录清理统计
+            self._stats['workflow_cleanups'] += 1
+            self._stats['total_cleanups'] += 1
+            logger.trace("工作流实例清理完成")
             
         except Exception as e:
             logger.error(f"Error cleaning workflow instances: {e}")

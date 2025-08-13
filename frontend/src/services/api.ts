@@ -509,7 +509,7 @@ export const executionAPI = {
   getWorkflowInstanceDetail: (instanceId: string) =>
     api.get(`/execution/workflows/${instanceId}/status`),
 
-  // 获取工作流节点详细输出信息
+  // 获取工作流节点详细输出信息 - 修复API路径
   getWorkflowNodesDetail: (instanceId: string) =>
     api.get(`/execution/workflows/${instanceId}/nodes-detail`),
 
@@ -517,9 +517,9 @@ export const executionAPI = {
   getWorkflowInstances: (workflowBaseId: string, limit: number = 20) =>
     api.get(`/execution/workflows/${workflowBaseId}/instances`, { params: { limit } }),
 
-  // 获取工作流任务流程
-  getWorkflowTaskFlow: (workflowId: string) => 
-    api.get(`/execution/workflow/${workflowId}/task-flow`),
+  // 获取工作流任务流程 - 注意这里用的是workflow实例ID，不是workflow_id
+  getWorkflowTaskFlow: (workflowInstanceId: string) => 
+    api.get(`/execution/workflow/${workflowInstanceId}/task-flow`),
 
   // 获取Agent任务列表
   getPendingAgentTasks: (agentId?: string, limit: number = 50) =>
@@ -536,6 +536,38 @@ export const executionAPI = {
   // 取消Agent任务
   cancelAgentTask: (taskId: string) =>
     api.post(`/execution/agent-tasks/${taskId}/cancel`),
+
+  // 获取Agent任务统计
+  getAgentTaskStatistics: (agentId?: string) =>
+    api.get('/execution/agent-tasks/statistics', { params: { agent_id: agentId } }),
+
+  // 删除工作流实例 - 修复API路径
+  deleteWorkflowInstance: async (instanceId: string) => {
+    console.log('🔥 前端开始删除工作流实例:', instanceId);
+    console.log('🔥 请求URL:', `/execution/workflows/${instanceId}`);
+    console.log('🔥 完整URL:', `${api.defaults.baseURL}/execution/workflows/${instanceId}`);
+    
+    try {
+      const response = await api.delete(`/execution/workflows/${instanceId}`);
+      console.log('✅ 工作流实例删除请求成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 工作流实例删除请求失败:', error);
+      if (error.response) {
+        console.error('❌ 错误响应状态:', error.response.status);
+        console.error('❌ 错误响应数据:', error.response.data);
+        console.error('❌ 错误响应头:', error.response.headers);
+      }
+      if (error.request) {
+        console.error('❌ 请求对象:', error.request);
+      }
+      throw error;
+    }
+  },
+
+  // 获取工作流实例上下文
+  getWorkflowContext: (instanceId: string) =>
+    api.get(`/execution/workflows/instances/${instanceId}/context`),
 
   // 获取Agent任务统计
   getAgentTaskStatistics: (agentId?: string) =>

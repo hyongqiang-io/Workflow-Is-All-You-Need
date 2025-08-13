@@ -156,6 +156,12 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
             
             if update_data.status is not None:
                 update_fields["status"] = update_data.status.value
+                
+                # 🕒 根据状态自动设置时间字段
+                if update_data.status == NodeInstanceStatus.RUNNING:
+                    update_fields["started_at"] = now_utc()
+                elif update_data.status in [NodeInstanceStatus.COMPLETED, NodeInstanceStatus.FAILED, NodeInstanceStatus.CANCELLED]:
+                    update_fields["completed_at"] = now_utc()
             
             if update_data.input_data is not None:
                 update_fields["input_data"] = update_data.input_data
@@ -177,6 +183,8 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
                 logger.trace(f"   - 实例ID: {instance_id}")
                 if update_data.status:
                     logger.trace(f"   - 新状态: {update_data.status.value}")
+                    if update_data.status in [NodeInstanceStatus.COMPLETED, NodeInstanceStatus.FAILED]:
+                        logger.trace(f"   - 完成时间: {update_fields.get('completed_at', '未设置')}")
             else:
                 logger.error(f"❌ 节点实例更新失败: 数据库返回空结果")
             # 反序列化JSON字段

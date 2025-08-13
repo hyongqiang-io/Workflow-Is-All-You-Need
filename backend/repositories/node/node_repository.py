@@ -292,6 +292,37 @@ class NodeRepository(BaseRepository[Node]):
         except Exception as e:
             logger.error(f"根据类型获取节点列表失败: {e}")
             raise
+    
+    async def get_workflow_connections(self, workflow_base_id: uuid.UUID) -> List[Dict[str, Any]]:
+        """获取工作流的所有连接"""
+        try:
+            # 修改查询逻辑：使用node_base_id来查找连接，而不是依赖workflow_id版本
+            query = """
+                SELECT DISTINCT
+                       nc.from_node_id,
+                       nc.to_node_id,
+                       nc.connection_type,
+                       nc.created_at,
+                       fn.node_base_id as from_node_base_id,
+                       tn.node_base_id as to_node_base_id,
+                       fn.name as from_node_name,
+                       tn.name as to_node_name
+                FROM node_connection nc
+                JOIN node fn ON fn.node_id = nc.from_node_id
+                JOIN node tn ON tn.node_id = nc.to_node_id
+                WHERE fn.workflow_base_id = $1 
+                  AND tn.workflow_base_id = $2
+                  AND fn.is_current_version = TRUE
+                  AND tn.is_current_version = TRUE
+                  AND fn.is_deleted = FALSE
+                  AND tn.is_deleted = FALSE
+                ORDER BY nc.created_at ASC
+            """
+            results = await self.db.fetch_all(query, workflow_base_id, workflow_base_id)
+            return results
+        except Exception as e:
+            logger.error(f"获取工作流连接列表失败: {e}")
+            raise
 
 
 class NodeConnectionRepository:

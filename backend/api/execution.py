@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field, ValidationError
 from loguru import logger
 
 from ..services.execution_service import execution_engine
-from ..services.human_task_service import HumanTaskService
 from ..services.agent_task_service import agent_task_service
 from ..models.instance import (
     WorkflowExecuteRequest, WorkflowControlRequest,
@@ -22,8 +21,7 @@ from ..utils.helpers import now_utc
 
 router = APIRouter(prefix="/api/execution", tags=["execution"])
 
-# 服务实例
-human_task_service = HumanTaskService()
+# 注意：所有人工任务相关的功能现在通过 execution_engine 统一处理
 
 
 # ==================== 请求/响应模型 ====================
@@ -437,10 +435,26 @@ async def get_workflow_instances(
         # 格式化返回数据
         formatted_instances = []
         for instance in instances:
-            total_nodes = instance.get("total_nodes") or 0
-            completed_nodes = instance.get("completed_nodes") or 0
-            running_nodes = instance.get("running_nodes") or 0
-            failed_nodes = instance.get("failed_nodes") or 0
+            # 安全转换数值字段（处理MySQL可能返回的各种格式）
+            def safe_int(value, default=0):
+                """安全转换为整数"""
+                if value is None:
+                    return default
+                if isinstance(value, int):
+                    return value
+                if isinstance(value, str):
+                    if value == '[]' or value == '':
+                        return default
+                    try:
+                        return int(value)
+                    except ValueError:
+                        return default
+                return default
+                
+            total_nodes = safe_int(instance.get("total_nodes"))
+            completed_nodes = safe_int(instance.get("completed_nodes"))
+            running_nodes = safe_int(instance.get("running_nodes"))
+            failed_nodes = safe_int(instance.get("failed_nodes"))
             
             # 计算执行进度百分比
             progress_percentage = 0
@@ -579,7 +593,7 @@ async def get_workflow_task_flow(
         
         tasks = await task_repo.db.fetch_all(tasks_query, workflow_id)
         
-        # 获取工作流边缘关系（用于前端流程图显示）
+        # 获取工作流边缘关系（基于节点实例，用于前端流程图显示）
         edges_query = """
         SELECT 
             nc.from_node_id,
@@ -587,12 +601,16 @@ async def get_workflow_task_flow(
             nc.condition_config,
             n1.name as from_node_name,
             n2.name as to_node_name,
-            n1.node_base_id as from_node_base_id,
-            n2.node_base_id as to_node_base_id
+            ni1.node_instance_id as from_node_instance_id,
+            ni2.node_instance_id as to_node_instance_id
         FROM node_connection nc
         JOIN node n1 ON nc.from_node_id = n1.node_id
         JOIN node n2 ON nc.to_node_id = n2.node_id
-        WHERE nc.workflow_id = $1
+        JOIN node_instance ni1 ON n1.node_id = ni1.node_id AND ni1.workflow_instance_id = $1
+        JOIN node_instance ni2 ON n2.node_id = ni2.node_id AND ni2.workflow_instance_id = $1
+        WHERE nc.workflow_id = $2
+        AND ni1.is_deleted = FALSE 
+        AND ni2.is_deleted = FALSE
         ORDER BY nc.created_at
         """
         
@@ -604,7 +622,7 @@ async def get_workflow_task_flow(
         workflow_result = await node_repo.db.fetch_one(workflow_query, workflow_instance['workflow_base_id'])
         current_workflow_id = workflow_result['workflow_id'] if workflow_result else None
         
-        edges = await node_repo.db.fetch_all(edges_query, current_workflow_id) if current_workflow_id else []
+        edges = await node_repo.db.fetch_all(edges_query, workflow_id, current_workflow_id) if current_workflow_id else []
         
         # 构建任务流程数据
         task_flow = {
@@ -695,15 +713,18 @@ async def get_workflow_task_flow(
                 task.get('assigned_user_id') == current_user.user_id):
                 task_flow["assigned_tasks"].append(task_data)
         
-        # 格式化边缘数据（用于流程图显示）
+        # 格式化边缘数据（用于流程图显示，使用节点实例ID）
         for edge in edges:
             edge_data = {
-                "id": f"{edge['from_node_id']}-{edge['to_node_id']}",
-                "source": str(edge['from_node_id']),
-                "target": str(edge['to_node_id']),
+                "id": f"{edge['from_node_instance_id']}-{edge['to_node_instance_id']}",
+                "source": str(edge['from_node_instance_id']),
+                "target": str(edge['to_node_instance_id']),
                 "label": str(edge['condition_config']) if edge['condition_config'] else "",
                 "from_node_name": edge['from_node_name'],
-                "to_node_name": edge['to_node_name']
+                "to_node_name": edge['to_node_name'],
+                # 保留原始node_id信息供参考
+                "from_node_id": str(edge['from_node_id']),
+                "to_node_id": str(edge['to_node_id'])
             }
             task_flow["edges"].append(edge_data)
         
@@ -858,7 +879,7 @@ async def get_my_tasks(
 ):
     """获取我的任务列表"""
     try:
-        tasks = await human_task_service.get_user_tasks(
+        tasks = await execution_engine.get_user_tasks(
             current_user.user_id, task_status, limit
         )
         
@@ -880,12 +901,12 @@ async def get_task_details(
     task_id: uuid.UUID,
     current_user: CurrentUser = Depends(get_current_user_context)
 ):
-    """获取任务详情（使用HumanTaskService优化版本）"""
+    """获取任务详情（使用ExecutionService优化版本）"""
     try:
         logger.info(f"🔍 任务详情API: 获取任务 {task_id}")
         
-        # 直接使用HumanTaskService的优化get_task_details方法
-        task_details = await human_task_service.get_task_details(task_id, current_user.user_id)
+        # 直接使用ExecutionService的优化get_task_details方法
+        task_details = await execution_engine.get_task_details(task_id, current_user.user_id)
         
         if not task_details:
             raise HTTPException(
@@ -941,25 +962,50 @@ async def start_task(
 ):
     """开始执行任务"""
     try:
-        result = await human_task_service.start_task(task_id, current_user.user_id)
+        logger.info(f"🌐 [API-开始任务] 收到开始任务请求:")
+        logger.info(f"   - 任务ID: {task_id}")
+        logger.info(f"   - 用户ID: {current_user.user_id}")
+        logger.info(f"   - 用户名: {current_user.username}")
+        logger.info(f"   - 请求时间: {now_utc()}")
         
-        return {
-            "success": True,
-            "data": result,
-            "message": "任务已开始执行"
-        }
+        logger.info(f"🔄 [API-开始任务] 调用ExecutionService.start_human_task...")
+        result = await execution_engine.start_human_task(task_id, current_user.user_id)
+        logger.info(f"📋 [API-开始任务] ExecutionService返回结果: {result}")
         
-    except PermissionError:
+        if result.get("success"):
+            logger.info(f"✅ [API-开始任务] 任务开始成功")
+            api_response = {
+                "success": True,
+                "data": result,
+                "message": "任务已开始执行"
+            }
+        else:
+            logger.warning(f"⚠️ [API-开始任务] 任务开始失败: {result.get('message')}")
+            api_response = {
+                "success": False,
+                "data": result,
+                "message": result.get('message', '任务开始失败')
+            }
+        
+        logger.info(f"🚀 [API-开始任务] 最终API响应: {api_response}")
+        return api_response
+        
+    except PermissionError as pe:
+        logger.error(f"🚫 [API-开始任务] 权限错误: {str(pe)}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="无权执行此任务"
         )
-    except ValueError as e:
+    except ValueError as ve:
+        logger.error(f"📊 [API-开始任务] 数据验证错误: {str(ve)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail=str(ve)
         )
     except Exception as e:
+        logger.error(f"💥 [API-开始任务] 未捕获的异常: {type(e).__name__}: {str(e)}")
+        import traceback
+        logger.error(f"📄 [API-开始任务] 异常堆栈: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"开始执行任务失败: {str(e)}"
@@ -1045,7 +1091,7 @@ async def submit_task_result(
         result_data = request.result_data if request.result_data is not None else {}
         logger.info(f"  🔄 准备提交任务结果: result_data={result_data}")
         
-        result = await human_task_service.submit_task_result(
+        result = await execution_engine.submit_human_task_result(
             task_id, current_user.user_id, 
             result_data, request.result_summary
         )
@@ -1083,7 +1129,7 @@ async def pause_task(
 ):
     """暂停任务"""
     try:
-        result = await human_task_service.pause_task(
+        result = await execution_engine.pause_task(
             task_id, current_user.user_id, request.reason
         )
         
@@ -1118,7 +1164,7 @@ async def request_help(
 ):
     """请求帮助"""
     try:
-        result = await human_task_service.request_help(
+        result = await execution_engine.request_help(
             task_id, current_user.user_id, request.help_message
         )
         
@@ -1154,7 +1200,7 @@ async def reject_task(
                 detail="拒绝任务时必须提供拒绝原因"
             )
         
-        result = await human_task_service.reject_task(
+        result = await execution_engine.reject_task(
             task_id, current_user.user_id, request.reason
         )
         
@@ -1189,7 +1235,7 @@ async def cancel_task(
 ):
     """取消任务"""
     try:
-        result = await human_task_service.cancel_task(
+        result = await execution_engine.cancel_task(
             task_id, current_user.user_id, request.reason or "用户取消"
         )
         
@@ -1303,7 +1349,7 @@ async def get_task_history(
 ):
     """获取任务历史"""
     try:
-        tasks = await human_task_service.get_task_history(
+        tasks = await execution_engine.get_task_history(
             current_user.user_id, days, limit
         )
         
@@ -1326,7 +1372,7 @@ async def get_task_statistics(
 ):
     """获取任务统计"""
     try:
-        stats = await human_task_service.get_task_statistics(current_user.user_id)
+        stats = await execution_engine.get_task_statistics(current_user.user_id)
         
         return {
             "success": True,
@@ -1468,7 +1514,7 @@ async def cancel_workflow_instance(
         logger.info(f"  取消原因: {request.reason}")
         
         # 调用服务层处理工作流取消
-        result = await human_task_service.cancel_workflow_instance(
+        result = await execution_engine.cancel_workflow_instance(
             instance_id, current_user.user_id, request.reason or "用户取消"
         )
         
@@ -1635,7 +1681,9 @@ async def get_workflow_context(
         FROM workflow_instance 
         WHERE workflow_instance_id = $1 AND is_deleted = FALSE
         '''
-        workflow = await human_task_service.task_repo.db.fetch_one(workflow_query, instance_id)
+        from ..repositories.instance.task_instance_repository import TaskInstanceRepository
+        task_repo = TaskInstanceRepository()
+        workflow = await task_repo.db.fetch_one(workflow_query, instance_id)
         
         if not workflow:
             raise HTTPException(
@@ -1650,7 +1698,7 @@ async def get_workflow_context(
             # 暂时允许所有用户查看（生产环境需要严格权限控制）
         
         # 获取完整的工作流上下文
-        context = await human_task_service._collect_workflow_context(instance_id)
+        context = await execution_engine._collect_workflow_context(instance_id)
         
         # 查找结束节点的输出数据
         end_node_output = None
@@ -1664,7 +1712,7 @@ async def get_workflow_context(
         ORDER BY ni.updated_at DESC
         LIMIT 1
         '''
-        end_node = await human_task_service.task_repo.db.fetch_one(end_nodes_query, instance_id)
+        end_node = await task_repo.db.fetch_one(end_nodes_query, instance_id)
         
         if end_node and end_node['output_data']:
             end_node_output = {
@@ -1712,7 +1760,7 @@ async def assign_task_to_user(
                 detail="无权限执行此操作"
             )
         
-        result = await human_task_service.assign_task_to_user(
+        result = await execution_engine.assign_task_to_user(
             task_id, request.user_id, current_user.user_id
         )
         

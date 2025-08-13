@@ -312,14 +312,22 @@ class MonitoringService:
             for instance in running_instances:
                 started_at = instance.get('started_at')
                 if started_at:
-                    start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
-                    if start_time.replace(tzinfo=None) < timeout_threshold:
-                        await self._create_alert(
-                            'workflow_timeout',
-                            f"工作流实例 {instance['instance_id']} 执行超时",
-                            'error',
-                            {'instance_id': instance['instance_id']}
-                        )
+                    try:
+                        if isinstance(started_at, str):
+                            start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                        else:
+                            # 假设是datetime对象
+                            start_time = started_at
+                        
+                        if start_time.replace(tzinfo=None) < timeout_threshold:
+                            await self._create_alert(
+                                'workflow_timeout',
+                                f"工作流实例 {instance['instance_id']} 执行超时",
+                                'error',
+                                {'instance_id': instance['instance_id']}
+                            )
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"解析工作流开始时间失败: {started_at}, 错误: {e}")
                         
         except Exception as e:
             logger.error(f"检查工作流超时失败: {e}")
@@ -332,21 +340,36 @@ class MonitoringService:
                 None, TaskInstanceStatus.IN_PROGRESS
             )
             
-            timeout_threshold = datetime.now() - timedelta(
-                minutes=self.alert_thresholds['task_timeout_minutes']
-            )
+            # 确保超时阈值是数值类型
+            task_timeout_minutes = self.alert_thresholds['task_timeout_minutes']
+            if isinstance(task_timeout_minutes, str):
+                try:
+                    task_timeout_minutes = int(task_timeout_minutes)
+                except ValueError:
+                    logger.warning(f"无法转换task_timeout_minutes为整数: {task_timeout_minutes}，使用默认值30")
+                    task_timeout_minutes = 30
+            
+            timeout_threshold = datetime.now() - timedelta(minutes=task_timeout_minutes)
             
             for task in in_progress_tasks:
                 started_at = task.get('started_at')
                 if started_at:
-                    start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
-                    if start_time.replace(tzinfo=None) < timeout_threshold:
-                        await self._create_alert(
-                            'task_timeout',
-                            f"任务 {task['task_instance_id']} 执行超时",
-                            'warning',
-                            {'task_id': task['task_instance_id']}
-                        )
+                    try:
+                        if isinstance(started_at, str):
+                            start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                        else:
+                            # 假设是datetime对象
+                            start_time = started_at
+                        
+                        if start_time.replace(tzinfo=None) < timeout_threshold:
+                            await self._create_alert(
+                                'task_timeout',
+                                f"任务 {task['task_instance_id']} 执行超时",
+                                'warning',
+                                {'task_id': task['task_instance_id']}
+                            )
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"解析任务开始时间失败: {started_at}, 错误: {e}")
                         
         except Exception as e:
             logger.error(f"检查任务超时失败: {e}")
