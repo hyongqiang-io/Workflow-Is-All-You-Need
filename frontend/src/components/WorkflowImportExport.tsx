@@ -220,9 +220,36 @@ const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
       if (response.success) {
         const { import_result } = response.data;
         
-        message.success(
-          `工作流导入成功！创建了 ${import_result.created_nodes} 个节点和 ${import_result.created_connections} 个连接`
-        );
+        // 构建成功消息
+        let successMessage = `工作流导入成功！创建了 ${import_result.created_nodes} 个节点和 ${import_result.created_connections} 个连接`;
+        
+        // 如果有警告，显示警告信息
+        if (import_result.warnings && import_result.warnings.length > 0) {
+          console.warn('导入警告:', import_result.warnings);
+          
+          // 检查是否有连接相关的警告
+          const connectionWarnings = import_result.warnings.filter((w: string) => 
+            w.includes('连接') || w.includes('缺失')
+          );
+          
+          if (connectionWarnings.length > 0) {
+            message.warning({
+              content: (
+                <div>
+                  <div>{successMessage}</div>
+                  <div style={{ marginTop: 8, fontSize: '12px', color: '#fa8c16' }}>
+                    ⚠️ 检测到连接问题，请检查工作流中的连线是否完整
+                  </div>
+                </div>
+              ),
+              duration: 6
+            });
+          } else {
+            message.success(successMessage);
+          }
+        } else {
+          message.success(successMessage);
+        }
         
         if (onImportSuccess && import_result.workflow_id) {
           onImportSuccess(import_result.workflow_id);
@@ -331,6 +358,15 @@ const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
               </Descriptions.Item>
               <Descriptions.Item label="连接数量">
                 <Tag color="green">{previewData.preview.connections_count} 个</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="导出版本">
+                <Tag color={previewData.preview.workflow_info.export_version === '2.0' ? 'orange' : 'default'}>
+                  {previewData.preview.workflow_info.export_version || '1.0'}
+                  {previewData.preview.workflow_info.export_version === '2.0' && ' (增强版)'}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="导出时间">
+                {previewData.preview.workflow_info.export_timestamp || '未知'}
               </Descriptions.Item>
             </Descriptions>
           </Card>

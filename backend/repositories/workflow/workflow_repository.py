@@ -49,8 +49,8 @@ class WorkflowRepository(BaseRepository[Workflow]):
             query = """
                 SELECT w.*, u.username as creator_name
                 FROM workflow w
-                LEFT JOIN "user" u ON u.user_id = w.creator_id
-                WHERE w.workflow_base_id = $1 AND w.is_current_version = TRUE AND w.is_deleted = FALSE
+                LEFT JOIN `user` u ON u.user_id = w.creator_id
+                WHERE w.workflow_base_id = %s AND w.is_current_version = TRUE AND w.is_deleted = FALSE
             """
             result = await self.db.fetch_one(query, workflow_base_id)
             return result

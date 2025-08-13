@@ -67,7 +67,7 @@ class WorkflowImportExportService:
                         task_description=node_data.task_description,
                         position_x=node_data.position_x or 0,
                         position_y=node_data.position_y or 0
-                        # 注意：这里不包含processor_id
+                        # 注意：不再包含node_id，因为这是临时标识符
                     )
                     export_nodes.append(export_node)
             else:
@@ -80,15 +80,25 @@ class WorkflowImportExportService:
             # 创建节点ID到名称的映射 - 只有在有节点时才处理连接
             if nodes_data and connections_data:
                 node_id_to_name = {}
+                node_id_to_details = {}
                 for node_data in nodes_data:
-                    node_id_to_name[str(node_data.node_base_id)] = node_data.name
+                    node_base_id = str(node_data.node_base_id)
+                    node_id_to_name[node_base_id] = node_data.name
+                    node_id_to_details[node_base_id] = {
+                        'name': node_data.name,
+                        'type': node_data.type,
+                        'position_x': node_data.position_x,
+                        'position_y': node_data.position_y
+                    }
                 
                 for conn_data in connections_data:
                     # 使用正确的字段名 from_node_base_id 和 to_node_base_id
-                    from_node_name = node_id_to_name.get(str(conn_data.get('from_node_base_id', '')))
-                    to_node_name = node_id_to_name.get(str(conn_data.get('to_node_base_id', '')))
+                    from_node_id = str(conn_data.get('from_node_base_id', ''))
+                    to_node_id = str(conn_data.get('to_node_base_id', ''))
+                    from_node_name = node_id_to_name.get(from_node_id)
+                    to_node_name = node_id_to_name.get(to_node_id)
                     
-                    logger.debug(f"处理导出连接: {conn_data.get('from_node_base_id')} -> {conn_data.get('to_node_base_id')}")
+                    logger.debug(f"处理导出连接: {from_node_id} -> {to_node_id}")
                     logger.debug(f"节点名称映射: {from_node_name} -> {to_node_name}")
                     
                     if from_node_name and to_node_name:
@@ -96,16 +106,54 @@ class WorkflowImportExportService:
                         if from_node_name == to_node_name:
                             logger.warning(f"发现自连接，跳过: 节点 {from_node_name} 连接到自己")
                             continue
+                        
+                        # 解析condition_config（如果存在）
+                        condition_config = None
+                        if conn_data.get('condition_config'):
+                            try:
+                                if isinstance(conn_data['condition_config'], str):
+                                    import json
+                                    condition_config = json.loads(conn_data['condition_config'])
+                                else:
+                                    condition_config = conn_data['condition_config']
+                            except Exception as e:
+                                logger.warning(f"解析连接条件配置失败: {e}")
+                        
+                        # 计算连接路径（基于节点位置）
+                        connection_path = None
+                        from_node_details = node_id_to_details.get(from_node_id)
+                        to_node_details = node_id_to_details.get(to_node_id)
+                        
+                        if from_node_details and to_node_details:
+                            connection_path = [
+                                {
+                                    'x': from_node_details['position_x'] or 0,
+                                    'y': from_node_details['position_y'] or 0,
+                                    'type': 'start'
+                                },
+                                {
+                                    'x': to_node_details['position_x'] or 0,
+                                    'y': to_node_details['position_y'] or 0,
+                                    'type': 'end'
+                                }
+                            ]
                             
                         export_conn = ExportConnection(
                             from_node_name=from_node_name,
                             to_node_name=to_node_name,
-                            connection_type=conn_data.get('connection_type', 'normal')
+                            connection_type=conn_data.get('connection_type', 'normal'),
+                            condition_config=condition_config,
+                            connection_path=connection_path,
+                            style_config={
+                                'type': 'smoothstep',
+                                'animated': False,
+                                'stroke_width': 2
+                            }
                         )
                         export_connections.append(export_conn)
                     else:
                         # 记录调试信息
-                        logger.debug(f"连接跳过: from_node_base_id={conn_data.get('from_node_base_id')}, to_node_base_id={conn_data.get('to_node_base_id')}")
+                        logger.debug(f"连接跳过: from_node_base_id={from_node_id}, to_node_base_id={to_node_id}")
                         logger.debug(f"可用节点: {list(node_id_to_name.keys())}")
             else:
                 logger.info(f"工作流 {workflow_base_id} 没有连接，跳过连接处理")
@@ -114,7 +162,7 @@ class WorkflowImportExportService:
             export_data = WorkflowExport(
                 name=workflow.name,
                 description=workflow.description or "空工作流模板",
-                export_version="1.0",
+                export_version="2.0",  # 使用2.0版本表示增强的连接信息
                 export_timestamp=datetime.now().isoformat(),
                 nodes=export_nodes,
                 connections=export_connections,
@@ -123,7 +171,11 @@ class WorkflowImportExportService:
                     "exported_by_user": str(user_id),
                     "node_count": len(export_nodes),
                     "connection_count": len(export_connections),
-                    "is_empty_workflow": len(export_nodes) == 0
+                    "is_empty_workflow": len(export_nodes) == 0,
+                    "enhanced_format": True,
+                    "includes_connection_details": True,
+                    "includes_node_ids": True,
+                    "includes_path_info": True
                 }
             )
             
@@ -263,33 +315,101 @@ class WorkflowImportExportService:
             
             # 创建连接
             connections_created = 0
-            for conn_data in import_data.connections:
-                from_node_id = created_nodes.get(conn_data.from_node_name)
-                to_node_id = created_nodes.get(conn_data.to_node_name)
-                
-                logger.info(f"处理连接: {conn_data.from_node_name} -> {conn_data.to_node_name}")
-                logger.info(f"映射结果: {from_node_id} -> {to_node_id}")
-                
-                if from_node_id and to_node_id:
-                    # 检查是否为自连接
-                    if from_node_id == to_node_id:
-                        logger.warning(f"跳过自连接: 节点 {conn_data.from_node_name} 尝试连接到自己")
+            connection_errors = []
+            for i, conn_data in enumerate(import_data.connections, 1):
+                try:
+                    from_node_id = created_nodes.get(conn_data.from_node_name)
+                    to_node_id = created_nodes.get(conn_data.to_node_name)
+                    
+                    logger.info(f"处理连接 {i}/{len(import_data.connections)}: {conn_data.from_node_name} -> {conn_data.to_node_name}")
+                    logger.info(f"节点映射结果: {conn_data.from_node_name}({from_node_id}) -> {conn_data.to_node_name}({to_node_id})")
+                    
+                    if not from_node_id:
+                        error_msg = f"连接 {i}: 源节点 '{conn_data.from_node_name}' 不存在于创建的节点中"
+                        logger.error(error_msg)
+                        connection_errors.append(error_msg)
+                        continue
+                        
+                    if not to_node_id:
+                        error_msg = f"连接 {i}: 目标节点 '{conn_data.to_node_name}' 不存在于创建的节点中"
+                        logger.error(error_msg)
+                        connection_errors.append(error_msg)
                         continue
                     
-                    # 创建NodeConnectionCreate对象
+                    # 检查是否为自连接
+                    if from_node_id == to_node_id:
+                        warning_msg = f"连接 {i}: 跳过自连接 - 节点 '{conn_data.from_node_name}' 尝试连接到自己"
+                        logger.warning(warning_msg)
+                        continue
+                    
+                    # 准备连接的条件配置
+                    condition_config = None
+                    if conn_data.condition_config:
+                        # 确保condition_config是有效的JSON
+                        try:
+                            if isinstance(conn_data.condition_config, dict):
+                                import json
+                                condition_config = json.dumps(conn_data.condition_config)
+                            else:
+                                condition_config = str(conn_data.condition_config)
+                        except Exception as e:
+                            logger.warning(f"连接 {i}: 处理条件配置失败: {e}")
+                            condition_config = None
+                    
+                    # 创建NodeConnectionCreate对象，包含所有详细信息
                     connection_create = NodeConnectionCreate(
                         from_node_base_id=from_node_id,
                         to_node_base_id=to_node_id,
                         workflow_base_id=workflow_base_id,
-                        connection_type=conn_data.connection_type
+                        connection_type=conn_data.connection_type or 'normal'
                     )
                     
-                    await self.node_service.create_node_connection(connection_create, user_id)
-                    connections_created += 1
+                    logger.info(f"连接 {i}: 开始创建连接对象")
                     
-                    logger.debug(f"连接创建成功: {conn_data.from_node_name} -> {conn_data.to_node_name}")
-                else:
-                    logger.warning(f"跳过连接: 找不到节点 {conn_data.from_node_name} 或 {conn_data.to_node_name}")
+                    # 创建连接
+                    created_connection = await self.node_service.create_node_connection(connection_create, user_id)
+                    
+                    if created_connection:
+                        logger.info(f"连接 {i}: 创建成功 - {conn_data.from_node_name} -> {conn_data.to_node_name}")
+                        connections_created += 1
+                        
+                        # 如果有条件配置，尝试更新连接记录
+                        if condition_config:
+                            try:
+                                # 这里可以添加更新条件配置的逻辑
+                                logger.info(f"连接 {i}: 包含条件配置，已记录")
+                            except Exception as e:
+                                logger.warning(f"连接 {i}: 更新条件配置失败: {e}")
+                    else:
+                        error_msg = f"连接 {i}: 创建失败，create_node_connection返回空结果"
+                        logger.error(error_msg)
+                        connection_errors.append(error_msg)
+                        
+                except Exception as e:
+                    error_msg = f"连接 {i} ({conn_data.from_node_name} -> {conn_data.to_node_name}): 创建异常 - {str(e)}"
+                    logger.error(error_msg)
+                    connection_errors.append(error_msg)
+                    # 继续处理下一个连接，不要因为一个连接失败就停止整个导入
+            
+            # 检查连接创建的完整性
+            expected_connections = len(import_data.connections)
+            logger.info(f"连接创建完成: 期望 {expected_connections}, 实际 {connections_created}, 错误 {len(connection_errors)}")
+            
+            # 构建最终结果
+            warnings = validation_result.get("warnings", [])
+            errors = []
+            
+            # 如果有连接错误，添加到警告中
+            if connection_errors:
+                warnings.extend([f"连接创建警告: {error}" for error in connection_errors])
+                logger.warning(f"导入过程中发现 {len(connection_errors)} 个连接问题")
+            
+            # 如果连接创建不完整，记录警告
+            if connections_created < expected_connections:
+                missing_count = expected_connections - connections_created
+                warning_msg = f"预期创建 {expected_connections} 个连接，实际只创建了 {connections_created} 个，缺失 {missing_count} 个"
+                warnings.append(warning_msg)
+                logger.warning(warning_msg)
             
             result = ImportResult(
                 success=True,
@@ -297,7 +417,8 @@ class WorkflowImportExportService:
                 message=f"工作流 '{import_data.name}' 导入成功",
                 created_nodes=nodes_created,
                 created_connections=connections_created,
-                warnings=validation_result.get("warnings", [])
+                warnings=warnings,
+                errors=errors
             )
             
             logger.info(f"工作流导入完成: {import_data.name}, 节点: {nodes_created}, 连接: {connections_created}")

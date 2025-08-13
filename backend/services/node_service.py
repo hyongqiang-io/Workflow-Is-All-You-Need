@@ -43,6 +43,10 @@ class NodeService:
         if isinstance(workflow_creator_id, str):
             workflow_creator_id = uuid.UUID(workflow_creator_id)
         
+        # 确保user_id也是UUID类型
+        if isinstance(user_id, str):
+            user_id = uuid.UUID(user_id)
+        
         return workflow_creator_id == user_id
     
     def _format_node_response(self, node_record: Dict[str, Any]) -> NodeResponse:
@@ -675,10 +679,10 @@ class NodeService:
                 SELECT 
                     n.*,
                     np.processor_id
-                FROM "node" n
+                FROM `node` n
                 LEFT JOIN node_processor np ON np.node_id = n.node_id
-                WHERE n.node_base_id = $1 
-                AND n.workflow_base_id = $2
+                WHERE n.node_base_id = %s 
+                AND n.workflow_base_id = %s
                 AND n.is_current_version = true 
                 AND n.is_deleted = false
             """
