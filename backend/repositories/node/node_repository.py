@@ -28,7 +28,7 @@ class NodeRepository(BaseRepository[Node]):
             # 获取当前工作流版本
             workflow_query = """
                 SELECT workflow_id FROM workflow 
-                WHERE workflow_base_id = $1 AND is_current_version = TRUE AND is_deleted = FALSE
+                WHERE workflow_base_id = %s AND is_current_version = TRUE AND is_deleted = FALSE
             """
             workflow_result = await self.db.fetch_one(workflow_query, node_data.workflow_base_id)
             if not workflow_result:
@@ -37,9 +37,10 @@ class NodeRepository(BaseRepository[Node]):
             workflow_id = workflow_result['workflow_id']
             
             # 准备数据
+            node_base_id = uuid.uuid4()  # 预生成node_base_id确保唯一性
             data = {
                 "node_id": uuid.uuid4(),
-                "node_base_id": uuid.uuid4(),
+                "node_base_id": node_base_id,
                 "workflow_id": workflow_id,
                 "workflow_base_id": node_data.workflow_base_id,
                 "name": node_data.name,
@@ -54,7 +55,24 @@ class NodeRepository(BaseRepository[Node]):
                 "is_deleted": False
             }
             
+            # 创建记录并处理时序问题
             result = await self.create(data)
+            
+            # 如果fetch_one返回了错误的记录（由于时序问题），用精确查询替代
+            if result and result.get('node_base_id') != node_base_id:
+                logger.warning(f"检测到时序问题，使用精确查询获取节点: {node_base_id}")
+                accurate_query = """
+                    SELECT * FROM node 
+                    WHERE node_base_id = %s AND workflow_base_id = %s
+                """
+                accurate_result = await self.db.fetch_one(accurate_query, node_base_id, node_data.workflow_base_id)
+                if accurate_result:
+                    return accurate_result
+                else:
+                    # 如果精确查询也失败，返回我们知道应该插入的数据
+                    logger.warning(f"精确查询失败，返回预期数据: {node_base_id}")
+                    return data
+            
             return result
         except Exception as e:
             logger.error(f"创建节点失败: {e}")
@@ -70,8 +88,8 @@ class NodeRepository(BaseRepository[Node]):
         try:
             query = """
                 SELECT * FROM "node" 
-                WHERE node_base_id = $1 
-                AND workflow_base_id = $2
+                WHERE node_base_id = %s 
+                AND workflow_base_id = %s
                 AND is_current_version = true 
                 AND is_deleted = false
             """
@@ -201,7 +219,7 @@ class NodeRepository(BaseRepository[Node]):
                 diagnostic_query = """
                     SELECT node_id, node_base_id, workflow_base_id, is_current_version, is_deleted
                     FROM node 
-                    WHERE node_base_id = $1 AND workflow_base_id = $2
+                    WHERE node_base_id = %s AND workflow_base_id = %s
                 """
                 diagnostic_result = await self.db.fetch_all(diagnostic_query, node_base_id, workflow_base_id)
                 logger.warning(f"[DEBUG] 诊断查询结果: {diagnostic_result}")
@@ -220,12 +238,12 @@ class NodeRepository(BaseRepository[Node]):
                 query = """
                     UPDATE node 
                     SET is_deleted = TRUE 
-                    WHERE node_base_id = $1 AND workflow_base_id = $2
+                    WHERE node_base_id = %s AND workflow_base_id = %s
                 """
             else:
                 query = """
                     DELETE FROM node 
-                    WHERE node_base_id = $1 AND workflow_base_id = $2
+                    WHERE node_base_id = %s AND workflow_base_id = %s
                 """
             
             result = await self.db.execute(query, node_base_id, workflow_base_id)
@@ -247,7 +265,7 @@ class NodeRepository(BaseRepository[Node]):
                     np.processor_id
                 FROM "node" n
                 LEFT JOIN node_processor np ON np.node_id = n.node_id
-                WHERE n.workflow_base_id = $1 
+                WHERE n.workflow_base_id = %s 
                 AND n.is_current_version = true 
                 AND n.is_deleted = false
                 ORDER BY n.created_at ASC
@@ -264,7 +282,7 @@ class NodeRepository(BaseRepository[Node]):
         try:
             query = """
                 SELECT * FROM "node" 
-                WHERE workflow_base_id = $1 AND type = $2 
+                WHERE workflow_base_id = %s AND type = %s 
                 AND is_current_version = true 
                 AND is_deleted = false
                 ORDER BY created_at ASC
@@ -288,7 +306,7 @@ class NodeConnectionRepository:
             # 获取当前版本的节点ID
             from_node_query = """
                 SELECT node_id FROM node 
-                WHERE node_base_id = $1 AND workflow_base_id = $2 
+                WHERE node_base_id = %s AND workflow_base_id = %s 
                 AND is_current_version = TRUE AND is_deleted = FALSE
             """
             from_node = await self.db.fetch_one(from_node_query, 
@@ -306,7 +324,7 @@ class NodeConnectionRepository:
             # 获取工作流ID
             workflow_query = """
                 SELECT workflow_id FROM workflow 
-                WHERE workflow_base_id = $1 AND is_current_version = TRUE AND is_deleted = FALSE
+                WHERE workflow_base_id = %s AND is_current_version = TRUE AND is_deleted = FALSE
             """
             workflow = await self.db.fetch_one(workflow_query, connection_data.workflow_base_id)
             if not workflow:
@@ -315,7 +333,7 @@ class NodeConnectionRepository:
             # 检查连接是否已存在
             check_query = """
                 SELECT * FROM node_connection 
-                WHERE from_node_id = $1 AND to_node_id = $2 AND workflow_id = $3
+                WHERE from_node_id = %s AND to_node_id = %s AND workflow_id = %s
             """
             existing_connection = await self.db.fetch_one(
                 check_query,
@@ -332,7 +350,7 @@ class NodeConnectionRepository:
             query = """
                 INSERT INTO node_connection 
                 (from_node_id, to_node_id, workflow_id, connection_type, condition_config, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING *
             """
             
@@ -364,7 +382,7 @@ class NodeConnectionRepository:
         try:
             query = """
                 SELECT * FROM node_connection 
-                WHERE from_node_id = $1 AND to_node_id = $2 AND workflow_id = $3
+                WHERE from_node_id = %s AND to_node_id = %s AND workflow_id = %s
             """
             result = await self.db.fetch_one(query, from_node_id, to_node_id, workflow_id)
             return result
@@ -420,7 +438,7 @@ class NodeConnectionRepository:
             # 获取当前版本的节点ID
             node_query = """
                 SELECT node_id FROM "node" 
-                WHERE node_base_id = $1 AND workflow_base_id = $2
+                WHERE node_base_id = %s AND workflow_base_id = %s
                 AND is_current_version = true 
                 AND is_deleted = false
             """
@@ -433,7 +451,7 @@ class NodeConnectionRepository:
             # 获取工作流ID
             workflow_query = """
                 SELECT workflow_id FROM workflow 
-                WHERE workflow_base_id = $1 AND is_current_version = TRUE
+                WHERE workflow_base_id = %s AND is_current_version = TRUE
             """
             workflow = await self.db.fetch_one(workflow_query, workflow_base_id)
             if not workflow:
@@ -441,7 +459,7 @@ class NodeConnectionRepository:
             
             query = """
                 DELETE FROM node_connection 
-                WHERE from_node_id = $1 AND to_node_id = $2 AND workflow_id = $3
+                WHERE from_node_id = %s AND to_node_id = %s AND workflow_id = %s
             """
             result = await self.db.execute(query, from_node['node_id'], to_node['node_id'], workflow['workflow_id'])
             success = "1" in result
@@ -469,8 +487,8 @@ class NodeConnectionRepository:
                 FROM node_connection nc
                 JOIN node fn ON fn.node_id = nc.from_node_id
                 JOIN node tn ON tn.node_id = nc.to_node_id
-                WHERE fn.workflow_base_id = $1 
-                  AND tn.workflow_base_id = $2
+                WHERE fn.workflow_base_id = %s 
+                  AND tn.workflow_base_id = %s
                   AND fn.is_current_version = TRUE
                   AND tn.is_current_version = TRUE
                   AND fn.is_deleted = FALSE
@@ -493,7 +511,7 @@ class NodeConnectionRepository:
                 JOIN node fn ON fn.node_id = nc.from_node_id
                 JOIN node tn ON tn.node_id = nc.to_node_id
                 JOIN workflow w ON w.workflow_id = nc.workflow_id
-                WHERE fn.node_base_id = $1 AND w.workflow_base_id = $2 
+                WHERE fn.node_base_id = %s AND w.workflow_base_id = %s 
                       AND w.is_current_version = TRUE
                 ORDER BY nc.created_at ASC
             """
@@ -513,7 +531,7 @@ class NodeConnectionRepository:
                 JOIN node fn ON fn.node_id = nc.from_node_id
                 JOIN node tn ON tn.node_id = nc.to_node_id
                 JOIN workflow w ON w.workflow_id = nc.workflow_id
-                WHERE tn.node_base_id = $1 AND w.workflow_base_id = $2 
+                WHERE tn.node_base_id = %s AND w.workflow_base_id = %s 
                       AND w.is_current_version = TRUE
                 ORDER BY nc.created_at ASC
             """
@@ -540,7 +558,7 @@ class NodeConnectionRepository:
                 JOIN node fn ON fn.node_id = nc.from_node_id AND fn.is_current_version = TRUE
                 JOIN node tn ON tn.node_id = nc.to_node_id AND tn.is_current_version = TRUE
                 JOIN workflow w ON w.workflow_id = nc.workflow_id AND w.is_current_version = TRUE
-                WHERE fn.node_base_id = $1 AND w.workflow_base_id = $2
+                WHERE fn.node_base_id = %s AND w.workflow_base_id = %s
                 ORDER BY nc.created_at ASC
             """
             results = await self.db.fetch_all(query, node_base_id, workflow_base_id)

@@ -1,0 +1,128 @@
+{
+  "name": "测试工作流",
+  "description": "包含详细连接信息的测试工作流",
+  "export_version": "2.0",
+  "export_timestamp": "2025-08-13T12:00:00Z",
+  "nodes": [
+    {
+      "name": "开始节点",
+      "type": "start",
+      "task_description": "工作流开始",
+      "position_x": 100.0,
+      "position_y": 100.0,
+      "node_id": "node-1"
+    },
+    {
+      "name": "处理节点1",
+      "type": "processor",
+      "task_description": "处理数据",
+      "position_x": 300.0,
+      "position_y": 100.0,
+      "node_id": "node-2"
+    },
+    {
+      "name": "处理节点2",
+      "type": "processor",
+      "task_description": "验证结果",
+      "position_x": 500.0,
+      "position_y": 100.0,
+      "node_id": "node-3"
+    },
+    {
+      "name": "结束节点",
+      "type": "end",
+      "task_description": "工作流结束",
+      "position_x": 700.0,
+      "position_y": 100.0,
+      "node_id": "node-4"
+    }
+  ],
+  "connections": [
+    {
+      "from_node_name": "开始节点",
+      "to_node_name": "处理节点1",
+      "from_node_id": "node-1",
+      "to_node_id": "node-2",
+      "connection_type": "normal",
+      "condition_config": null,
+      "connection_path": [
+        {
+          "x": 100,
+          "y": 100,
+          "type": "start"
+        },
+        {
+          "x": 300,
+          "y": 100,
+          "type": "end"
+        }
+      ],
+      "style_config": {
+        "type": "smoothstep",
+        "animated": false,
+        "stroke_width": 2
+      }
+    },
+    {
+      "from_node_name": "处理节点1",
+      "to_node_name": "处理节点2",
+      "from_node_id": "node-2",
+      "to_node_id": "node-3",
+      "connection_type": "conditional",
+      "condition_config": {
+        "condition": "success",
+        "operator": "equals",
+        "value": true
+      },
+      "connection_path": [
+        {
+          "x": 300,
+          "y": 100,
+          "type": "start"
+        },
+        {
+          "x": 500,
+          "y": 100,
+          "type": "end"
+        }
+      ],
+      "style_config": {
+        "type": "smoothstep",
+        "animated": true,
+        "stroke_width": 2,
+        "stroke_color": "orange"
+      }
+    },
+    {
+      "from_node_name": "处理节点2",
+      "to_node_name": "结束节点",
+      "from_node_id": "node-3",
+      "to_node_id": "node-4",
+      "connection_type": "normal",
+      "condition_config": null,
+      "connection_path": [
+        {
+          "x": 500,
+          "y": 100,
+          "type": "start"
+        },
+        {
+          "x": 700,
+          "y": 100,
+          "type": "end"
+        }
+      ],
+      "style_config": {
+        "type": "smoothstep",
+        "animated": false,
+        "stroke_width": 2
+      }
+    }
+  ],
+  "metadata": {
+    "enhanced_format": true,
+    "includes_connection_details": true,
+    "includes_node_ids": true,
+    "includes_path_info": true
+  }
+}

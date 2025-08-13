@@ -207,14 +207,23 @@ class CompleteMySQLDatabaseInitializer:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """,
                 
-                # 7. node_processor表
+                # 7. node_processor表 - 修正后的版本，包含所有必需字段
                 """
                 CREATE TABLE IF NOT EXISTS `node_processor` (
+                    node_processor_id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
                     node_id CHAR(36) NOT NULL,
+                    node_base_id CHAR(36) NOT NULL,
+                    workflow_id CHAR(36) NOT NULL,
+                    workflow_base_id CHAR(36) NOT NULL,
                     processor_id CHAR(36) NOT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     
-                    PRIMARY KEY (node_id, processor_id)
+                    UNIQUE KEY unique_node_processor (node_id, processor_id),
+                    INDEX idx_node_processor_node_id (node_id),
+                    INDEX idx_node_processor_node_base_id (node_base_id),
+                    INDEX idx_node_processor_workflow_id (workflow_id),
+                    INDEX idx_node_processor_workflow_base_id (workflow_base_id),
+                    INDEX idx_node_processor_processor_id (processor_id)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """,
                 

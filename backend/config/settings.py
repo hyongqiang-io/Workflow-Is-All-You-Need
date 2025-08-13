@@ -17,7 +17,7 @@ class DatabaseSettings(BaseSettings):
     port: int = 3306  # MySQL默认端口
     database: str = "workflow_db"
     username: str = "root"  # MySQL默认用户
-    password: str = "mysql123"
+    password: str = "mysql"
     charset: str = "utf8mb4"  # MySQL字符集，支持完整的UTF-8
     
     class Config:
