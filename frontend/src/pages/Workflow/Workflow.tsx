@@ -8,13 +8,16 @@ import {
   DeleteOutlined,
   BranchesOutlined,
   ReloadOutlined,
-  HistoryOutlined
+  HistoryOutlined,
+  DownloadOutlined,
+  UploadOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { workflowAPI, executionAPI } from '../../services/api';
 import { useAuthStore } from '../../stores/authStore';
 import WorkflowDesigner from '../../components/WorkflowDesigner';
 import WorkflowInstanceList from '../../components/WorkflowInstanceList';
+import WorkflowImportExport from '../../components/WorkflowImportExport';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -45,6 +48,11 @@ const WorkflowPage: React.FC = () => {
   const [currentWorkflow, setCurrentWorkflow] = useState<WorkflowItem | null>(null);
   const [instanceListVisible, setInstanceListVisible] = useState(false);
   const [createForm] = Form.useForm();
+
+  // 导入导出相关状态
+  const [importExportVisible, setImportExportVisible] = useState(false);
+  const [importExportMode, setImportExportMode] = useState<'export' | 'import'>('export');
+  const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowItem | null>(null);
 
   useEffect(() => {
     loadWorkflows();
@@ -323,6 +331,34 @@ const WorkflowPage: React.FC = () => {
     setInstanceListVisible(true);
   };
 
+  // 导入导出处理函数
+  const handleExport = (workflow: WorkflowItem) => {
+    setSelectedWorkflow(workflow);
+    setImportExportMode('export');
+    setImportExportVisible(true);
+  };
+
+  const handleImport = () => {
+    setSelectedWorkflow(null);
+    setImportExportMode('import');
+    setImportExportVisible(true);
+  };
+
+  const handleImportExportClose = () => {
+    setImportExportVisible(false);
+    setSelectedWorkflow(null);
+  };
+
+  const handleExportSuccess = () => {
+    // 导出成功后可以刷新列表或显示提示
+    loadWorkflows();
+  };
+
+  const handleImportSuccess = (workflowId: string) => {
+    // 导入成功后刷新工作流列表
+    loadWorkflows();
+  };
+
   const formatDate = (dateString: string) => {
     if (!dateString) return '-';
     try {
@@ -444,6 +480,14 @@ const WorkflowPage: React.FC = () => {
           <Button 
             type="link" 
             size="small" 
+            icon={<DownloadOutlined />}
+            onClick={() => handleExport(record)}
+          >
+            导出
+          </Button>
+          <Button 
+            type="link" 
+            size="small" 
             danger
             icon={<DeleteOutlined />}
             onClick={() => handleDelete(record)}
@@ -490,6 +534,12 @@ const WorkflowPage: React.FC = () => {
                 onClick={handleCreate}
               >
                 创建工作流
+              </Button>
+              <Button 
+                icon={<UploadOutlined />}
+                onClick={handleImport}
+              >
+                导入工作流
               </Button>
               
             </Space>
@@ -586,6 +636,17 @@ const WorkflowPage: React.FC = () => {
         workflowBaseId={currentWorkflow?.baseId || ''}
         visible={instanceListVisible}
         onClose={() => setInstanceListVisible(false)}
+      />
+
+      {/* 导入导出模态框 */}
+      <WorkflowImportExport
+        visible={importExportVisible}
+        mode={importExportMode}
+        workflowId={selectedWorkflow?.baseId}
+        workflowName={selectedWorkflow?.name}
+        onClose={handleImportExportClose}
+        onExportSuccess={handleExportSuccess}
+        onImportSuccess={handleImportSuccess}
       />
     </div>
   );

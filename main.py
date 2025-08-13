@@ -324,7 +324,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8002,  # 使用8002端口避免冲突
+        port=8001,  # 修改为8001端口
         reload=False,  # 禁用自动重载以防止服务自动关闭
         log_level="info"
     )

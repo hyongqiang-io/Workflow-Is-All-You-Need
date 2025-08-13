@@ -21,6 +21,31 @@ import { Card, Button, Modal, Form, Input, Select, Space, message, Drawer, List,
 import { PlusOutlined, SettingOutlined, PlayCircleOutlined, SaveOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import { workflowAPI, nodeAPI, processorAPI, executionAPI } from '../services/api';
 
+// 添加额外的样式来修复React Flow容器问题
+const reactFlowStyle = `
+  .react-flow__viewport {
+    width: 100% !important;
+    height: 100% !important;
+  }
+  .react-flow__renderer {
+    width: 100% !important;
+    height: 100% !important;
+  }
+  .react-flow__container {
+    width: 100% !important;
+    height: 100% !important;
+  }
+`;
+
+// 抑制 ResizeObserver 错误
+const suppressResizeObserverError = () => {
+  window.addEventListener('error', (e) => {
+    if (e.message === 'ResizeObserver loop completed with undelivered notifications.') {
+      e.stopImmediatePropagation();
+    }
+  });
+};
+
 const { TextArea } = Input;
 const { Option } = Select;
 
@@ -128,7 +153,7 @@ const CustomNode = ({ data, selected }: { data: any; selected?: boolean }) => {
         <Handle
           type="target"
           position={Position.Left}
-          id={`${data.nodeId || 'unknown'}-target`}
+          id={`${data.nodeId || data.id || 'unknown'}-target`}
           style={{
             background: '#555',
             width: '10px',
@@ -141,7 +166,7 @@ const CustomNode = ({ data, selected }: { data: any; selected?: boolean }) => {
         <Handle
           type="source"
           position={Position.Right}
-          id={`${data.nodeId || 'unknown'}-source`}
+          id={`${data.nodeId || data.id || 'unknown'}-source`}
           style={{
             background: '#555',
             width: '10px',
@@ -182,15 +207,27 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // 抑制 ResizeObserver 错误
+    suppressResizeObserverError();
+    
+    // 添加React Flow样式
+    const styleElement = document.createElement('style');
+    styleElement.textContent = reactFlowStyle;
+    document.head.appendChild(styleElement);
+    
     loadProcessors();
     if (workflowId) {
       loadWorkflow();
     }
     
-    // 清理定时器
+    // 清理定时器和样式
     return () => {
       if (statusUpdateInterval) {
         clearInterval(statusUpdateInterval);
+      }
+      // 清理样式
+      if (styleElement && styleElement.parentNode) {
+        styleElement.parentNode.removeChild(styleElement);
       }
     };
   }, [workflowId]);
@@ -352,12 +389,25 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
           type: node.type || 'processor',
           status: node.status || 'pending',
           nodeId: node.node_base_id || node.node_id,
+          id: node.node_base_id || node.node_id, // 添加id字段作为备用
           description: node.task_description || node.description,
           processor_id: node.processor_id || '',
         },
       }));
       
       console.log('转换后的ReactFlow节点:', flowNodes);
+      
+      // 🔍 DEBUG: 验证节点Handle ID
+      console.log('🔍 DEBUG: 验证Handle ID生成:');
+      flowNodes.forEach((node, index) => {
+        const nodeId = node.data.nodeId || node.data.id || node.id;
+        console.log(`节点 ${index + 1}: ${node.data.label}`);
+        console.log(`  - 节点ID: ${node.id}`);
+        console.log(`  - data.nodeId: ${node.data.nodeId}`);
+        console.log(`  - data.id: ${node.data.id}`);
+        console.log(`  - 生成的Target Handle: ${nodeId}-target`);
+        console.log(`  - 生成的Source Handle: ${nodeId}-source`);
+      });
       
       // 🔍 DEBUG: 检查processor_id是否正确加载
       console.log('🔍 DEBUG: 检查processor_id加载情况:');
@@ -403,14 +453,19 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
           });
         });
         
-        const flowEdges: Edge[] = connections.map((conn: any, index: number) => ({
-          id: conn.connection_id || `e${index}`,
-          source: conn.from_node_base_id,
-          target: conn.to_node_base_id,
-          type: 'smoothstep',
-          sourceHandle: `${conn.from_node_base_id}-source`,
-          targetHandle: `${conn.to_node_base_id}-target`,
-        }));
+        const flowEdges: Edge[] = connections.map((conn: any, index: number) => {
+          const sourceId = conn.from_node_base_id;
+          const targetId = conn.to_node_base_id;
+          
+          return {
+            id: conn.connection_id || `e${index}`,
+            source: sourceId,
+            target: targetId,
+            type: 'smoothstep',
+            sourceHandle: `${sourceId}-source`,
+            targetHandle: `${targetId}-target`,
+          };
+        });
         
         console.log('⚡ 转换后的ReactFlow边:', flowEdges);
         console.log('📏 ReactFlow边详情:');
@@ -422,6 +477,18 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
             sourceHandle: edge.sourceHandle,
             targetHandle: edge.targetHandle
           });
+          
+          // 验证Handle是否存在于节点中
+          const sourceNode = flowNodes.find(n => n.id === edge.source);
+          const targetNode = flowNodes.find(n => n.id === edge.target);
+          console.log(`    源节点存在: ${sourceNode ? 'Yes' : 'No'} (${edge.source})`);
+          console.log(`    目标节点存在: ${targetNode ? 'Yes' : 'No'} (${edge.target})`);
+          if (sourceNode) {
+            console.log(`    源节点Handle: ${edge.sourceHandle} -> ${sourceNode.data.nodeId || sourceNode.data.id}-source`);
+          }
+          if (targetNode) {
+            console.log(`    目标节点Handle: ${edge.targetHandle} -> ${targetNode.data.nodeId || targetNode.data.id}-target`);
+          }
         });
         
         setEdges(flowEdges);
@@ -1076,8 +1143,9 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
             </span>
           </div>
           
-          <div style={{ height: '500px', width: '100%', border: '1px solid #d9d9d9', borderRadius: '6px' }}>
+          <div style={{ height: '500px', width: '100%', border: '1px solid #d9d9d9', borderRadius: '6px', position: 'relative' }}>
             <ReactFlow
+              style={{ width: '100%', height: '100%' }}
               nodes={nodes}
               edges={edges}
               onNodesChange={onNodesChange}
@@ -1094,6 +1162,12 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
               deleteKeyCode="Delete"
               selectNodesOnDrag={false}
               attributionPosition="bottom-left"
+              proOptions={{ hideAttribution: true }}
+              defaultEdgeOptions={{
+                type: 'smoothstep',
+                animated: false,
+                style: { strokeWidth: 2 }
+              }}
             >
             <Controls />
             <Background />

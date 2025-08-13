@@ -63,48 +63,63 @@ class WorkflowRepository(BaseRepository[Workflow]):
                              editor_user_id: Optional[uuid.UUID] = None) -> Optional[Dict[str, Any]]:
         """更新工作流（创建新版本）"""
         try:
-            # 先创建新版本
-            new_workflow_id = await self.db.call_function(
-                "create_workflow_version",
-                workflow_base_id,
-                editor_user_id,
-                workflow_data.change_description
-            )
+            # 获取当前版本的工作流信息
+            current_workflow = await self.get_workflow_by_base_id(workflow_base_id)
+            if not current_workflow:
+                raise ValueError("工作流不存在")
             
-            if not new_workflow_id:
-                raise ValueError("创建工作流新版本失败")
+            # 生成新的workflow_id和版本号
+            new_workflow_id = uuid.uuid4()
+            new_version = current_workflow.get('version', 1) + 1
             
-            # 如果有需要更新的数据，直接使用SQL更新新创建的记录
-            update_data = {}
-            if workflow_data.name is not None:
-                update_data["name"] = workflow_data.name
-            if workflow_data.description is not None:
-                update_data["description"] = workflow_data.description
+            # 准备新版本数据
+            new_name = workflow_data.name if workflow_data.name is not None else current_workflow.get('name')
+            new_description = workflow_data.description if workflow_data.description is not None else current_workflow.get('description')
             
-            if update_data:
-                # 直接使用SQL更新，确保使用正确的workflow_id
-                set_clauses = []
-                values = []
-                for key, value in update_data.items():
-                    set_clauses.append(f"{key} = %s")
-                    values.append(value)
+            logger.info(f"开始创建工作流新版本: {workflow_base_id} v{new_version}")
+            
+            # 开始事务处理
+            try:
+                # 1. 将当前版本标记为非当前版本
+                update_current_query = """
+                    UPDATE `workflow` 
+                    SET is_current_version = 0 
+                    WHERE workflow_base_id = %s AND is_current_version = 1
+                """
+                await self.db.execute(update_current_query, str(workflow_base_id))
                 
-                if set_clauses:
-                    set_clause = ", ".join(set_clauses)
-                    values.append(new_workflow_id)  # 确保使用新创建的workflow_id
-                    
-                    query = f"""
-                        UPDATE `workflow` 
-                        SET {set_clause}, updated_at = CURRENT_TIMESTAMP 
-                        WHERE workflow_id = %s AND is_deleted = 0
-                    """
-                    
-                    logger.debug(f"执行workflow更新SQL: {query}")
-                    logger.debug(f"更新参数: {values}")
-                    
-                    await self.db.execute(query, *values)
-            
-            return await self.get_workflow_by_id(new_workflow_id)
+                # 2. 创建新版本的工作流记录
+                insert_query = """
+                    INSERT INTO `workflow` (
+                        workflow_id, workflow_base_id, name, description, 
+                        version, is_current_version, creator_id, change_description,
+                        created_at, updated_at, is_deleted
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0
+                    )
+                """
+                
+                await self.db.execute(
+                    insert_query,
+                    str(new_workflow_id),
+                    str(workflow_base_id),
+                    new_name,
+                    new_description,
+                    new_version,
+                    1,  # is_current_version = True
+                    str(current_workflow.get('creator_id')),
+                    workflow_data.change_description or 'Workflow updated'
+                )
+                
+                logger.info(f"工作流版本创建成功: {workflow_base_id} -> v{new_version} (ID: {new_workflow_id})")
+                
+                # 返回新创建的工作流
+                return await self.get_workflow_by_id(new_workflow_id)
+                
+            except Exception as e:
+                logger.error(f"创建工作流版本时发生错误: {e}")
+                raise
+                
         except Exception as e:
             logger.error(f"更新工作流失败: {e}")
             raise

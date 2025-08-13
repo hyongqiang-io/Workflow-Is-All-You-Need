@@ -4,6 +4,31 @@ import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
 
+// 过滤 ResizeObserver 相关的错误警告
+const originalError = console.error;
+console.error = (...args) => {
+  if (
+    typeof args[0] === 'string' &&
+    args[0].includes('ResizeObserver loop completed with undelivered notifications')
+  ) {
+    return;
+  }
+  originalError.call(console, ...args);
+};
+
+// 过滤 Ant Design 版本兼容性警告
+const originalWarn = console.warn;
+console.warn = (...args) => {
+  if (
+    typeof args[0] === 'string' &&
+    (args[0].includes('[antd: compatible]') || 
+     args[0].includes('antd v5 support React is 16 ~ 18'))
+  ) {
+    return;
+  }
+  originalWarn.call(console, ...args);
+};
+
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
 );

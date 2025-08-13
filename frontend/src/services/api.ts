@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // 创建axios实例
 const api = axios.create({
-  baseURL: process.env.REACT_APP_API_BASE_URL || '/api', // 优先使用环境变量，否则使用nginx代理
+  baseURL: 'http://localhost:8001/api', // 直接连接后端8001端口
   timeout: 60000, // 增加到60秒，因为工作流执行可能需要更长时间
   headers: {
     'Content-Type': 'application/json',
@@ -21,7 +21,7 @@ api.interceptors.request.use(
       // 解析token获取用户信息
       try {
         const payload = JSON.parse(atob(token.split('.')[1]));
-        console.log('   - Token用户ID:', payload.user_id);
+        console.log('   - Token用户ID:', payload.sub);  // JWT标准使用sub字段
         console.log('   - Token用户名:', payload.username);
         console.log('   - Token过期时间:', new Date(payload.exp * 1000).toLocaleString());
       } catch (e) {
@@ -274,6 +274,87 @@ export const workflowAPI = {
   // 发布工作流版本
   publishWorkflow: (workflowId: string, data: { version_name: string; description?: string }) =>
     api.post(`/workflows/${workflowId}/publish`, data),
+
+  // ==============================
+  // 工作流导入导出功能
+  // ==============================
+  
+  // 导出工作流
+  exportWorkflow: async (workflowId: string) => {
+    console.log('🔄 开始导出工作流:', workflowId);
+    try {
+      const response = await api.get(`/workflows/${workflowId}/export`);
+      console.log('✅ 工作流导出成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 工作流导出失败:', error);
+      throw error;
+    }
+  },
+
+  // 预览导入工作流
+  previewImportWorkflow: async (importData: any) => {
+    console.log('🔄 预览导入工作流:', importData);
+    try {
+      const response = await api.post('/workflows/import/preview', importData);
+      console.log('✅ 导入预览成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 导入预览失败:', error);
+      throw error;
+    }
+  },
+
+  // 导入工作流
+  importWorkflow: async (importData: any, overwrite: boolean = false) => {
+    console.log('🔄 开始导入工作流:', importData);
+    try {
+      const response = await api.post(`/workflows/import?overwrite=${overwrite}`, importData);
+      console.log('✅ 工作流导入成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 工作流导入失败:', error);
+      throw error;
+    }
+  },
+
+  // 通过文件上传导入工作流
+  importWorkflowFromFile: async (file: File, overwrite: boolean = false) => {
+    console.log('🔄 通过文件导入工作流:', file.name);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const response = await api.post(`/workflows/import/upload?overwrite=${overwrite}`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      console.log('✅ 文件导入成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 文件导入失败:', error);
+      throw error;
+    }
+  },
+
+  // 下载工作流JSON文件
+  downloadWorkflowJSON: (exportData: any, filename: string) => {
+    try {
+      const dataStr = JSON.stringify(exportData, null, 2);
+      const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+      
+      const exportFileDefaultName = filename || 'workflow_export.json';
+      
+      const linkElement = document.createElement('a');
+      linkElement.setAttribute('href', dataUri);
+      linkElement.setAttribute('download', exportFileDefaultName);
+      linkElement.click();
+      
+      console.log('✅ 工作流JSON文件下载成功:', exportFileDefaultName);
+    } catch (error: any) {
+      console.error('❌ 下载失败:', error);
+      throw error;
+    }
+  }
 };
 
 // 节点相关API
