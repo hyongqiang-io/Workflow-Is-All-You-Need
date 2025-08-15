@@ -334,15 +334,21 @@ class DatabaseManager:
                             conditions[clean_field_name] = args[-1]  # 最后一个参数
             
             # 处理布尔值字段的特殊情况 (PostgreSQL TRUE/FALSE -> MySQL 1/0)
+            logger.debug(f"[DEBUG] 检查布尔字段前的conditions: {conditions}")
+            logger.debug(f"[DEBUG] WHERE子句内容: '{where_clause}'")
+            
             for field_name in ['is_current_version', 'is_deleted']:
                 if field_name not in conditions:
                     # 从WHERE子句中查找布尔值条件
                     bool_pattern = re.search(rf'{field_name}\s*=\s*(TRUE|FALSE)', where_clause, re.IGNORECASE)
+                    logger.debug(f"[DEBUG] 查找{field_name}布尔模式: {bool_pattern}")
                     if bool_pattern:
                         bool_value = bool_pattern.group(1).upper()
-                        conditions[field_name] = 1 if bool_value == 'TRUE' else 0
+                        mysql_bool_value = 1 if bool_value == 'TRUE' else 0
+                        conditions[field_name] = mysql_bool_value
+                        logger.debug(f"[DEBUG] 添加布尔条件: {field_name} = {mysql_bool_value} (原值: {bool_value})")
             
-            logger.debug(f"从UPDATE WHERE中提取条件: {conditions}")
+            logger.debug(f"[DEBUG] 最终提取的WHERE条件: {conditions}")
             return conditions if conditions else None
             
         except Exception as e:

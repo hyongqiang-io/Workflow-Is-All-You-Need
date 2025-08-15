@@ -420,6 +420,7 @@ class MonitoringService:
                     FROM workflow_instance 
                     WHERE status IN ('RUNNING', 'PENDING')
                     AND is_deleted = FALSE
+                    AND status NOT IN ('cancelled', 'CANCELLED', 'failed', 'FAILED')
                     ORDER BY updated_at DESC
                 """)
                 
@@ -448,8 +449,8 @@ class MonitoringService:
                             # 触发状态更新（通过执行引擎）
                             try:
                                 from .execution_service import execution_engine
-                                if hasattr(execution_engine, 'context_manager'):
-                                    await execution_engine.context_manager._check_workflow_completion(workflow_id)
+                                # 🔧 修复：调用执行引擎的方法，而不是context_manager的方法
+                                await execution_engine._check_workflow_completion(workflow_id)
                             except Exception as sync_error:
                                 logger.error(f"实时同步触发状态更新失败: {sync_error}")
                 

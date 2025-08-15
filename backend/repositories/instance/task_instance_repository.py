@@ -456,13 +456,14 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                     LEFT JOIN processor p ON p.processor_id = ti.processor_id
                     LEFT JOIN agent a ON a.agent_id = ti.assigned_agent_id
                     WHERE ti.assigned_agent_id = $1 AND ti.task_type IN ($2, $3)
-                          AND ti.status = $4 AND ti.is_deleted = FALSE
+                          AND ti.status IN ($4, $5) AND ti.is_deleted = FALSE
                     ORDER BY ti.created_at ASC
-                    LIMIT $5
+                    LIMIT $6
                 """
                 results = await self.db.fetch_all(query, agent_id, TaskInstanceType.AGENT.value,
                                                 TaskInstanceType.MIXED.value, 
-                                                TaskInstanceStatus.PENDING.value, limit)
+                                                TaskInstanceStatus.PENDING.value,
+                                                TaskInstanceStatus.ASSIGNED.value, limit)
             else:
                 query = """
                     SELECT ti.*, 
@@ -471,13 +472,14 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                     FROM task_instance ti
                     LEFT JOIN processor p ON p.processor_id = ti.processor_id
                     LEFT JOIN agent a ON a.agent_id = ti.assigned_agent_id
-                    WHERE ti.task_type IN ($1, $2) AND ti.status = $3 AND ti.is_deleted = FALSE
+                    WHERE ti.task_type IN ($1, $2) AND ti.status IN ($3, $4) AND ti.is_deleted = FALSE
                     ORDER BY ti.created_at ASC
-                    LIMIT $4
+                    LIMIT $5
                 """
                 results = await self.db.fetch_all(query, TaskInstanceType.AGENT.value,
                                                 TaskInstanceType.MIXED.value, 
-                                                TaskInstanceStatus.PENDING.value, limit)
+                                                TaskInstanceStatus.PENDING.value,
+                                                TaskInstanceStatus.ASSIGNED.value, limit)
                                                 
             logger.info(f"   - 查询结果: 找到 {len(results)} 个任务")
             

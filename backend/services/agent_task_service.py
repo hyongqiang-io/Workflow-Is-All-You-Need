@@ -248,9 +248,16 @@ class AgentTaskService:
                     logger.trace(f"   - {key}: '{value}'")
             
             # 准备AI任务数据 - 多数据源智能选择
+            logger.info(f"📊 [AGENT-CONTEXT] 开始分析任务上下文数据")
             logger.trace(f"full task:{task}")
             task_input_data = task.get('input_data', '')
             task_context_data = task.get('context_data', '')
+            
+            logger.info(f"📊 [AGENT-CONTEXT] 初始数据源:")
+            logger.info(f"   - task_input_data: {len(str(task_input_data))} 字符, 类型: {type(task_input_data)}")
+            logger.info(f"   - task_context_data: {len(str(task_context_data))} 字符, 类型: {type(task_context_data)}")
+            if task_context_data:
+                logger.info(f"   - context_data 预览: {str(task_context_data)[:300]}...")
             
             # 尝试从节点实例获取数据（这是UI显示的数据源）
             node_input_data = ""
@@ -262,7 +269,8 @@ class AgentTaskService:
                     node_instance = await node_repo.get_instance_by_id(node_instance_id)
                     if node_instance and node_instance.get('input_data'):
                         node_input_data = node_instance['input_data']
-                        logger.trace(f"   - 从节点实例获取输入数据: {len(node_input_data)} 字符")
+                        logger.info(f"   - 从节点实例获取输入数据: {len(node_input_data)} 字符")
+                        logger.info(f"   - 节点输入数据预览: {str(node_input_data)[:300]}...")
                 except Exception as e:
                     logger.warning(f"   - 获取节点实例数据失败: {e}")
             
@@ -938,10 +946,10 @@ class AgentTaskService:
             logger.debug(f"🔍 [上下文预处理] 输入数据结构: {data_dict}")
             
             # 兼容不同的上游数据字段名
-            immediate_upstream = data_dict.get('immediate_upstream', {})
+            immediate_upstream = data_dict.get('immediate_upstream_results', {})  # 修复：使用正确的字段名
             upstream_outputs = data_dict.get('upstream_outputs', [])
             
-            logger.debug(f"🔍 [上下文预处理] immediate_upstream类型: {type(immediate_upstream)}, 内容: {immediate_upstream}")
+            logger.debug(f"🔍 [上下文预处理] immediate_upstream_results类型: {type(immediate_upstream)}, 内容: {immediate_upstream}")
             logger.debug(f"🔍 [上下文预处理] upstream_outputs类型: {type(upstream_outputs)}, 内容: {upstream_outputs}")
             
             # 处理immediate_upstream格式（旧格式）

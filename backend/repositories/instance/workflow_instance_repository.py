@@ -177,6 +177,17 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             
             logger.info(f"💾 更新工作流实例数据库记录: {instance_id}")
             result = await self.update(instance_id, data, "workflow_instance_id")
+            
+            # 特殊处理MySQL的情况 - 如果UPDATE成功但没有返回记录，尝试获取更新后的记录
+            if not result:
+                logger.warning(f"UPDATE未返回记录，尝试查询最新状态")
+                result = await self.get_instance_by_id(instance_id)
+                if result:
+                    logger.info(f"✅ 通过查询获取到更新后的工作流实例状态")
+                else:
+                    logger.error(f"❌ 无法获取工作流实例: {instance_id}")
+                    return None
+            
             if result:
                 logger.info(f"✅ 工作流实例状态更新成功!")
                 logger.info(f"   - 实例ID: {instance_id}")

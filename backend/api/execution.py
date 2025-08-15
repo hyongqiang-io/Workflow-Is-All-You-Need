@@ -293,7 +293,7 @@ async def get_workflow_status(
         
         # 如果node_instances是None或字符串，尝试解析或设为空列表
         if not isinstance(node_instances, list):
-            logger.warning(f"node_instances不是列表类型: {type(node_instances)} - {node_instances}")
+            logger.warning(f"node_instances不是列表类型")
             if isinstance(node_instances, str):
                 try:
                     import json
@@ -593,7 +593,7 @@ async def get_workflow_task_flow(
         
         tasks = await task_repo.db.fetch_all(tasks_query, workflow_id)
         
-        # 获取工作流边缘关系（基于节点实例，用于前端流程图显示）
+        # 获取工作流边缘关系（用于前端流程图显示）
         edges_query = """
         SELECT 
             nc.from_node_id,
@@ -601,16 +601,12 @@ async def get_workflow_task_flow(
             nc.condition_config,
             n1.name as from_node_name,
             n2.name as to_node_name,
-            ni1.node_instance_id as from_node_instance_id,
-            ni2.node_instance_id as to_node_instance_id
+            n1.node_base_id as from_node_base_id,
+            n2.node_base_id as to_node_base_id
         FROM node_connection nc
         JOIN node n1 ON nc.from_node_id = n1.node_id
         JOIN node n2 ON nc.to_node_id = n2.node_id
-        JOIN node_instance ni1 ON n1.node_id = ni1.node_id AND ni1.workflow_instance_id = $1
-        JOIN node_instance ni2 ON n2.node_id = ni2.node_id AND ni2.workflow_instance_id = $1
-        WHERE nc.workflow_id = $2
-        AND ni1.is_deleted = FALSE 
-        AND ni2.is_deleted = FALSE
+        WHERE nc.workflow_id = $1
         ORDER BY nc.created_at
         """
         
@@ -622,7 +618,7 @@ async def get_workflow_task_flow(
         workflow_result = await node_repo.db.fetch_one(workflow_query, workflow_instance['workflow_base_id'])
         current_workflow_id = workflow_result['workflow_id'] if workflow_result else None
         
-        edges = await node_repo.db.fetch_all(edges_query, workflow_id, current_workflow_id) if current_workflow_id else []
+        edges = await node_repo.db.fetch_all(edges_query, current_workflow_id) if current_workflow_id else []
         
         # 构建任务流程数据
         task_flow = {
@@ -713,18 +709,15 @@ async def get_workflow_task_flow(
                 task.get('assigned_user_id') == current_user.user_id):
                 task_flow["assigned_tasks"].append(task_data)
         
-        # 格式化边缘数据（用于流程图显示，使用节点实例ID）
+        # 格式化边缘数据（用于流程图显示）
         for edge in edges:
             edge_data = {
-                "id": f"{edge['from_node_instance_id']}-{edge['to_node_instance_id']}",
-                "source": str(edge['from_node_instance_id']),
-                "target": str(edge['to_node_instance_id']),
+                "id": f"{edge['from_node_id']}-{edge['to_node_id']}",
+                "source": str(edge['from_node_id']),
+                "target": str(edge['to_node_id']),
                 "label": str(edge['condition_config']) if edge['condition_config'] else "",
                 "from_node_name": edge['from_node_name'],
-                "to_node_name": edge['to_node_name'],
-                # 保留原始node_id信息供参考
-                "from_node_id": str(edge['from_node_id']),
-                "to_node_id": str(edge['to_node_id'])
+                "to_node_name": edge['to_node_name']
             }
             task_flow["edges"].append(edge_data)
         
@@ -962,50 +955,25 @@ async def start_task(
 ):
     """开始执行任务"""
     try:
-        logger.info(f"🌐 [API-开始任务] 收到开始任务请求:")
-        logger.info(f"   - 任务ID: {task_id}")
-        logger.info(f"   - 用户ID: {current_user.user_id}")
-        logger.info(f"   - 用户名: {current_user.username}")
-        logger.info(f"   - 请求时间: {now_utc()}")
-        
-        logger.info(f"🔄 [API-开始任务] 调用ExecutionService.start_human_task...")
         result = await execution_engine.start_human_task(task_id, current_user.user_id)
-        logger.info(f"📋 [API-开始任务] ExecutionService返回结果: {result}")
         
-        if result.get("success"):
-            logger.info(f"✅ [API-开始任务] 任务开始成功")
-            api_response = {
-                "success": True,
-                "data": result,
-                "message": "任务已开始执行"
-            }
-        else:
-            logger.warning(f"⚠️ [API-开始任务] 任务开始失败: {result.get('message')}")
-            api_response = {
-                "success": False,
-                "data": result,
-                "message": result.get('message', '任务开始失败')
-            }
+        return {
+            "success": True,
+            "data": result,
+            "message": "任务已开始执行"
+        }
         
-        logger.info(f"🚀 [API-开始任务] 最终API响应: {api_response}")
-        return api_response
-        
-    except PermissionError as pe:
-        logger.error(f"🚫 [API-开始任务] 权限错误: {str(pe)}")
+    except PermissionError:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="无权执行此任务"
         )
-    except ValueError as ve:
-        logger.error(f"📊 [API-开始任务] 数据验证错误: {str(ve)}")
+    except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(ve)
+            detail=str(e)
         )
     except Exception as e:
-        logger.error(f"💥 [API-开始任务] 未捕获的异常: {type(e).__name__}: {str(e)}")
-        import traceback
-        logger.error(f"📄 [API-开始任务] 异常堆栈: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"开始执行任务失败: {str(e)}"

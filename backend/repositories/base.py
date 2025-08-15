@@ -104,19 +104,34 @@ class BaseRepository(ABC, Generic[T]):
             
             # 处理DatabaseManager返回的UPDATE成功响应
             if result and result.get("_update_success"):
-                logger.warning(f"数据库更新成功但无法获取完整记录，表: {self.table_name}")
+                logger.info(f"数据库更新成功但MySQL不支持RETURNING，使用fallback查询，表: {self.table_name}")
+                logger.debug(f"[DEBUG] UPDATE返回结果: {result}")
+                logger.debug(f"[DEBUG] 准备执行fallback查询，record_id: {record_id}, id_column: {id_column}")
+                
                 # 尝试查询刚更新的记录
                 try:
                     fallback_result = await self.get_by_id(record_id, id_column)
+                    logger.debug(f"[DEBUG] Fallback查询结果: {fallback_result is not None}")
                     if fallback_result:
                         logger.info(f"通过fallback查询成功获取更新记录")
                         return fallback_result
                     else:
-                        logger.warning(f"Fallback查询失败，返回更新前的数据加上新值")
-                        # 合并原数据和更新数据作为返回值
-                        merged_data = data.copy()
-                        merged_data[id_column] = record_id
-                        return merged_data
+                        logger.warning(f"Fallback查询失败，但UPDATE确实成功了")
+                        # 检查记录是否真的存在
+                        check_query = f"SELECT COUNT(*) as count FROM {self.table_name} WHERE {id_column} = $1"
+                        count_result = await self.db.fetch_one(check_query, record_id)
+                        logger.debug(f"[DEBUG] 记录存在性检查: {count_result}")
+                        
+                        # 如果记录存在，返回合并的数据表示更新成功
+                        if count_result and count_result.get('count', 0) > 0:
+                            merged_data = data.copy()
+                            merged_data[id_column] = record_id
+                            merged_data['_mysql_update_success'] = True
+                            logger.info(f"UPDATE确实成功，返回合并数据")
+                            return merged_data
+                        else:
+                            logger.error(f"UPDATE报告成功但记录不存在，这是不应该发生的情况")
+                            return None
                 except Exception as fallback_e:
                     logger.error(f"Fallback查询失败: {fallback_e}")
                     # 返回合并的数据
