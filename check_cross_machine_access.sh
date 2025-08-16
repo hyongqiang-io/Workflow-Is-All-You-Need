@@ -1,40 +1,37 @@
 #!/bin/bash
 
-echo "🔍 工作流系统跨机器访问配置检查"
-echo "=================================="
-
-# 获取服务器IP地址
-INTERNAL_IP=$(hostname -I | awk '{print $1}')
-echo "📍 服务器内网IP: $INTERNAL_IP"
-
-# 检查服务状态
+echo "=== 跨机器访问测试脚本 ==="
+echo "测试域名: autolabflow.online"
+echo "服务器IP: 106.54.12.39"
+echo "测试时间: $(date)"
 echo ""
-echo "🔍 检查服务状态:"
-echo "前端服务 (端口3000): $(netstat -tln | grep :3000 > /dev/null && echo '✅ 运行中' || echo '❌ 未运行')"
-echo "API服务 (端口8002): $(netstat -tln | grep :8002 > /dev/null && echo '✅ 运行中' || echo '❌ 未运行')"
 
-# 测试API访问
-echo ""
-echo "🔍 测试API访问:"
-if curl -s http://$INTERNAL_IP:8002/health > /dev/null; then
-    echo "✅ API健康检查通过"
-else
-    echo "❌ API健康检查失败"
-fi
-
-# 显示访问地址
-echo ""
-echo "🌐 外部访问地址:"
-echo "前端地址: http://$INTERNAL_IP:3000"
-echo "API地址:  http://$INTERNAL_IP:8002"
-
-# 检查环境变量配置
-echo ""
-echo "🔍 前端API配置:"
-cat /home/ubuntu/Workflow-Is-All-You-Need/frontend/.env | grep REACT_APP_API_BASE_URL
+# 测试主要功能点
+echo "1. 测试主页访问..."
+curl -s -o /dev/null -w "HTTP状态码: %{http_code}, 响应时间: %{time_total}s\n" http://autolabflow.online
 
 echo ""
-echo "💡 解决方案:"
-echo "1. 从外部机器访问: http://$INTERNAL_IP:3000"
-echo "2. 如果还是loading，请清除浏览器缓存"
-echo "3. 打开浏览器开发者工具查看Network标签"
+echo "2. 测试API健康检查..."
+curl -s -w "HTTP状态码: %{http_code}, 响应时间: %{time_total}s\n" http://autolabflow.online/api/health
+
+echo ""
+echo "3. 测试API文档访问..."
+curl -s -o /dev/null -w "HTTP状态码: %{http_code}, 响应时间: %{time_total}s\n" http://autolabflow.online/docs
+
+echo ""
+echo "4. 测试静态资源..."
+curl -s -o /dev/null -w "HTTP状态码: %{http_code}, 响应时间: %{time_total}s\n" http://autolabflow.online/favicon.ico
+
+echo ""
+echo "5. 检查DNS解析..."
+nslookup autolabflow.online
+
+echo ""
+echo "6. 测试端口连通性..."
+timeout 5 telnet autolabflow.online 80 2>/dev/null && echo "端口80可达" || echo "端口80不可达"
+
+echo ""
+echo "=== 测试完成 ==="
+echo ""
+echo "如果从其他机器运行此脚本："
+echo "curl -O http://autolabflow.online/test_access.sh && chmod +x test_access.sh && ./test_access.sh"

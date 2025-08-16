@@ -870,22 +870,29 @@ class AgentTaskService:
             raise
     
     def _build_system_prompt(self, task: Dict[str, Any]) -> str:
-        """构建系统Prompt（仅包含任务描述）"""
+        """构建系统Prompt（包含任务描述和工具使用指导）"""
         try:
             task_description = task.get('task_description', '无任务描述')
             
-            # 简化的系统prompt，只提供任务描述
-            system_prompt = f"""你是一个专业的AI助手。请完成以下任务：
+            # 增强的系统prompt，包含工具使用指导
+            system_prompt = f"""你是一个专业的AI助手，拥有多种工具来帮助完成任务。请完成以下任务：
 
 {task_description}
 
-请根据提供的上下文信息，以自然、准确的方式完成任务。"""
+重要提示：
+1. 你有可用的工具来获取实时信息或执行特定操作
+2. 当需要获取最新数据、执行计算或调用外部服务时，请主动使用相应的工具
+3. 如果任务涉及天气、搜索、数据查询等，优先使用工具获取准确信息
+4. 使用工具获取信息后，请基于结果为用户提供有用的回答
+5. 如果工具调用失败，请说明情况并尽可能提供替代方案
+
+请根据提供的上下文信息，以自然、准确的方式完成任务。如有必要，请使用可用的工具来获取最新、最准确的信息。"""
 
             return system_prompt.strip()
             
         except Exception as e:
             logger.error(f"构建系统prompt失败: {e}")
-            return "你是一个专业的AI助手，请帮助完成分配的任务。"
+            return "你是一个专业的AI助手，拥有多种工具来帮助完成任务。当需要获取实时信息时，请主动使用可用的工具。请帮助完成分配的任务。"
     
     def _preprocess_upstream_context(self, input_data: str) -> str:
         """预处理上游上下文信息（仅包含工作流描述、节点名称、任务title、节点输出内容）"""

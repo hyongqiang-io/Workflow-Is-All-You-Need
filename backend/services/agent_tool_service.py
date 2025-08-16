@@ -57,7 +57,7 @@ class AgentToolService:
                     mtr.server_status,
                     mtr.tool_usage_count,
                     mtr.success_rate
-                FROM agent_tool_binding atb
+                FROM agent_tool_bindings atb
                 JOIN mcp_tool_registry mtr ON atb.tool_id = mtr.tool_id
                 WHERE atb.agent_id = $1 AND mtr.is_deleted = FALSE
             """
@@ -127,7 +127,7 @@ class AgentToolService:
             
             # 检查是否已绑定
             existing = await db_manager.fetch_one(
-                "SELECT binding_id FROM agent_tool_binding WHERE agent_id = $1 AND tool_id = $2",
+                "SELECT binding_id FROM agent_tool_bindings WHERE agent_id = $1 AND tool_id = $2",
                 agent_id, tool_id
             )
             
@@ -147,7 +147,7 @@ class AgentToolService:
             
             await db_manager.execute(
                 """
-                INSERT INTO agent_tool_binding (
+                INSERT INTO agent_tool_bindings (
                     binding_id, agent_id, tool_id, user_id, is_active,
                     binding_config
                 ) VALUES ($1, $2, $3, $4, $5, $6)
@@ -187,7 +187,7 @@ class AgentToolService:
             binding = await db_manager.fetch_one(
                 """
                 SELECT atb.*, mtr.tool_name, mtr.server_name
-                FROM agent_tool_binding atb
+                FROM agent_tool_bindings atb
                 JOIN mcp_tool_registry mtr ON atb.tool_id = mtr.tool_id
                 WHERE atb.binding_id = $1 AND atb.user_id = $2 AND mtr.is_deleted = FALSE
                 """,
@@ -242,7 +242,7 @@ class AgentToolService:
             params.extend([binding_id, user_id])
             
             query = f"""
-                UPDATE agent_tool_binding 
+                UPDATE agent_tool_bindings 
                 SET {', '.join(update_fields)}
                 WHERE binding_id = ${param_count} AND user_id = ${param_count + 1}
                 RETURNING *
@@ -267,7 +267,7 @@ class AgentToolService:
         """解除Agent工具绑定"""
         try:
             result = await db_manager.execute(
-                "DELETE FROM agent_tool_binding WHERE binding_id = $1 AND user_id = $2",
+                "DELETE FROM agent_tool_bindings WHERE binding_id = $1 AND user_id = $2",
                 binding_id, user_id
             )
             
@@ -418,7 +418,7 @@ class AgentToolService:
             if success:
                 await db_manager.execute(
                     """
-                    UPDATE agent_tool_binding 
+                    UPDATE agent_tool_bindings 
                     SET total_calls = total_calls + 1,
                         successful_calls = successful_calls + 1,
                         last_called = NOW(),
@@ -434,7 +434,7 @@ class AgentToolService:
             else:
                 await db_manager.execute(
                     """
-                    UPDATE agent_tool_binding 
+                    UPDATE agent_tool_bindings 
                     SET total_calls = total_calls + 1,
                         last_called = NOW()
                     WHERE binding_id = $1
@@ -465,7 +465,7 @@ class AgentToolService:
                     mtr.success_rate,
                     COUNT(atb.binding_id) as bound_agents_count
                 FROM mcp_tool_registry mtr
-                LEFT JOIN agent_tool_binding atb ON mtr.tool_id = atb.tool_id AND atb.is_enabled = TRUE
+                LEFT JOIN agent_tool_bindings atb ON mtr.tool_id = atb.tool_id AND atb.is_enabled = TRUE
                 WHERE mtr.is_deleted = FALSE AND mtr.is_tool_active = TRUE
             """
             params = []
@@ -500,7 +500,7 @@ class AgentToolService:
                     SUM(successful_calls) as successful_tool_calls,
                     AVG(CASE WHEN total_calls > 0 THEN successful_calls::float / total_calls ELSE 0 END) * 100 as avg_success_rate,
                     MAX(last_called) as last_tool_call
-                FROM agent_tool_binding
+                FROM agent_tool_bindings
                 WHERE agent_id = $1
                 """,
                 agent_id

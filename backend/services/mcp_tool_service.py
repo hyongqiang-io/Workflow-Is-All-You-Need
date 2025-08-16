@@ -115,8 +115,21 @@ class MCPToolService:
             
             # 2. 批量插入工具到数据库
             added_tools = []
+            restored_tools = []
+            failed_tools = []
+            
             for tool in discovered_tools:
                 try:
+                    # 先检查工具是否已存在（包括软删除的）
+                    existing = await db_manager.fetch_one(
+                        """
+                        SELECT tool_id, is_deleted 
+                        FROM mcp_tool_registry 
+                        WHERE user_id = %s AND server_name = %s AND tool_name = %s
+                        """,
+                        user_id, server_name, tool['name']
+                    )
+                    
                     tool_id = await self._insert_tool(
                         user_id=user_id,
                         server_name=server_name,
@@ -126,18 +139,48 @@ class MCPToolService:
                         tool_name=tool['name'],
                         tool_description=tool['description'],
                         tool_parameters=tool['parameters'],
-                        server_status=server_status  # 传入实际的服务器状态
+                        server_status=server_status
                     )
-                    added_tools.append({
+                    
+                    tool_info = {
                         'tool_id': str(tool_id),
                         'tool_name': tool['name'],
                         'server_name': server_name
-                    })
+                    }
+                    
+                    # 根据是否是恢复的工具分类
+                    if existing and existing['is_deleted']:
+                        restored_tools.append(tool_info)
+                    else:
+                        added_tools.append(tool_info)
+                        
                 except Exception as tool_error:
-                    logger.warning(f"插入工具 {tool['name']} 失败: {tool_error}")
+                    logger.warning(f"处理工具 {tool['name']} 失败: {tool_error}")
+                    failed_tools.append({
+                        'tool_name': tool['name'],
+                        'error': str(tool_error)
+                    })
                     continue
             
-            logger.info(f"成功添加MCP服务器 {server_name}，发现 {len(added_tools)} 个工具")
+            # 详细的结果日志
+            total_processed = len(added_tools) + len(restored_tools)
+            result_parts = []
+            
+            if added_tools:
+                result_parts.append(f"新增 {len(added_tools)} 个工具")
+            if restored_tools:
+                result_parts.append(f"恢复 {len(restored_tools)} 个工具")
+            if failed_tools:
+                result_parts.append(f"失败 {len(failed_tools)} 个工具")
+            
+            result_message = "，".join(result_parts) if result_parts else "未处理任何工具"
+            logger.info(f"MCP服务器 {server_name} 处理完成: 发现 {len(discovered_tools)} 个工具，{result_message}")
+            
+            # 显示详细信息
+            if restored_tools:
+                logger.info(f"恢复的工具: {[tool['tool_name'] for tool in restored_tools]}")
+            if failed_tools:
+                logger.warning(f"失败的工具: {[tool['tool_name'] for tool in failed_tools]}")
             
             return {
                 'server_name': server_name,
@@ -145,7 +188,11 @@ class MCPToolService:
                 'server_status': server_status,
                 'tools_discovered': len(discovered_tools),
                 'tools_added': len(added_tools),
-                'added_tools': added_tools
+                'tools_restored': len(restored_tools),
+                'tools_failed': len(failed_tools),
+                'added_tools': added_tools,
+                'restored_tools': restored_tools,
+                'failed_tools': failed_tools
             }
             
         except Exception as e:
@@ -219,7 +266,7 @@ class MCPToolService:
             if result == "UPDATE 1":
                 # 同时删除相关的Agent绑定
                 await db_manager.execute(
-                    "DELETE FROM agent_tool_binding WHERE tool_id = $1",
+                    "DELETE FROM agent_tool_bindings WHERE tool_id = $1",
                     tool_id
                 )
                 logger.info(f"工具删除成功: {tool_id}")
@@ -257,7 +304,7 @@ class MCPToolService:
             # 删除相关的Agent绑定
             for tool_row in tool_ids:
                 await db_manager.execute(
-                    "DELETE FROM agent_tool_binding WHERE tool_id = $1",
+                    "DELETE FROM agent_tool_bindings WHERE tool_id = $1",
                     tool_row['tool_id']
                 )
             
@@ -671,25 +718,43 @@ class MCPToolService:
             return tool_id
             
         except Exception as e:
-            if "duplicate key value violates unique constraint" in str(e):
-                # 工具已存在，获取现有ID并更新状态
+            error_str = str(e)
+            # 处理重复条目错误（支持MySQL和PostgreSQL）
+            if ("duplicate key value violates unique constraint" in error_str or 
+                "Duplicate entry" in error_str):
+                # 工具已存在，获取现有ID并更新状态（包括恢复软删除的工具）
                 logger.info(f"🔄 [TOOL-INSERT] 工具已存在，更新状态: {tool_name}")
                 existing = await db_manager.fetch_one(
-                    "SELECT tool_id FROM mcp_tool_registry WHERE user_id = $1 AND server_name = $2 AND tool_name = $3",
+                    """
+                    SELECT tool_id, is_deleted 
+                    FROM mcp_tool_registry 
+                    WHERE user_id = %s AND server_name = %s AND tool_name = %s
+                    """,
                     user_id, server_name, tool_name
                 )
                 if existing:
-                    # 更新现有工具的状态
+                    # 更新现有工具的状态，恢复软删除的工具
                     is_server_active = server_status == 'healthy'
                     await db_manager.execute(
                         """
                         UPDATE mcp_tool_registry 
-                        SET server_status = $1, is_server_active = $2, is_deleted = FALSE, updated_at = NOW()
-                        WHERE tool_id = $3
+                        SET server_url = %s, server_description = %s, auth_config = %s,
+                            tool_description = %s, tool_parameters = %s,
+                            server_status = %s, is_server_active = %s, is_tool_active = %s,
+                            is_deleted = %s, updated_at = NOW(), last_health_check = NOW(),
+                            last_tool_discovery = NOW()
+                        WHERE tool_id = %s
                         """,
-                        server_status, is_server_active, existing['tool_id']
+                        server_url, server_description, json.dumps(auth_config),
+                        tool_description, json.dumps(tool_parameters),
+                        server_status, is_server_active, True, False, existing['tool_id']
                     )
-                    logger.info(f"✅ [TOOL-INSERT] 现有工具状态已更新: {existing['tool_id']}")
+                    
+                    if existing['is_deleted']:
+                        logger.info(f"✅ [TOOL-INSERT] 软删除的工具已恢复: {tool_name} (ID: {existing['tool_id']})")
+                    else:
+                        logger.info(f"✅ [TOOL-INSERT] 现有工具状态已更新: {tool_name} (ID: {existing['tool_id']})")
+                    
                     return existing['tool_id']
             raise
 

@@ -171,7 +171,9 @@
       "Bash(/home/ubuntu/Workflow-Is-All-You-Need/check_cross_machine_access.sh:*)",
       "Bash(brew services:*)",
       "Bash(/usr/local/mysql/bin/mysql:*)",
-      "Bash(sudo:*)"
+      "Bash(sudo:*)",
+      "Bash(nginx:*)",
+      "Bash(/tmp/test_ip_access.sh:*)"
     ],
     "deny": []
   }

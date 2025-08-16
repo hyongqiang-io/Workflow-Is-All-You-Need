@@ -161,7 +161,7 @@ class DatabaseMCPService:
                     mtr.is_tool_active, mtr.is_server_active, mtr.server_status,
                     atb.is_active as binding_active
                 FROM mcp_tool_registry mtr
-                JOIN agent_tool_binding atb ON mtr.tool_id = atb.tool_id
+                JOIN agent_tool_bindings atb ON mtr.tool_id = atb.tool_id
                 WHERE atb.agent_id = $1 
                 AND atb.is_active = true
                 AND mtr.is_tool_active = true 
