@@ -171,20 +171,23 @@ class NodeRepository(BaseRepository[Node]):
             logger.info(f"[DEBUG] 更新参数: {params}")
             logger.info(f"[DEBUG] WHERE条件: node_base_id={node_base_id}, workflow_base_id={workflow_base_id}")
             
-            # 构建和执行更新查询
+            # 构建和执行更新查询（MySQL不支持RETURNING）
             query = f"""
                 UPDATE node 
                 SET {', '.join(update_fields)}
-                WHERE node_base_id = ${param_index} 
-                  AND workflow_base_id = ${param_index + 1}
+                WHERE node_base_id = %s 
+                  AND workflow_base_id = %s
                   AND is_current_version = TRUE 
                   AND is_deleted = FALSE
-                RETURNING *
             """
             
             logger.info(f"[DEBUG] 执行UPDATE查询: {query}")
             
-            result = await self.db.fetch_one(query, *params)
+            # 执行更新
+            await self.db.execute(query, *params)
+            
+            # 查询更新后的结果
+            result = await self.get_node_by_base_id(node_base_id, workflow_base_id)
             
             logger.info(f"[DEBUG] UPDATE查询结果类型: {type(result)}")
             logger.info(f"[DEBUG] UPDATE查询结果: {result}")
@@ -377,12 +380,11 @@ class NodeConnectionRepository:
                 logger.info(f"连接已存在，返回现有连接: {from_node['node_id']} -> {to_node['node_id']}")
                 return existing_connection
             
-            # 创建连接
+            # 创建连接（MySQL不支持RETURNING）
             query = """
                 INSERT INTO node_connection 
                 (from_node_id, to_node_id, workflow_id, connection_type, condition_config, created_at)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING *
             """
             
             # 处理condition_config的JSON序列化
@@ -390,7 +392,7 @@ class NodeConnectionRepository:
             if isinstance(condition_config, dict):
                 condition_config = safe_json_dumps(condition_config)
             
-            result = await self.db.fetch_one(
+            await self.db.execute(
                 query,
                 from_node['node_id'],
                 to_node['node_id'],
@@ -398,6 +400,13 @@ class NodeConnectionRepository:
                 connection_data.connection_type.value,
                 condition_config,
                 now_utc()
+            )
+            
+            # 查询刚插入的记录
+            result = await self.get_connection(
+                from_node['node_id'],
+                to_node['node_id'], 
+                workflow['workflow_id']
             )
             
             if result:
@@ -437,23 +446,24 @@ class NodeConnectionRepository:
             
             set_clauses = []
             values = []
-            param_index = 1
             
             for key, value in update_dict.items():
-                set_clauses.append(f"{key} = ${param_index}")
+                set_clauses.append(f"{key} = %s")
                 values.append(value)
-                param_index += 1
             
             query = f"""
                 UPDATE node_connection 
                 SET {', '.join(set_clauses)} 
-                WHERE from_node_id = ${param_index} AND to_node_id = ${param_index + 1} 
-                      AND workflow_id = ${param_index + 2}
-                RETURNING *
+                WHERE from_node_id = %s AND to_node_id = %s 
+                      AND workflow_id = %s
             """
             
+            # MySQL不支持RETURNING，需要先执行UPDATE，再查询结果
             values.extend([from_node_id, to_node_id, workflow_id])
-            result = await self.db.fetch_one(query, *values)
+            await self.db.execute(query, *values)
+            
+            # 查询更新后的结果
+            result = await self.get_connection(from_node_id, to_node_id, workflow_id)
             
             if result:
                 logger.info(f"更新了节点连接: {from_node_id} -> {to_node_id}")
@@ -570,6 +580,24 @@ class NodeConnectionRepository:
             return results
         except Exception as e:
             logger.error(f"获取节点入向连接失败: {e}")
+            raise
+    
+    
+    async def get_nodes_by_type(self, workflow_base_id: uuid.UUID, 
+                               node_type: str) -> List[Dict[str, Any]]:
+        """根据类型获取节点列表"""
+        try:
+            query = """
+                SELECT * FROM node 
+                WHERE workflow_base_id = %s AND type = %s 
+                AND is_current_version = true 
+                AND is_deleted = false
+                ORDER BY created_at ASC
+            """
+            results = await self.db.fetch_all(query, workflow_base_id, node_type)
+            return results
+        except Exception as e:
+            logger.error(f"根据类型获取节点列表失败: {e}")
             raise
     
     async def get_start_nodes(self, workflow_base_id: uuid.UUID) -> List[Dict[str, Any]]:
