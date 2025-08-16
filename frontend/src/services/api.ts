@@ -49,9 +49,25 @@ api.interceptors.response.use(
     console.log('   - 方法:', response.config.method);
     console.log('   - 状态码:', response.status);
     console.log('   - 原始响应数据:', response.data);
+    console.log('   - 原始响应数据类型:', typeof response.data);
     
     // 后端返回统一格式: { success: boolean, message: string, data: any }
     const responseData = response.data;
+    
+    // 特殊处理AI工作流API
+    if (response.config.url?.includes('/ai-workflows/generate')) {
+      console.log('🤖 [INTERCEPTOR-DEBUG] 检测到AI工作流API响应');
+      console.log('🤖 [INTERCEPTOR-DEBUG] responseData:', responseData);
+      console.log('🤖 [INTERCEPTOR-DEBUG] responseData类型:', typeof responseData);
+      if (responseData) {
+        console.log('🤖 [INTERCEPTOR-DEBUG] responseData键:', Object.keys(responseData));
+        console.log('🤖 [INTERCEPTOR-DEBUG] 直接返回responseData');
+        return responseData;
+      } else {
+        console.error('🤖 [INTERCEPTOR-DEBUG] responseData为空!');
+        return responseData;
+      }
+    }
     
     // 如果响应包含success字段，说明是后端的统一格式
     if (typeof responseData === 'object' && responseData.hasOwnProperty('success')) {
@@ -569,36 +585,8 @@ export const executionAPI = {
   getWorkflowContext: (instanceId: string) =>
     api.get(`/execution/workflows/instances/${instanceId}/context`),
 
-  // 获取Agent任务统计
-  getAgentTaskStatistics: (agentId?: string) =>
-    api.get('/execution/agent-tasks/statistics', { params: { agent_id: agentId } }),
-
   // 获取系统状态
   getSystemStatus: () => api.get('/execution/system/status'),
-
-  // 删除工作流实例
-  deleteWorkflowInstance: async (instanceId: string) => {
-    console.log('🔥 前端开始删除工作流实例:', instanceId);
-    console.log('🔥 请求URL:', `/execution/workflows/${instanceId}`);
-    console.log('🔥 完整URL:', `${window.location.origin}/execution/workflows/${instanceId}`);
-    
-    try {
-      const response = await api.delete(`/execution/workflows/${instanceId}`);
-      console.log('✅ 工作流实例删除请求成功:', response);
-      return response;
-    } catch (error: any) {
-      console.error('❌ 工作流实例删除请求失败:', error);
-      if (error.response) {
-        console.error('❌ 错误响应状态:', error.response.status);
-        console.error('❌ 错误响应数据:', error.response.data);
-        console.error('❌ 错误响应头:', error.response.headers);
-      }
-      if (error.request) {
-        console.error('❌ 请求对象:', error.request);
-      }
-      throw error;
-    }
-  },
 };
 
 // MCP相关API
@@ -823,6 +811,58 @@ export const agentToolsAPI = {
 
   // 获取热门工具列表
   getPopularTools: (limit: number = 10) => api.get('/tools/popular', { params: { limit } }),
+};
+
+// AI工作流生成API
+export const aiWorkflowAPI = {
+  // 生成AI工作流
+  async generate(taskDescription: string, workflowName?: string) {
+    console.log('🤖 [AI-WORKFLOW-DEBUG] 调用 generate');
+    console.log('   - 任务描述:', taskDescription);
+    console.log('   - 工作流名称:', workflowName);
+    console.log('   - URL: /ai-workflows/generate');
+    
+    try {
+      console.log('🤖 [AI-WORKFLOW-DEBUG] 发送POST请求...');
+      const response = await api.post('/ai-workflows/generate', {
+        task_description: taskDescription,
+        workflow_name: workflowName
+      });
+      
+      console.log('✅ [AI-WORKFLOW-DEBUG] HTTP请求完成');
+      console.log('   - HTTP状态:', response?.status);
+      console.log('   - 响应对象类型:', typeof response);
+      console.log('   - 响应对象:', response);
+      console.log('   - response.data类型:', typeof response?.data);
+      console.log('   - response.data:', response?.data);
+      
+      // 检查响应拦截器是否正确处理了响应
+      if (response && response.data) {
+        console.log('✅ [AI-WORKFLOW-DEBUG] 返回 response.data');
+        return response.data;
+      } else if (response) {
+        console.log('✅ [AI-WORKFLOW-DEBUG] 返回 response (无data字段)');
+        return response;
+      } else {
+        console.error('❌ [AI-WORKFLOW-DEBUG] 响应为空或undefined');
+        console.error('   - response:', response);
+        throw new Error('API响应为空');
+      }
+      
+    } catch (error: any) {
+      console.error('❌ [AI-WORKFLOW-DEBUG] AI工作流生成失败');
+      console.error('   - 错误类型:', typeof error);
+      console.error('   - 错误对象:', error);
+      console.error('   - 错误消息:', error?.message);
+      if (error.response) {
+        console.error('   - HTTP状态:', error.response.status);
+        console.error('   - 错误响应数据:', error.response.data);
+      } else {
+        console.error('   - 无HTTP响应，可能是网络错误或其他问题');
+      }
+      throw error;
+    }
+  }
 };
 
 export default api; 

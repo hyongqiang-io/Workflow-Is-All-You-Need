@@ -16,7 +16,7 @@ from ..utils.auth import get_current_user
 from ..utils.exceptions import ValidationError
 
 
-router = APIRouter(prefix="/api/ai-workflows", tags=["AI工作流生成"])
+router = APIRouter(prefix="/ai-workflows", tags=["AI工作流生成"])
 
 # AI生成服务实例
 ai_generator = AIWorkflowGeneratorService()
@@ -63,7 +63,22 @@ async def generate_workflow_from_description(
     try:
         user_id = current_user.user_id
         
-        logger.info(f"用户 {user_id} 请求AI生成工作流: {request.task_description[:50]}...")
+        logger.info(f"🤖 [AI-WORKFLOW-API] 收到AI工作流生成请求")
+        logger.info(f"🤖 [AI-WORKFLOW-API] 用户ID: {user_id}")
+        logger.info(f"🤖 [AI-WORKFLOW-API] 任务描述: '{request.task_description}'")
+        logger.info(f"🤖 [AI-WORKFLOW-API] 任务描述长度: {len(request.task_description)}")
+        logger.info(f"🤖 [AI-WORKFLOW-API] 工作流名称: '{request.workflow_name}'")
+        
+        # 验证请求数据
+        if not request.task_description or len(request.task_description.strip()) < 5:
+            logger.error(f"🤖 [AI-WORKFLOW-API] 任务描述太短: '{request.task_description}'")
+            raise ValidationError("任务描述至少需要5个字符")
+        
+        if len(request.task_description) > 1000:
+            logger.error(f"🤖 [AI-WORKFLOW-API] 任务描述太长: {len(request.task_description)}")
+            raise ValidationError("任务描述不能超过1000个字符")
+        
+        logger.info(f"🤖 [AI-WORKFLOW-API] 请求数据验证通过，开始调用AI生成服务")
         
         # 调用AI生成服务
         workflow_data = await ai_generator.generate_workflow_from_description(
@@ -71,28 +86,43 @@ async def generate_workflow_from_description(
             user_id=user_id
         )
         
+        logger.info(f"🤖 [AI-WORKFLOW-API] AI生成服务返回成功")
+        logger.info(f"🤖 [AI-WORKFLOW-API] 生成的工作流名称: '{workflow_data.name}'")
+        logger.info(f"🤖 [AI-WORKFLOW-API] 节点数量: {len(workflow_data.nodes)}")
+        logger.info(f"🤖 [AI-WORKFLOW-API] 连接数量: {len(workflow_data.connections)}")
+        
         # 如果用户指定了名称，使用用户指定的名称
         if request.workflow_name:
+            original_name = workflow_data.name
             workflow_data.name = request.workflow_name
+            logger.info(f"🤖 [AI-WORKFLOW-API] 使用用户指定名称: '{original_name}' → '{workflow_data.name}'")
         
-        logger.info(f"AI工作流生成成功: {workflow_data.name} ({len(workflow_data.nodes)}个节点)")
+        logger.info(f"🤖 [AI-WORKFLOW-API] AI工作流生成完成: {workflow_data.name}")
+        
+        response_message = f"🤖 AI成功生成个性化工作流：{len(workflow_data.nodes)}个节点，{len(workflow_data.connections)}个连接"
+        logger.info(f"🤖 [AI-WORKFLOW-API] 响应消息: {response_message}")
         
         return AIWorkflowGenerateResponse(
             success=True,
             workflow_data=workflow_data,
-            message=f"🤖 AI成功生成个性化工作流：{len(workflow_data.nodes)}个节点，{len(workflow_data.connections)}个连接"
+            message=response_message
         )
         
     except ValidationError as e:
-        logger.warning(f"工作流生成验证失败: {str(e)}")
+        logger.error(f"🤖 [AI-WORKFLOW-API] 数据验证失败: {str(e)}")
+        logger.error(f"🤖 [AI-WORKFLOW-API] 请求数据: task_description='{request.task_description}', workflow_name='{request.workflow_name}'")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"AI工作流生成失败: {str(e)}"
         )
     except Exception as e:
-        logger.error(f"AI工作流生成失败: {str(e)}")
+        logger.error(f"🤖 [AI-WORKFLOW-API] AI工作流生成服务异常: {type(e).__name__}: {str(e)}")
+        logger.error(f"🤖 [AI-WORKFLOW-API] 异常发生时的请求数据: task_description='{request.task_description}', workflow_name='{request.workflow_name}'")
+        import traceback
+        logger.error(f"🤖 [AI-WORKFLOW-API] 异常堆栈: {traceback.format_exc()}")
+        
         # 不再提供模板fallback，直接返回错误
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"AI工作流生成服务暂时不可用，请稍后再试。这是一个纯AI驱动的功能，需要网络连接到AI服务。"
+            detail=f"AI工作流生成服务暂时不可用，请稍后再试。这是一个纯AI驱动的功能，需要网络连接到AI服务。错误详情: {str(e)}"
         )

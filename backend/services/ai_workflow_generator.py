@@ -46,33 +46,54 @@ class AIWorkflowGeneratorService:
             WorkflowExport: 生成的工作流模板
         """
         try:
-            logger.info(f"开始AI生成工作流 - 用户: {user_id}, 任务: {task_description[:50]}...")
+            logger.info(f"🤖 [AI-GENERATOR] 开始AI工作流生成")
+            logger.info(f"🤖 [AI-GENERATOR] 用户ID: {user_id}")
+            logger.info(f"🤖 [AI-GENERATOR] 任务描述: '{task_description}'")
+            logger.info(f"🤖 [AI-GENERATOR] 任务描述长度: {len(task_description)}")
+            logger.info(f"🤖 [AI-GENERATOR] Prompt模式: {self.prompt_mode}")
             
             # 1. 调用AI API生成JSON
+            logger.info(f"🤖 [AI-GENERATOR] 步骤1: 开始调用AI API")
             workflow_json = await self._call_ai_api(task_description)
+            logger.info(f"🤖 [AI-GENERATOR] 步骤1完成: AI API调用成功，返回长度: {len(workflow_json)}")
             
             # 2. 解析并验证JSON
+            logger.info(f"🤖 [AI-GENERATOR] 步骤2: 开始解析AI返回的JSON")
             workflow_data = self._parse_and_validate_json(workflow_json)
+            logger.info(f"🤖 [AI-GENERATOR] 步骤2完成: JSON解析成功，工作流名称: '{workflow_data['name']}'")
+            logger.info(f"🤖 [AI-GENERATOR] JSON验证结果: {len(workflow_data['nodes'])}个节点, {len(workflow_data['connections'])}个连接")
             
             # 3. 转换为WorkflowExport格式
+            logger.info(f"🤖 [AI-GENERATOR] 步骤3: 开始转换为WorkflowExport格式")
             workflow_export = self._convert_to_workflow_export(workflow_data, task_description)
+            logger.info(f"🤖 [AI-GENERATOR] 步骤3完成: 格式转换成功")
             
-            logger.info(f"AI工作流生成成功: {workflow_export.name}")
+            logger.info(f"🤖 [AI-GENERATOR] ✅ AI工作流生成完成: '{workflow_export.name}'")
+            logger.info(f"🤖 [AI-GENERATOR] 最终结果: {len(workflow_export.nodes)}个节点, {len(workflow_export.connections)}个连接")
             return workflow_export
             
         except Exception as e:
-            logger.error(f"AI工作流生成失败: {e}")
+            logger.error(f"🤖 [AI-GENERATOR] ❌ AI工作流生成失败: {type(e).__name__}: {str(e)}")
+            logger.error(f"🤖 [AI-GENERATOR] 失败时的输入参数:")
+            logger.error(f"🤖 [AI-GENERATOR]   - 用户ID: {user_id}")
+            logger.error(f"🤖 [AI-GENERATOR]   - 任务描述: '{task_description}'")
+            logger.error(f"🤖 [AI-GENERATOR]   - Prompt模式: {self.prompt_mode}")
+            import traceback
+            logger.error(f"🤖 [AI-GENERATOR] 异常堆栈: {traceback.format_exc()}")
             # API失败时返回明确错误，不再使用模板
             raise ValidationError(f"AI工作流生成服务不可用，请检查网络连接或稍后重试。详细错误: {str(e)}")
 
     async def _call_ai_api(self, task_description: str) -> str:
         """调用DeepSeek AI API"""
         try:
-            logger.info(f"准备调用AI API，任务描述长度: {len(task_description)}")
+            logger.info(f"🤖 [AI-API] 准备调用AI API")
+            logger.info(f"🤖 [AI-API] 任务描述长度: {len(task_description)}")
+            logger.info(f"🤖 [AI-API] API基础URL: {self.base_url}")
+            logger.info(f"🤖 [AI-API] 使用模型: {self.model_name}")
             return await self._call_real_api(task_description)
                 
         except Exception as e:
-            logger.error(f"AI API调用失败: {type(e).__name__}: {str(e)}")
+            logger.error(f"🤖 [AI-API] ❌ AI API调用失败: {type(e).__name__}: {str(e)}")
             raise Exception(f"AI服务暂时不可用，请稍后重试。错误详情: {str(e)}")
     
     async def _call_real_api(self, task_description: str) -> str:
@@ -81,14 +102,19 @@ class AIWorkflowGeneratorService:
         import asyncio
         
         try:
-            logger.info(f"使用增强prompt调用AI API，模式: {self.prompt_mode}")
-            logger.info(f"任务描述: {task_description}")
+            logger.info(f"🤖 [REAL-API] 开始调用真实AI API")
+            logger.info(f"🤖 [REAL-API] 使用增强prompt，模式: {self.prompt_mode}")
+            logger.info(f"🤖 [REAL-API] 任务描述: '{task_description}'")
+            logger.info(f"🤖 [REAL-API] API端点: {self.base_url}/chat/completions")
+            logger.info(f"🤖 [REAL-API] 模型: {self.model_name}")
             
             # 构建请求，使用实例的system_prompt
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
+            
+            user_prompt = f"请为以下任务生成工作流：{task_description}"
             
             payload = {
                 "model": self.model_name,
@@ -99,7 +125,7 @@ class AIWorkflowGeneratorService:
                     },
                     {
                         "role": "user", 
-                        "content": f"请为以下任务生成工作流：{task_description}"
+                        "content": user_prompt
                     }
                 ],
                 "temperature": 0.7,
@@ -107,11 +133,15 @@ class AIWorkflowGeneratorService:
                 "stream": False
             }
             
-            logger.info(f"调用AI API: {self.base_url}/chat/completions")
+            logger.info(f"🤖 [REAL-API] 请求头已设置")
+            logger.info(f"🤖 [REAL-API] System prompt长度: {len(self.system_prompt)}")
+            logger.info(f"🤖 [REAL-API] User prompt: '{user_prompt}'")
+            logger.info(f"🤖 [REAL-API] 请求参数: temperature=0.7, max_tokens=3000")
             
             # 在异步函数中运行同步的requests调用
             def make_request():
                 try:
+                    logger.info(f"🤖 [REAL-API] 开始发送HTTP请求到: {self.base_url}/chat/completions")
                     response = requests.post(
                         f"{self.base_url}/chat/completions",
                         headers=headers,
@@ -119,54 +149,76 @@ class AIWorkflowGeneratorService:
                         timeout=120,  # 增加超时时间到2分钟
                         verify=True  # 保持SSL验证
                     )
+                    logger.info(f"🤖 [REAL-API] HTTP请求完成，状态码: {response.status_code}")
                     return response
                 except requests.exceptions.Timeout:
+                    logger.error(f"🤖 [REAL-API] 请求超时")
                     raise Exception("API请求超时，请稍后重试")
                 except requests.exceptions.ConnectionError:
+                    logger.error(f"🤖 [REAL-API] 连接错误")
                     raise Exception("无法连接到AI服务，请检查网络连接")
                 except requests.exceptions.RequestException as e:
+                    logger.error(f"🤖 [REAL-API] 网络请求异常: {e}")
                     raise Exception(f"网络请求错误: {str(e)}")
                 except Exception as e:
-                    logger.error(f"requests调用异常: {e}")
+                    logger.error(f"🤖 [REAL-API] requests调用异常: {e}")
                     raise e
             
             # 使用线程池执行同步请求
+            logger.info(f"🤖 [REAL-API] 在线程池中执行请求")
             response = await asyncio.get_event_loop().run_in_executor(None, make_request)
             
-            logger.info(f"API响应状态码: {response.status_code}")
+            logger.info(f"🤖 [REAL-API] API响应状态码: {response.status_code}")
             
             if response.status_code == 200:
+                logger.info(f"🤖 [REAL-API] API调用成功，开始解析响应")
                 response_data = response.json()
                 
                 # 检查响应结构
                 if "choices" not in response_data or not response_data["choices"]:
+                    logger.error(f"🤖 [REAL-API] API返回格式异常：缺少choices字段")
+                    logger.error(f"🤖 [REAL-API] 响应数据: {response_data}")
                     raise Exception("AI API返回格式异常：缺少choices字段")
                 
                 ai_response = response_data["choices"][0]["message"]["content"]
                 
                 if not ai_response or len(ai_response.strip()) == 0:
+                    logger.error(f"🤖 [REAL-API] AI API返回空响应")
                     raise Exception("AI API返回空响应")
                 
-                logger.info(f"AI API调用成功，返回长度: {len(ai_response)}")
-                logger.info(f"AI响应预览: {ai_response[:200]}...")
+                logger.info(f"🤖 [REAL-API] ✅ AI API调用成功")
+                logger.info(f"🤖 [REAL-API] 返回内容长度: {len(ai_response)}")
+                logger.info(f"🤖 [REAL-API] AI响应预览: {ai_response[:200]}...")
+                
+                # 检查响应是否包含JSON
+                if "```json" in ai_response or "{" in ai_response:
+                    logger.info(f"🤖 [REAL-API] 响应包含JSON格式，看起来正常")
+                else:
+                    logger.warning(f"🤖 [REAL-API] 响应可能不包含JSON格式")
+                
                 return ai_response
                 
             elif response.status_code == 401:
+                logger.error(f"🤖 [REAL-API] API密钥无效或已过期")
                 raise Exception("API密钥无效或已过期")
             elif response.status_code == 429:
+                logger.error(f"🤖 [REAL-API] API调用频率超限")
                 raise Exception("API调用频率超限，请稍后重试")
             elif response.status_code >= 500:
+                logger.error(f"🤖 [REAL-API] AI服务器内部错误")
                 raise Exception("AI服务器内部错误，请稍后重试")
             else:
                 try:
                     error_data = response.json()
                     error_message = error_data.get("error", {}).get("message", "未知错误")
+                    logger.error(f"🤖 [REAL-API] API调用失败，错误消息: {error_message}")
                 except:
                     error_message = response.text[:200] if response.text else "未知错误"
+                    logger.error(f"🤖 [REAL-API] API调用失败，错误响应: {error_message}")
                 raise Exception(f"API调用失败 ({response.status_code}): {error_message}")
                 
         except Exception as e:
-            logger.error(f"AI API调用失败: {type(e).__name__}: {str(e)}")
+            logger.error(f"🤖 [REAL-API] ❌ AI API调用失败: {type(e).__name__}: {str(e)}")
             raise e
     
 

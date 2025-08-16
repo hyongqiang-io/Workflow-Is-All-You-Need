@@ -735,15 +735,36 @@ async def import_workflow(
         导入结果
     """
     try:
-        logger.info(f"用户 {current_user.username} 开始导入工作流: {import_data.name}")
+        logger.info(f"🔄 [WORKFLOW-IMPORT] 收到工作流导入请求")
+        logger.info(f"🔄 [WORKFLOW-IMPORT] 用户: {current_user.username} (ID: {current_user.user_id})")
+        logger.info(f"🔄 [WORKFLOW-IMPORT] 工作流名称: '{import_data.name}'")
+        logger.info(f"🔄 [WORKFLOW-IMPORT] 工作流描述: '{import_data.description}'")
+        logger.info(f"🔄 [WORKFLOW-IMPORT] 节点数量: {len(import_data.nodes)}")
+        logger.info(f"🔄 [WORKFLOW-IMPORT] 连接数量: {len(import_data.connections)}")
+        logger.info(f"🔄 [WORKFLOW-IMPORT] 覆盖模式: {overwrite}")
+        
+        # 记录节点类型统计
+        node_types = {}
+        for node in import_data.nodes:
+            node_type = node.type.value if hasattr(node.type, 'value') else str(node.type)
+            node_types[node_type] = node_types.get(node_type, 0) + 1
+        logger.info(f"🔄 [WORKFLOW-IMPORT] 节点类型统计: {node_types}")
+        
+        logger.info(f"🔄 [WORKFLOW-IMPORT] 开始调用导入服务...")
         
         # 导入工作流
         import_result = await import_export_service.import_workflow(
             import_data, current_user.user_id, overwrite
         )
         
+        logger.info(f"🔄 [WORKFLOW-IMPORT] 导入服务完成，结果: success={import_result.success}")
+        
         if import_result.success:
-            logger.info(f"工作流导入成功: {import_data.name}")
+            logger.info(f"✅ [WORKFLOW-IMPORT] 工作流导入成功: '{import_data.name}'")
+            logger.info(f"✅ [WORKFLOW-IMPORT] 创建的工作流ID: {import_result.workflow_id}")
+            logger.info(f"✅ [WORKFLOW-IMPORT] 创建的节点数: {import_result.created_nodes}")
+            logger.info(f"✅ [WORKFLOW-IMPORT] 创建的连接数: {import_result.created_connections}")
+            
             return BaseResponse(
                 success=True,
                 message=import_result.message,
@@ -753,7 +774,10 @@ async def import_workflow(
                 }
             )
         else:
-            logger.warning(f"工作流导入失败: {import_result.message}")
+            logger.error(f"❌ [WORKFLOW-IMPORT] 工作流导入失败: {import_result.message}")
+            logger.error(f"❌ [WORKFLOW-IMPORT] 导入错误: {import_result.errors}")
+            logger.error(f"❌ [WORKFLOW-IMPORT] 导入警告: {import_result.warnings}")
+            
             return BaseResponse(
                 success=False,
                 message=import_result.message,

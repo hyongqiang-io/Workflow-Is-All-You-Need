@@ -10,10 +10,11 @@ import {
   ReloadOutlined,
   HistoryOutlined,
   DownloadOutlined,
-  UploadOutlined
+  UploadOutlined,
+  RobotOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { workflowAPI, executionAPI } from '../../services/api';
+import { workflowAPI, executionAPI, aiWorkflowAPI } from '../../services/api';
 import { useAuthStore } from '../../stores/authStore';
 import WorkflowDesigner from '../../components/WorkflowDesigner';
 import WorkflowInstanceList from '../../components/WorkflowInstanceList';
@@ -53,6 +54,11 @@ const WorkflowPage: React.FC = () => {
   const [importExportVisible, setImportExportVisible] = useState(false);
   const [importExportMode, setImportExportMode] = useState<'export' | 'import'>('export');
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowItem | null>(null);
+
+  // AI生成相关状态
+  const [aiGenerateVisible, setAiGenerateVisible] = useState(false);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiForm] = Form.useForm();
 
   useEffect(() => {
     loadWorkflows();
@@ -285,6 +291,117 @@ const WorkflowPage: React.FC = () => {
     } catch (error: any) {
       console.error('删除失败:', error);
       message.error(error.response?.data?.detail || '删除工作流失败');
+    }
+  };
+
+  // AI工作流生成功能
+  const handleAIGenerate = () => {
+    setAiGenerateVisible(true);
+    aiForm.resetFields();
+  };
+
+  const handleAIGenerateConfirm = async () => {
+    try {
+      const values = await aiForm.validateFields();
+      console.log('🤖 [FRONTEND] AI工作流生成表单值:', values);
+      
+      setAiGenerating(true);
+      
+      // 调用AI生成API
+      const response = await aiWorkflowAPI.generate(
+        values.task_description,
+        values.workflow_name
+      );
+      
+      console.log('🤖 [FRONTEND] AI工作流生成响应:', response);
+      console.log('🤖 [FRONTEND] 响应类型:', typeof response);
+      console.log('🤖 [FRONTEND] 响应键:', response ? Object.keys(response) : 'null');
+      console.log('🤖 [FRONTEND] response.success:', response?.success);
+      console.log('🤖 [FRONTEND] response.workflow_data存在:', !!response?.workflow_data);
+      console.log('🤖 [FRONTEND] response.data存在:', !!response?.data);
+      
+      // 检查两种可能的数据结构
+      let workflowData = null;
+      let successFlag = false;
+      let messageText = '';
+      
+      if (response && response.success && response.workflow_data) {
+        // 直接格式
+        console.log('🤖 [FRONTEND] 使用直接格式');
+        workflowData = response.workflow_data;
+        successFlag = response.success;
+        messageText = response.message;
+      } else if (response && response.data && response.data.workflow_data) {
+        // 嵌套格式
+        console.log('🤖 [FRONTEND] 使用嵌套格式');
+        workflowData = response.data.workflow_data;
+        successFlag = response.data.success;
+        messageText = response.data.message;
+      } else {
+        console.error('🤖 [FRONTEND] 未知的响应格式');
+        console.error('🤖 [FRONTEND] 完整响应:', JSON.stringify(response, null, 2));
+      }
+      
+      console.log('🤖 [FRONTEND] 最终解析结果:');
+      console.log('🤖 [FRONTEND]   - successFlag:', successFlag);
+      console.log('🤖 [FRONTEND]   - workflowData存在:', !!workflowData);
+      console.log('🤖 [FRONTEND]   - messageText:', messageText);
+      
+      if (successFlag && workflowData) {
+        console.log('🤖 [FRONTEND] ✅ 响应验证通过，准备导入工作流');
+        console.log('🤖 [FRONTEND] 工作流数据:', workflowData);
+        console.log('🤖 [FRONTEND] 工作流名称:', workflowData.name);
+        console.log('🤖 [FRONTEND] 节点数量:', workflowData.nodes?.length || 0);
+        console.log('🤖 [FRONTEND] 连接数量:', workflowData.connections?.length || 0);
+        
+        // 使用生成的工作流数据导入工作流
+        try {
+          console.log('🤖 [FRONTEND] 开始调用工作流导入API');
+          console.log('🤖 [FRONTEND] 导入数据结构:', workflowData);
+          
+          // 直接传递workflow_data，不要额外包装
+          const importResponse = await workflowAPI.importWorkflow(
+            workflowData, // 直接传递，不包装
+            false // overwrite参数
+          );
+          
+          console.log('🤖 [FRONTEND] ✅ 工作流导入成功');
+          console.log('🤖 [FRONTEND] 导入响应:', importResponse);
+          
+          message.success(`🤖 ${messageText || 'AI工作流生成并导入成功！'}`);
+          setAiGenerateVisible(false);
+          loadWorkflows(); // 刷新工作流列表
+        } catch (importError: any) {
+          console.error('🤖 [FRONTEND] ❌ 工作流导入失败');
+          console.error('🤖 [FRONTEND] 导入错误详情:', importError);
+          console.error('🤖 [FRONTEND] 错误类型:', typeof importError);
+          if (importError.response) {
+            console.error('🤖 [FRONTEND] 错误响应状态:', importError.response.status);
+            console.error('🤖 [FRONTEND] 错误响应数据:', importError.response.data);
+          }
+          message.error(`工作流生成成功但导入失败: ${importError.response?.data?.detail || '导入错误'}`);
+        }
+      } else {
+        console.error('🤖 [FRONTEND] ❌ 响应格式异常');
+        console.error('🤖 [FRONTEND] response:', response);
+        console.error('🤖 [FRONTEND] response.success:', response?.success);
+        console.error('🤖 [FRONTEND] response.workflow_data:', response?.workflow_data);
+        message.error('AI工作流生成失败：响应格式异常');
+      }
+      
+    } catch (error: any) {
+      console.error('🤖 [FRONTEND] ❌ AI工作流生成失败');
+      console.error('🤖 [FRONTEND] 错误对象:', error);
+      console.error('🤖 [FRONTEND] 错误类型:', typeof error);
+      console.error('🤖 [FRONTEND] 错误构造函数:', error.constructor?.name);
+      
+      if (error.response?.status === 503) {
+        message.error('🤖 AI工作流生成服务暂时不可用，请检查网络连接或稍后重试');
+      } else {
+        message.error(error.response?.data?.detail || 'AI工作流生成失败');
+      }
+    } finally {
+      setAiGenerating(false);
     }
   };
 
@@ -536,6 +653,18 @@ const WorkflowPage: React.FC = () => {
                 创建工作流
               </Button>
               <Button 
+                type="default" 
+                icon={<RobotOutlined />}
+                onClick={handleAIGenerate}
+                style={{ 
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+                  borderColor: '#667eea',
+                  color: 'white'
+                }}
+              >
+                🤖 AI生成
+              </Button>
+              <Button 
                 icon={<UploadOutlined />}
                 onClick={handleImport}
               >
@@ -611,6 +740,76 @@ const WorkflowPage: React.FC = () => {
               <Option value="other">其他</Option>
             </Select>
           </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* AI工作流生成模态框 */}
+      <Modal
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <RobotOutlined style={{ color: '#667eea' }} />
+            <span>🤖 AI智能生成工作流</span>
+          </div>
+        }
+        open={aiGenerateVisible}
+        onOk={handleAIGenerateConfirm}
+        onCancel={() => setAiGenerateVisible(false)}
+        width={700}
+        okText={aiGenerating ? "生成中..." : "开始生成"}
+        cancelText="取消"
+        confirmLoading={aiGenerating}
+        okButtonProps={{
+          style: { 
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+            borderColor: '#667eea'
+          }
+        }}
+      >
+        <Form form={aiForm} layout="vertical">
+          <Form.Item
+            name="task_description"
+            label={
+              <span>
+                <RobotOutlined style={{ marginRight: '4px', color: '#667eea' }} />
+                任务描述
+              </span>
+            }
+            rules={[
+              { required: true, message: '请输入您想要实现的任务描述' },
+              { min: 5, message: '任务描述至少需要5个字符' },
+              { max: 1000, message: '任务描述不能超过1000个字符' }
+            ]}
+            tooltip="详细描述您想要AI帮您生成的工作流要完成什么任务，AI会根据您的描述自动设计节点和流程"
+          >
+            <TextArea 
+              rows={4} 
+              placeholder="例如：分析期末学生成绩，找出学习薄弱环节并生成改进建议报告..."
+              showCount
+              maxLength={1000}
+            />
+          </Form.Item>
+          <Form.Item
+            name="workflow_name"
+            label="工作流名称（可选）"
+            tooltip="如果不填写，AI会根据任务描述自动生成合适的名称"
+          >
+            <Input placeholder="AI会自动生成，也可以自定义名称" />
+          </Form.Item>
+          <div style={{ 
+            background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 50%, #4facfe 100%)', 
+            padding: '16px', 
+            borderRadius: '8px', 
+            marginTop: '16px',
+            color: 'white'
+          }}>
+            <h4 style={{ color: 'white', marginBottom: '8px' }}>✨ AI生成特色：</h4>
+            <ul style={{ marginBottom: 0, paddingLeft: '20px' }}>
+              <li>🎯 完全个性化：根据您的具体任务设计独特工作流</li>
+              <li>🚀 智能分解：自动将复杂任务拆解为合理的执行步骤</li>
+              <li>🔗 优化连接：设计最佳的节点连接和流程路径</li>
+              <li>⚡ 并行处理：识别可并行执行的任务，提高效率</li>
+            </ul>
+          </div>
         </Form>
       </Modal>
 
