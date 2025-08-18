@@ -876,10 +876,30 @@ async def get_my_tasks(
             current_user.user_id, task_status, limit
         )
         
+        # 为每个任务添加拆解相关信息
+        enhanced_tasks = []
+        for task in tasks:
+            # 添加基本的拆解可用性检查
+            task_status = task.get('status', '')
+            task_type = task.get('task_type', '')
+            
+            # 添加拆解信息
+            task['actions'] = {
+                "can_subdivide": (
+                    task_status in ['pending', 'assigned'] and 
+                    task_type in ['human', 'mixed']
+                ),
+                "can_accept": task_status in ['pending', 'assigned'],
+                "can_complete": task_status in ['in_progress'],
+                "can_reject": task_status in ['pending', 'assigned']
+            }
+            
+            enhanced_tasks.append(task)
+        
         return {
             "success": True,
-            "data": tasks,
-            "message": f"获取到 {len(tasks)} 个任务"
+            "data": enhanced_tasks,
+            "message": f"获取到 {len(enhanced_tasks)} 个任务"
         }
         
     except Exception as e:
@@ -932,6 +952,45 @@ async def get_task_details(
         
         # 将调试信息添加到返回数据中
         task_details['debug_info'] = context_debug
+        
+        # 添加任务拆解相关信息
+        subdivision_info = {
+            "can_subdivide": False,
+            "subdivision_count": 0,
+            "existing_subdivisions": [],
+            "subdivision_available": True  # 根据业务逻辑决定是否可以拆解
+        }
+        
+        # 检查任务是否可以拆解（根据任务状态和类型）
+        task_status = task_details.get('status', '')
+        task_type = task_details.get('task_type', '')
+        
+        # 只有待处理或已分配的人工任务可以拆解
+        if task_status in ['pending', 'assigned'] and task_type in ['human', 'mixed']:
+            subdivision_info["can_subdivide"] = True
+            
+            # 获取现有的拆解记录
+            try:
+                from ..services.task_subdivision_service import TaskSubdivisionService
+                subdivision_service = TaskSubdivisionService()
+                existing_subdivisions = await subdivision_service.get_task_subdivisions(task_id)
+                
+                subdivision_info["subdivision_count"] = len(existing_subdivisions)
+                subdivision_info["existing_subdivisions"] = [
+                    {
+                        "subdivision_id": str(sub.subdivision_id),
+                        "subdivision_name": sub.subdivision_name,
+                        "created_at": sub.created_at.isoformat() if sub.created_at else None,
+                        "status": sub.status,
+                        "subdivider_name": sub.subdivider_name  # 需要在service中获取
+                    }
+                    for sub in existing_subdivisions[:5]  # 只显示最近5个
+                ]
+            except Exception as e:
+                logger.warning(f"获取任务拆解信息失败: {e}")
+                # 不影响主要功能，继续返回
+        
+        task_details['subdivision_info'] = subdivision_info
         
         return {
             "success": True,

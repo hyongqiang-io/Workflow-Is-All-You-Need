@@ -25,6 +25,7 @@ from backend.api.mcp import router as mcp_router
 from backend.api.mcp_user_tools import router as mcp_user_tools_router
 from backend.api.agent_tools import router as agent_tools_router
 from backend.api.ai_workflow import router as ai_workflow_router
+from backend.api.task_subdivision import router as task_subdivision_router
 from backend.utils.database import initialize_database, close_database
 from backend.utils.exceptions import BusinessException, ErrorResponse
 from backend.services.execution_service import execution_engine
@@ -292,6 +293,11 @@ logger.trace("Agent工具绑定路由注册完成")
 logger.trace("注册AI工作流生成路由...")
 app.include_router(ai_workflow_router, prefix="/api", tags=["AI工作流生成"])
 logger.trace("AI工作流生成路由注册完成")
+
+# 注册任务细分路由
+logger.trace("注册任务细分路由...")
+app.include_router(task_subdivision_router, prefix="/api", tags=["任务细分"])
+logger.trace("任务细分路由注册完成")
 
 logger.trace("所有路由注册完成")
 

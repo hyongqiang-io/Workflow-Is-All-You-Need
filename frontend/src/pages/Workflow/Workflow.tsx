@@ -14,11 +14,12 @@ import {
   RobotOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { workflowAPI, executionAPI, aiWorkflowAPI } from '../../services/api';
+import { workflowAPI, executionAPI, aiWorkflowAPI, taskSubdivisionApi } from '../../services/api';
 import { useAuthStore } from '../../stores/authStore';
 import WorkflowDesigner from '../../components/WorkflowDesigner';
 import WorkflowInstanceList from '../../components/WorkflowInstanceList';
 import WorkflowImportExport from '../../components/WorkflowImportExport';
+import WorkflowSubdivisionPreview from '../../components/WorkflowSubdivisionPreview';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -59,6 +60,10 @@ const WorkflowPage: React.FC = () => {
   const [aiGenerateVisible, setAiGenerateVisible] = useState(false);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiForm] = Form.useForm();
+
+  // 任务细分预览相关状态
+  const [subdivisionPreviewVisible, setSubdivisionPreviewVisible] = useState(false);
+  const [subdivisionPreviewWorkflow, setSubdivisionPreviewWorkflow] = useState<WorkflowItem | null>(null);
 
   useEffect(() => {
     loadWorkflows();
@@ -476,6 +481,41 @@ const WorkflowPage: React.FC = () => {
     loadWorkflows();
   };
 
+  const handleViewSubdivisions = (workflow: WorkflowItem) => {
+    setSubdivisionPreviewWorkflow(workflow);
+    setSubdivisionPreviewVisible(true);
+  };
+
+  const handleSubdivisionPreviewClose = () => {
+    setSubdivisionPreviewVisible(false);
+    setSubdivisionPreviewWorkflow(null);
+  };
+
+  const handleAdoptSubdivision = async (subdivisionId: string) => {
+    try {
+      if (!subdivisionPreviewWorkflow) {
+        message.error('工作流信息缺失');
+        return;
+      }
+
+      // 这里需要用户选择目标节点，暂时使用模拟数据
+      // 在实际实现中，应该弹出节点选择对话框
+      const adoptionData = {
+        subdivision_id: subdivisionId,
+        target_node_id: 'dummy-node-id', // 应该让用户选择目标节点
+        adoption_name: `采纳的细分_${Date.now()}`
+      };
+
+      await taskSubdivisionApi.adoptSubdivision(subdivisionPreviewWorkflow.baseId, adoptionData);
+      message.success('子工作流采纳成功！');
+      setSubdivisionPreviewVisible(false);
+      loadWorkflows(); // 重新加载工作流列表
+    } catch (error: any) {
+      console.error('采纳子工作流失败:', error);
+      message.error(error.message || '采纳子工作流失败');
+    }
+  };
+
   const formatDate = (dateString: string) => {
     if (!dateString) return '-';
     try {
@@ -585,6 +625,14 @@ const WorkflowPage: React.FC = () => {
             onClick={() => handleView(record)}
           >
             查看
+          </Button>
+          <Button 
+            type="link" 
+            size="small" 
+            icon={<BranchesOutlined />}
+            onClick={() => handleViewSubdivisions(record)}
+          >
+            细分预览
           </Button>
           <Button 
             type="link" 
@@ -847,6 +895,23 @@ const WorkflowPage: React.FC = () => {
         onExportSuccess={handleExportSuccess}
         onImportSuccess={handleImportSuccess}
       />
+
+      {/* 工作流细分预览模态框 */}
+      <Modal
+        title={`工作流细分预览 - ${subdivisionPreviewWorkflow?.name || ''}`}
+        open={subdivisionPreviewVisible}
+        onCancel={handleSubdivisionPreviewClose}
+        width={1000}
+        footer={null}
+        destroyOnClose
+      >
+        {subdivisionPreviewWorkflow && (
+          <WorkflowSubdivisionPreview
+            workflowBaseId={subdivisionPreviewWorkflow.baseId}
+            onAdoptSubdivision={handleAdoptSubdivision}
+          />
+        )}
+      </Modal>
     </div>
   );
 };

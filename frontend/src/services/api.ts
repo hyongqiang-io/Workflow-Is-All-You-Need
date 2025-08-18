@@ -865,4 +865,121 @@ export const aiWorkflowAPI = {
   }
 };
 
+// 任务细分相关API
+export const taskSubdivisionApi = {
+  // 创建任务细分
+  createTaskSubdivision: async (taskId: string, subdivisionData: {
+    subdivision_name: string;
+    subdivision_description?: string;
+    sub_workflow_data: any;
+    execute_immediately?: boolean;
+  }) => {
+    console.log('🔄 创建任务细分:', taskId, subdivisionData);
+    try {
+      const response = await api.post(`/task-subdivision/tasks/${taskId}/subdivide`, subdivisionData);
+      console.log('✅ 任务细分创建成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 任务细分创建失败:', error);
+      throw error;
+    }
+  },
+
+  // 获取任务的所有细分
+  getTaskSubdivisions: async (taskId: string, withInstancesOnly: boolean = false) => {
+    console.log('🔄 获取任务细分列表:', taskId, { withInstancesOnly });
+    try {
+      const params = withInstancesOnly ? '?with_instances_only=true' : '';
+      const response = await api.get(`/task-subdivision/tasks/${taskId}/subdivisions${params}`);
+      console.log('✅ 获取任务细分列表成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 获取任务细分列表失败:', error);
+      throw error;
+    }
+  },
+
+  // 获取工作流相关的所有细分（用于预览）
+  getWorkflowSubdivisions: async (workflowBaseId: string) => {
+    console.log('🔄 获取工作流细分预览:', workflowBaseId);
+    try {
+      const response = await api.get(`/task-subdivision/workflows/${workflowBaseId}/subdivisions`);
+      console.log('✅ 获取工作流细分预览成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 获取工作流细分预览失败:', error);
+      throw error;
+    }
+  },
+
+  // 采纳子工作流
+  adoptSubdivision: async (workflowBaseId: string, adoptionData: {
+    subdivision_id: string;
+    target_node_id: string;
+    adoption_name: string;
+  }) => {
+    console.log('🔄 采纳子工作流:', workflowBaseId, adoptionData);
+    try {
+      const response = await api.post(`/task-subdivision/workflows/${workflowBaseId}/adopt`, adoptionData);
+      console.log('✅ 采纳子工作流成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 采纳子工作流失败:', error);
+      throw error;
+    }
+  },
+
+  // 获取我的细分列表
+  getMySubdivisions: async (limit: number = 50) => {
+    console.log('🔄 获取我的细分列表');
+    try {
+      const response = await api.get(`/task-subdivision/my-subdivisions?limit=${limit}`);
+      console.log('✅ 获取我的细分列表成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 获取我的细分列表失败:', error);
+      throw error;
+    }
+  },
+
+  // 获取细分详情
+  getSubdivisionDetails: async (subdivisionId: string) => {
+    console.log('🔄 获取细分详情:', subdivisionId);
+    try {
+      const response = await api.get(`/task-subdivision/subdivisions/${subdivisionId}`);
+      console.log('✅ 获取细分详情成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 获取细分详情失败:', error);
+      throw error;
+    }
+  },
+
+  // 获取任务的子工作流信息
+  getTaskSubWorkflowInfo: async (taskId: string) => {
+    console.log('🔄 获取任务子工作流信息:', taskId);
+    try {
+      const response = await api.get(`/task-subdivision/tasks/${taskId}/sub-workflow-info`);
+      console.log('✅ 获取任务子工作流信息成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 获取任务子工作流信息失败:', error);
+      throw error;
+    }
+  },
+
+  // 删除任务细分
+  deleteSubdivision: async (subdivisionId: string, softDelete: boolean = true) => {
+    console.log('🔄 删除任务细分:', subdivisionId);
+    try {
+      const response = await api.delete(`/task-subdivision/subdivisions/${subdivisionId}?soft_delete=${softDelete}`);
+      console.log('✅ 删除任务细分成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 删除任务细分失败:', error);
+      throw error;
+    }
+  }
+};
+
 export default api; 

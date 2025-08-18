@@ -30,6 +30,7 @@ class NodeBase(BaseModel):
     task_description: Optional[str] = Field(None, description="任务描述")
     position_x: Optional[float] = Field(None, description="X坐标")
     position_y: Optional[float] = Field(None, description="Y坐标")
+    processor_id: Optional[str] = Field(None, description="关联的处理器ID")
 
 
 class Node(NodeBase, BaseEntity):

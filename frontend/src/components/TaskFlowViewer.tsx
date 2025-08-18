@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Tag, Button, Modal, Descriptions, Timeline, Badge, Space, Typography, Alert, Spin } from 'antd';
+import { Card, Tag, Button, Modal, Descriptions, Timeline, Badge, Space, Typography, Alert, Spin, message } from 'antd';
 import { 
   PlayCircleOutlined, 
   CheckCircleOutlined, 
@@ -22,6 +22,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { executionAPI } from '../services/api';
+import TaskSubdivisionModal from './TaskSubdivisionModal';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -205,20 +206,30 @@ const TaskNodeComponent: React.FC<{ data: any }> = ({ data }) => {
       )}
 
       {isAssignedToMe && task.status === 'in_progress' && (
-        <Space size="small" style={{ width: '100%', marginTop: '4px' }}>
+        <Space direction="vertical" size="small" style={{ width: '100%', marginTop: '4px' }}>
+          <Space size="small" style={{ width: '100%' }}>
+            <Button 
+              type="primary" 
+              size="small" 
+              style={{ flex: 1 }}
+              onClick={() => data.onCompleteTask?.(task.id)}
+            >
+              完成任务
+            </Button>
+            <Button 
+              size="small" 
+              onClick={() => data.onPauseTask?.(task.id)}
+            >
+              暂停
+            </Button>
+          </Space>
           <Button 
-            type="primary" 
             size="small" 
-            style={{ flex: 1 }}
-            onClick={() => data.onCompleteTask?.(task.id)}
+            icon={<BranchesOutlined />}
+            style={{ width: '100%' }}
+            onClick={() => data.onSubdivideTask?.(task.id, task.name, task.description)}
           >
-            完成任务
-          </Button>
-          <Button 
-            size="small" 
-            onClick={() => data.onPauseTask?.(task.id)}
-          >
-            暂停
+            细分任务
           </Button>
         </Space>
       )}
@@ -239,6 +250,10 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<TaskNode | null>(null);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
+  const [subdivisionModalVisible, setSubdivisionModalVisible] = useState(false);
+  const [subdivisionTaskId, setSubdivisionTaskId] = useState<string>('');
+  const [subdivisionTaskTitle, setSubdivisionTaskTitle] = useState<string>('');
+  const [subdivisionTaskDescription, setSubdivisionTaskDescription] = useState<string>('');
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
@@ -301,7 +316,8 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
           isCreator: taskFlow.creator ? currentUserId === taskFlow.creator.id : false,
           onStartTask: handleStartTask,
           onCompleteTask: handleCompleteTask,
-          onPauseTask: handlePauseTask
+          onPauseTask: handlePauseTask,
+          onSubdivideTask: handleSubdivideTask
         }
       };
     });
@@ -366,6 +382,27 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
         )
       };
     });
+  };
+
+  const handleSubdivideTask = (taskId: string, taskTitle: string, taskDescription?: string) => {
+    setSubdivisionTaskId(taskId);
+    setSubdivisionTaskTitle(taskTitle);
+    setSubdivisionTaskDescription(taskDescription || '');
+    setSubdivisionModalVisible(true);
+  };
+
+  const handleSubdivisionSuccess = () => {
+    setSubdivisionModalVisible(false);
+    message.success('任务细分创建成功！');
+    // 可以选择重新加载任务流程
+    loadTaskFlow();
+  };
+
+  const handleSubdivisionCancel = () => {
+    setSubdivisionModalVisible(false);
+    setSubdivisionTaskId('');
+    setSubdivisionTaskTitle('');
+    setSubdivisionTaskDescription('');
   };
 
   const handleNodeClick = (event: any, node: Node) => {
@@ -528,6 +565,13 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
                       >
                         暂停
                       </Button>
+                      <Button 
+                        size="small"
+                        icon={<BranchesOutlined />}
+                        onClick={() => handleSubdivideTask(task.id, task.name, task.description)}
+                      >
+                        细分
+                      </Button>
                     </Space>
                   )}
                 </Space>
@@ -643,6 +687,16 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
           </Descriptions>
         )}
       </Modal>
+
+      {/* 任务细分模态框 */}
+      <TaskSubdivisionModal
+        visible={subdivisionModalVisible}
+        onCancel={handleSubdivisionCancel}
+        onSuccess={handleSubdivisionSuccess}
+        taskId={subdivisionTaskId}
+        taskTitle={subdivisionTaskTitle}
+        taskDescription={subdivisionTaskDescription}
+      />
     </div>
   );
 };

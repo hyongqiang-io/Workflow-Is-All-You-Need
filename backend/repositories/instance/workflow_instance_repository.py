@@ -96,6 +96,21 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
             raise
     
+    async def get_workflow_instance_by_id(self, instance_id: uuid.UUID) -> Optional[Dict[str, Any]]:
+        """根据实例ID获取工作流实例"""
+        try:
+            query = """
+                SELECT wi.*, w.name as workflow_name
+                FROM workflow_instance wi
+                LEFT JOIN workflow w ON wi.workflow_id = w.workflow_id
+                WHERE wi.workflow_instance_id = %s AND wi.is_deleted = 0
+            """
+            result = await self.db.fetch_one(query, instance_id)
+            return dict(result) if result else None
+        except Exception as e:
+            logger.error(f"查询工作流实例失败: {instance_id}, 错误: {e}")
+            return None
+    
     async def get_instance_by_id(self, instance_id: uuid.UUID) -> Optional[Dict[str, Any]]:
         """根据ID获取工作流实例"""
         try:

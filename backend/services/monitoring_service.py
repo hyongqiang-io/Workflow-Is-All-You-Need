@@ -34,6 +34,9 @@ class MonitoringService:
             'queue_size_threshold': 100      # 队列大小阈值
         }
         
+        # 工作流完成回调注册表
+        self.workflow_completion_callbacks = {}  # {workflow_instance_id: [callback_functions]}
+        
         # 监控数据
         self.metrics = {
             'workflows': {
@@ -91,6 +94,9 @@ class MonitoringService:
                 
                 # 检查异常情况
                 await self._check_anomalies()
+                
+                # 检查工作流完成状态并触发回调
+                await self._check_workflow_completion_and_trigger_callbacks()
                 
                 # 等待下一个监控周期
                 await asyncio.sleep(self.monitor_interval)
@@ -688,6 +694,154 @@ class MonitoringService:
         except Exception as e:
             logger.error(f"获取性能报告失败: {e}")
             raise
+    
+    async def register_workflow_completion_callback(self, workflow_instance_id: uuid.UUID, 
+                                                   callback_func) -> bool:
+        """注册工作流完成回调"""
+        try:
+            logger.info(f"🔔 注册工作流完成回调: {workflow_instance_id}")
+            
+            if workflow_instance_id not in self.workflow_completion_callbacks:
+                self.workflow_completion_callbacks[workflow_instance_id] = []
+            
+            self.workflow_completion_callbacks[workflow_instance_id].append(callback_func)
+            
+            logger.info(f"✅ 工作流完成回调注册成功: {workflow_instance_id}")
+            logger.info(f"   - 该工作流现有回调数量: {len(self.workflow_completion_callbacks[workflow_instance_id])}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"注册工作流完成回调失败: {e}")
+            return False
+    
+    async def _check_workflow_completion_and_trigger_callbacks(self):
+        """检查工作流完成状态并触发回调"""
+        try:
+            if not self.workflow_completion_callbacks:
+                return
+            
+            # 检查注册了回调的工作流状态
+            for workflow_instance_id, callbacks in list(self.workflow_completion_callbacks.items()):
+                try:
+                    # 查询工作流状态
+                    workflow_instance = await self.workflow_instance_repo.get_workflow_instance_by_id(workflow_instance_id)
+                    
+                    if not workflow_instance:
+                        # 工作流不存在，清理回调
+                        logger.warning(f"工作流实例不存在，清理回调: {workflow_instance_id}")
+                        del self.workflow_completion_callbacks[workflow_instance_id]
+                        continue
+                    
+                    status = workflow_instance.get('status')
+                    
+                    # 检查是否已完成（成功、失败或取消）
+                    if status in ['completed', 'failed', 'cancelled', 'timeout']:
+                        logger.info(f"🎯 检测到工作流完成: {workflow_instance_id}, 状态: {status}")
+                        
+                        # 收集执行结果
+                        results = await self._collect_workflow_results(workflow_instance_id)
+                        
+                        # 触发所有回调
+                        for callback in callbacks:
+                            try:
+                                await callback(workflow_instance_id, status, results)
+                                logger.info(f"✅ 工作流完成回调执行成功: {workflow_instance_id}")
+                            except Exception as callback_e:
+                                logger.error(f"工作流完成回调执行失败: {callback_e}")
+                        
+                        # 清理已完成的工作流回调
+                        del self.workflow_completion_callbacks[workflow_instance_id]
+                        logger.info(f"🧹 已清理工作流回调: {workflow_instance_id}")
+                
+                except Exception as check_e:
+                    logger.error(f"检查工作流完成状态失败: {workflow_instance_id}, 错误: {check_e}")
+                    
+        except Exception as e:
+            logger.error(f"检查工作流完成状态和触发回调失败: {e}")
+    
+    async def _collect_workflow_results(self, workflow_instance_id: uuid.UUID) -> Dict[str, Any]:
+        """收集工作流执行结果"""
+        try:
+            # 获取工作流实例信息
+            workflow_instance = await self.workflow_instance_repo.get_workflow_instance_by_id(workflow_instance_id)
+            
+            # 获取该工作流的所有任务
+            tasks = await self.task_instance_repo.get_tasks_by_workflow_instance(workflow_instance_id)
+            
+            # 统计任务完成情况
+            total_tasks = len(tasks)
+            completed_tasks = len([t for t in tasks if t.get('status') == 'completed'])
+            failed_tasks = len([t for t in tasks if t.get('status') == 'failed'])
+            
+            # 收集任务结果
+            task_results = []
+            final_outputs = []
+            
+            for task in tasks:
+                task_result = {
+                    'task_id': task.get('task_instance_id'),
+                    'title': task.get('task_title'),
+                    'status': task.get('status'),
+                    'output': task.get('output_data', ''),
+                    'result_summary': task.get('result_summary', '')
+                }
+                task_results.append(task_result)
+                
+                # 收集输出数据
+                if task.get('output_data'):
+                    final_outputs.append(task.get('output_data'))
+            
+            # 构建结果对象
+            results = {
+                'workflow_instance_id': str(workflow_instance_id),
+                'status': workflow_instance.get('status'),
+                'total_tasks': total_tasks,
+                'completed_tasks': completed_tasks,
+                'failed_tasks': failed_tasks,
+                'task_results': task_results,
+                'final_output': '\n\n'.join(final_outputs) if final_outputs else '',
+                'execution_duration': self._calculate_execution_duration(workflow_instance),
+                'started_at': workflow_instance.get('created_at'),
+                'completed_at': workflow_instance.get('updated_at')
+            }
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"收集工作流执行结果失败: {e}")
+            return {}
+    
+    def _calculate_execution_duration(self, workflow_instance: Dict[str, Any]) -> str:
+        """计算执行时长"""
+        try:
+            started_at = workflow_instance.get('created_at')
+            completed_at = workflow_instance.get('updated_at')
+            
+            if started_at and completed_at:
+                if isinstance(started_at, str):
+                    started_at = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                if isinstance(completed_at, str):
+                    completed_at = datetime.fromisoformat(completed_at.replace('Z', '+00:00'))
+                
+                duration = completed_at - started_at
+                
+                hours = duration.seconds // 3600
+                minutes = (duration.seconds % 3600) // 60
+                seconds = duration.seconds % 60
+                
+                if hours > 0:
+                    return f"{hours}小时{minutes}分钟{seconds}秒"
+                elif minutes > 0:
+                    return f"{minutes}分钟{seconds}秒"
+                else:
+                    return f"{seconds}秒"
+            
+            return "未知"
+            
+        except Exception as e:
+            logger.error(f"计算执行时长失败: {e}")
+            return "未知"
 
 
 # 全局监控服务实例

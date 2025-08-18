@@ -250,18 +250,15 @@ class ExecutionEngine:
             except Exception as e:
                 logger.warning(f"生成执行摘要失败: {e}")
             
-        except Exception as e:
-            logger.error(f"启动工作流执行失败: {e}")
-            raise
-            
             return {
+                'workflow_instance_id': instance_id,
                 'instance_id': instance_id,
                 'status': WorkflowInstanceStatus.RUNNING.value,
                 'message': '工作流开始执行'
             }
             
         except Exception as e:
-            logger.error(f"执行工作流失败: {e}")
+            logger.error(f"启动工作流执行失败: {e}")
             raise
     
     async def _get_workflow_nodes_by_version_id(self, workflow_id: uuid.UUID) -> List[Dict[str, Any]]:

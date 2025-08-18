@@ -70,7 +70,11 @@ class WorkflowRepository(BaseRepository[Workflow]):
             
             # 生成新的workflow_id和版本号
             new_workflow_id = uuid.uuid4()
-            new_version = current_workflow.get('version', 1) + 1
+            current_version = current_workflow.get('version', 1)
+            # 🔧 确保版本号是整数类型
+            if isinstance(current_version, str):
+                current_version = int(current_version)
+            new_version = current_version + 1
             
             # 准备新版本数据
             new_name = workflow_data.name if workflow_data.name is not None else current_workflow.get('name')
@@ -105,8 +109,8 @@ class WorkflowRepository(BaseRepository[Workflow]):
                     str(workflow_base_id),
                     new_name,
                     new_description,
-                    new_version,
-                    1,  # is_current_version = True
+                    str(new_version),  # 🔧 确保版本号转换为字符串
+                    "1",  # 🔧 确保布尔值转换为字符串
                     str(current_workflow.get('creator_id')),
                     workflow_data.change_description or 'Workflow updated'
                 )

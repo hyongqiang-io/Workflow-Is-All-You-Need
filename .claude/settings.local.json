@@ -173,7 +173,10 @@
       "Bash(/usr/local/mysql/bin/mysql:*)",
       "Bash(sudo:*)",
       "Bash(nginx:*)",
-      "Bash(/tmp/test_ip_access.sh:*)"
+      "Bash(/tmp/test_ip_access.sh:*)",
+      "Bash(/home/ubuntu/anaconda3/envs/workflow/bin/python test_fixed_subdivision.py)",
+      "Bash(/home/ubuntu/anaconda3/envs/workflow/bin/python debug_duplicate_task_creation.py)",
+      "Bash(/home/ubuntu/anaconda3/envs/workflow/bin/python debug_workflow_update_error.py)"
     ],
     "deny": []
   }

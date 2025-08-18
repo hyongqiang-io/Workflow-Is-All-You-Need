@@ -135,6 +135,17 @@ class NodeService:
             
             logger.info(f"用户 {user_id} 在工作流 {node_data.workflow_base_id} 中创建了节点: {node_data.name}")
             
+            # 处理processor_id关联（如果提供了）
+            if hasattr(node_data, 'processor_id') and node_data.processor_id:
+                try:
+                    node_base_id = node_record.get('node_base_id')
+                    logger.info(f"为新创建的节点添加处理器关联: {node_base_id} -> {node_data.processor_id}")
+                    await self._add_node_processor_association(node_base_id, node_data.workflow_base_id, node_data.processor_id)
+                    logger.info(f"成功添加节点-处理器关联")
+                except Exception as e:
+                    logger.error(f"添加节点-处理器关联失败: {e}")
+                    # 不抛出异常，因为节点创建已经成功
+            
             # 格式化节点响应
             logger.info(f"[DEBUG] 开始调用_format_node_response")
             try:
