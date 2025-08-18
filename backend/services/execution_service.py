@@ -2890,9 +2890,9 @@ class ExecutionEngine:
                 node_instance_id=node_instance_id
             )
             
-            # 收集完整的工作流上下文
-            logger.trace(f"📋 [END节点] 收集工作流上下文")
-            context_data = await self._collect_workflow_context(workflow_instance_id)
+            # 收集直接上游节点的输出结果（简化版）
+            logger.trace(f"📋 [END节点] 收集直接上游节点结果")
+            context_data = await self._collect_immediate_upstream_results(workflow_instance_id, node_instance_id)
             
             # 更新节点状态为完成，并保存上下文数据
             logger.trace(f"✅ [END节点] 更新状态为完成")
@@ -2921,83 +2921,41 @@ class ExecutionEngine:
             import traceback
             logger.error(f"错误堆栈: {traceback.format_exc()}")
     
-    async def _collect_workflow_context(self, workflow_instance_id: uuid.UUID) -> Dict[str, Any]:
-        """收集工作流的完整上下文"""
+    async def _collect_immediate_upstream_results(self, workflow_instance_id: uuid.UUID, node_instance_id: uuid.UUID) -> Dict[str, Any]:
+        """收集结束节点的直接上游节点结果（简化版）"""
         try:
-            logger.trace(f"📋 收集工作流上下文: {workflow_instance_id}")
+            logger.trace(f"📋 收集直接上游节点结果: {node_instance_id}")
             
-            # 获取所有已完成的节点实例及其输出
-            context_query = '''
-            SELECT ni.node_instance_id, ni.output_data, n.name as node_name, n.type as node_type
-            FROM node_instance ni
-            JOIN node n ON ni.node_id = n.node_id
-            WHERE ni.workflow_instance_id = $1 
-              AND ni.status = 'completed'
-              AND ni.is_deleted = FALSE
-            ORDER BY ni.created_at
-            '''
+            # 使用上下文管理器获取直接上游结果
+            context_data = await self.context_manager.get_task_context_data(workflow_instance_id, node_instance_id)
+            immediate_upstream = context_data.get('immediate_upstream_results', {})
             
-            completed_nodes = await self.workflow_instance_repo.db.fetch_all(
-                context_query, workflow_instance_id
-            )
-            
-            # 获取所有已完成的任务实例及其输出  
-            task_context_query = '''
-            SELECT ti.task_instance_id, ti.output_data, ti.task_title, ti.result_summary,
-                   n.name as node_name, n.type as node_type
-            FROM task_instance ti
-            JOIN node_instance ni ON ti.node_instance_id = ni.node_instance_id
-            JOIN node n ON ni.node_id = n.node_id
-            WHERE ni.workflow_instance_id = $1 
-              AND ti.status = 'completed'
-              AND ti.is_deleted = FALSE
-            ORDER BY ti.completed_at
-            '''
-            
-            completed_tasks = await self.task_instance_repo.db.fetch_all(
-                task_context_query, workflow_instance_id
-            )
-            
-            # 构建完整上下文
-            context_data = {
-                'workflow_instance_id': str(workflow_instance_id),
-                'completed_at': now_utc().isoformat(),
-                'nodes_context': {},
-                'tasks_context': {},
-                'execution_summary': {
-                    'total_nodes': len(completed_nodes),
-                    'total_tasks': len(completed_tasks)
-                }
+            # 简单整理上游结果
+            end_node_output = {
+                'workflow_completed': True,
+                'completion_time': datetime.utcnow().isoformat(),
+                'upstream_results': immediate_upstream,  # 直接使用上游结果
+                'upstream_count': len(immediate_upstream),
+                'summary': f"工作流完成，整合了{len(immediate_upstream)}个上游节点的结果",
+                'workflow_instance_id': str(workflow_instance_id)
             }
             
-            # 添加节点上下文
-            for node in completed_nodes:
-                node_id = str(node['node_instance_id'])
-                context_data['nodes_context'][node_id] = {
-                    'node_name': node['node_name'],
-                    'node_type': node['node_type'],
-                    'output_data': node['output_data'] or {}
-                }
+            logger.trace(f"✅ 收集到 {len(immediate_upstream)} 个直接上游节点的结果")
+            for node_name, result in immediate_upstream.items():
+                logger.trace(f"  - {node_name}: {len(str(result.get('output_data', '')))} 字符输出")
             
-            # 添加任务上下文
-            for task in completed_tasks:
-                task_id = str(task['task_instance_id'])
-                context_data['tasks_context'][task_id] = {
-                    'task_title': task['task_title'],
-                    'node_name': task['node_name'],
-                    'node_type': task['node_type'],
-                    'output_data': task['output_data'] or {},
-                    'result_summary': task['result_summary']
-                }
-            
-            logger.trace(f"✅ 上下文收集完成: {len(completed_nodes)} 个节点, {len(completed_tasks)} 个任务")
-            return context_data
+            return end_node_output
             
         except Exception as e:
-            logger.error(f"❌ 收集工作流上下文失败: {e}")
+            logger.error(f"❌ 收集直接上游结果失败: {e}")
             import traceback
             logger.error(f"错误堆栈: {traceback.format_exc()}")
-            return {}
+            return {
+                'workflow_completed': True,
+                'completion_time': datetime.utcnow().isoformat(),
+                'error': f"收集上游结果失败: {str(e)}",
+                'workflow_instance_id': str(workflow_instance_id)
+            }
     
     async def _check_workflow_completion(self, workflow_instance_id: uuid.UUID):
         """检查工作流是否可以完成"""

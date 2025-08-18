@@ -412,12 +412,64 @@ const Todo: React.FC = () => {
             ? JSON.parse(workflowDetails.output_data) 
             : workflowDetails.output_data;
           
-          if (outputData.result) {
+          console.log('🔍 分析输出数据结构:', outputData);
+          
+          // 检查是否是结束节点的输出格式（包含整合的上游结果）
+          if (outputData.workflow_completed && outputData.upstream_results) {
+            console.log('✅ 发现结束节点整合结果');
+            
+            // 构建整合结果的展示文本
+            const upstreamResults = outputData.upstream_results;
+            const upstreamCount = Object.keys(upstreamResults).length;
+            
+            if (upstreamCount > 0) {
+              let formattedResults = `=== ${subWorkflow.subdivision_name || '子工作流'} 执行结果 ===\n\n`;
+              formattedResults += `${outputData.summary}\n`;
+              formattedResults += `完成时间: ${outputData.completion_time}\n\n`;
+              formattedResults += `执行详情：\n`;
+              
+              Object.entries(upstreamResults).forEach(([nodeName, nodeResult]: [string, any]) => {
+                formattedResults += `\n🔹 ${nodeName}：\n`;
+                
+                // 提取节点的输出数据
+                const nodeOutput = nodeResult.output_data;
+                if (typeof nodeOutput === 'string') {
+                  formattedResults += nodeOutput;
+                } else if (typeof nodeOutput === 'object' && nodeOutput) {
+                  // 如果是对象，尝试提取有意义的内容
+                  if (nodeOutput.result) {
+                    formattedResults += nodeOutput.result;
+                  } else if (nodeOutput.content) {
+                    formattedResults += nodeOutput.content;
+                  } else if (nodeOutput.output) {
+                    formattedResults += nodeOutput.output;
+                  } else {
+                    // 格式化显示对象内容
+                    const formatted = JSON.stringify(nodeOutput, null, 2);
+                    formattedResults += formatted;
+                  }
+                } else {
+                  formattedResults += '无输出数据';
+                }
+                formattedResults += '\n';
+              });
+              
+              formattedResults += '\n=== 子工作流执行完成 ===';
+              resultText = formattedResults;
+            } else {
+              resultText = `=== ${subWorkflow.subdivision_name || '子工作流'} 执行结果 ===\n\n${outputData.summary || '工作流已完成，但未找到具体结果'}`;
+            }
+          }
+          // 如果有直接的result字段
+          else if (outputData.result) {
             resultText = outputData.result;
-          } else {
+          }
+          // 其他格式的输出数据
+          else {
             resultText = JSON.stringify(outputData, null, 2);
           }
         } catch (e) {
+          console.warn('解析输出数据失败，使用原始数据:', e);
           resultText = workflowDetails.output_data;
         }
       } else {
