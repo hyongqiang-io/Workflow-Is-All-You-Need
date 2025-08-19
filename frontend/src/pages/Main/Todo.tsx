@@ -1083,9 +1083,12 @@ const Todo: React.FC = () => {
                         <Panel 
                           header={
                             <div>
-                              <Text strong>上游节点输出</Text>
+                              <Text strong>上游处理器执行结果</Text>
                               <Tag color="blue" style={{ marginLeft: '8px' }}>
-                                {currentTask.context_data.upstream_outputs.length} 个节点
+                                {currentTask.context_data.upstream_outputs.length} 个处理器节点
+                              </Tag>
+                              <Tag color="green" style={{ marginLeft: '4px' }}>
+                                已完成
                               </Tag>
                             </div>
                           } 
@@ -1095,34 +1098,72 @@ const Todo: React.FC = () => {
                             <Card 
                               key={index} 
                               size="small" 
-                              style={{ marginBottom: '12px' }}
+                              style={{ marginBottom: '12px', border: '1px solid #e6f7ff' }}
                               title={
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                  <Text strong style={{ color: '#1890ff' }}>{upstreamNode.node_name || `节点 ${index + 1}`}</Text>
-                                  <Tag color="green">已完成</Tag>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <Text strong style={{ color: '#1890ff' }}>
+                                      🔧 {upstreamNode.node_name || `处理器节点 ${index + 1}`}
+                                    </Text>
+                                    {upstreamNode.processor_type && (
+                                      <Tag color={upstreamNode.processor_type === 'human' ? 'blue' : upstreamNode.processor_type === 'agent' ? 'purple' : 'orange'}>
+                                        {upstreamNode.processor_type === 'human' ? '人工处理器' : 
+                                         upstreamNode.processor_type === 'agent' ? 'AI代理' : 
+                                         upstreamNode.processor_type || '处理器'}
+                                      </Tag>
+                                    )}
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                    <Tag color="green">✅ 执行完成</Tag>
+                                  </div>
                                 </div>
                               }
                               extra={
                                 upstreamNode.completed_at && (
                                   <Text type="secondary" style={{ fontSize: '12px' }}>
-                                    {new Date(upstreamNode.completed_at).toLocaleString()}
+                                    完成时间: {new Date(upstreamNode.completed_at).toLocaleString()}
                                   </Text>
                                 )
                               }
                             >
                               {upstreamNode.node_description && (
                                 <Alert
-                                  message="节点描述"
+                                  message="处理器任务说明"
                                   description={upstreamNode.node_description}
                                   type="info"
-                                  showIcon={false}
+                                  showIcon
+                                  icon={<span>📋</span>}
                                   style={{ marginBottom: '12px', fontSize: '12px' }}
                                 />
                               )}
                               
+                              {/* 显示处理器执行信息 */}
+                              {(upstreamNode.processor_name || upstreamNode.assigned_user || upstreamNode.assigned_agent) && (
+                                <div style={{ marginBottom: '12px', padding: '8px', background: '#f9f9f9', borderRadius: '4px', fontSize: '12px' }}>
+                                  <Text strong style={{ color: '#666' }}>处理器执行信息：</Text>
+                                  <div style={{ marginTop: '4px' }}>
+                                    {upstreamNode.processor_name && (
+                                      <div>📝 处理器名称: {upstreamNode.processor_name}</div>
+                                    )}
+                                    {upstreamNode.assigned_user && (
+                                      <div>👤 执行人员: {upstreamNode.assigned_user}</div>
+                                    )}
+                                    {upstreamNode.assigned_agent && (
+                                      <div>🤖 执行代理: {upstreamNode.assigned_agent}</div>
+                                    )}
+                                    {upstreamNode.execution_duration && (
+                                      <div>⏱️ 执行时长: {upstreamNode.execution_duration}</div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                              
                               {upstreamNode.output_data && Object.keys(upstreamNode.output_data).length > 0 ? (
                                 <div>
-                                  <Text strong style={{ color: '#52c41a' }}>输出数据:</Text>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                                    <Text strong style={{ color: '#52c41a' }}>🎯 处理器执行结果:</Text>
+                                    <Tag color="cyan">可用于下游任务</Tag>
+                                  </div>
                                   <div style={{ marginTop: '8px' }}>
                                     {(() => {
                                       try {
@@ -1135,15 +1176,28 @@ const Todo: React.FC = () => {
                                           return (
                                             <div>
                                               <Alert
-                                                message="任务结果"
-                                                description={outputData.result}
+                                                message="✅ 处理器执行结果"
+                                                description={
+                                                  <div>
+                                                    <div style={{ marginBottom: '8px', fontWeight: 'bold', color: '#52c41a' }}>
+                                                      {outputData.result}
+                                                    </div>
+                                                    {outputData.summary && (
+                                                      <div style={{ fontSize: '12px', color: '#666', fontStyle: 'italic' }}>
+                                                        摘要: {outputData.summary}
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                }
                                                 type="success"
                                                 showIcon
                                                 style={{ marginBottom: '8px' }}
                                               />
                                               {Object.keys(outputData).length > 1 && (
                                                 <details>
-                                                  <summary style={{ cursor: 'pointer', color: '#1890ff' }}>查看完整输出数据</summary>
+                                                  <summary style={{ cursor: 'pointer', color: '#1890ff', fontSize: '12px' }}>
+                                                    🔍 查看详细输出数据 ({Object.keys(outputData).filter(key => !['result', 'summary'].includes(key)).length + 2} 个字段)
+                                                  </summary>
                                                   <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', marginTop: '8px', maxHeight: '150px', overflow: 'auto' }}>
                                                     {JSON.stringify(outputData, null, 2)}
                                                   </pre>
@@ -1170,7 +1224,8 @@ const Todo: React.FC = () => {
                                 </div>
                               ) : (
                                 <Alert
-                                  message="该节点无输出数据"
+                                  message="⚠️ 该处理器节点无输出数据"
+                                  description="该处理器执行完成但未产生输出数据，这可能是正常的（如删除、清理类任务）"
                                   type="warning"
                                   showIcon={false}
                                   style={{ fontSize: '12px' }}
@@ -1241,6 +1296,140 @@ const Todo: React.FC = () => {
                     </>
                   )}
                   
+                  {/* 兼容旧的格式：支持context_data中的immediate_upstream_results */}
+                  {currentTask.context_data && currentTask.context_data.immediate_upstream_results && Object.keys(currentTask.context_data.immediate_upstream_results).length > 0 && (
+                    <Panel 
+                      header={
+                        <div>
+                          <Text strong>上游处理器执行结果 (兼容格式)</Text>
+                          <Tag color="blue" style={{ marginLeft: '8px' }}>
+                            {Object.keys(currentTask.context_data.immediate_upstream_results).length} 个处理器节点
+                          </Tag>
+                        </div>
+                      } 
+                      key="immediate_upstream_results"
+                    >
+                      {Object.entries(currentTask.context_data.immediate_upstream_results).map(([nodeName, nodeData]: [string, any], index: number) => (
+                        <Card 
+                          key={index} 
+                          size="small" 
+                          style={{ marginBottom: '12px', border: '1px solid #e6f7ff' }}
+                          title={
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Text strong style={{ color: '#1890ff' }}>
+                                  🔧 {nodeData.node_name || nodeName}
+                                </Text>
+                                <Tag color="green">已完成</Tag>
+                              </div>
+                            </div>
+                          }
+                        >
+                          {/* 显示处理器执行信息 */}
+                          <div style={{ marginBottom: '12px', padding: '8px', background: '#f9f9f9', borderRadius: '4px', fontSize: '12px' }}>
+                            <Text strong style={{ color: '#666' }}>节点执行信息：</Text>
+                            <div style={{ marginTop: '4px' }}>
+                              <div>📝 节点名称: {nodeData.node_name || nodeName}</div>
+                              <div>📊 执行状态: {nodeData.status || '已完成'}</div>
+                              {nodeData.node_instance_id && (
+                                <div>🆔 节点实例: {nodeData.node_instance_id}</div>
+                              )}
+                            </div>
+                          </div>
+                          
+                          {/* 显示输出结果 */}
+                          {nodeData.output_data && Object.keys(nodeData.output_data).length > 0 ? (
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                                <Text strong style={{ color: '#52c41a' }}>🎯 处理器执行结果:</Text>
+                                <Tag color="cyan">可用于下游任务</Tag>
+                              </div>
+                              <div style={{ marginTop: '8px' }}>
+                                {(() => {
+                                  const outputData = nodeData.output_data;
+                                  
+                                  // 检查是否有嵌套的output_data结构
+                                  if (outputData.output_data) {
+                                    return (
+                                      <div>
+                                        <Alert
+                                          message="✅ 处理器执行结果"
+                                          description={
+                                            <div>
+                                              <div style={{ marginBottom: '8px', fontWeight: 'bold', color: '#52c41a' }}>
+                                                {outputData.message || '任务完成'}
+                                              </div>
+                                              <div style={{ fontSize: '12px', color: '#666' }}>
+                                                任务类型: {outputData.task_type || 'unknown'}
+                                              </div>
+                                              <div style={{ fontSize: '12px', color: '#666' }}>
+                                                完成时间: {outputData.completed_at ? new Date(outputData.completed_at).toLocaleString() : '未知'}
+                                              </div>
+                                            </div>
+                                          }
+                                          type="success"
+                                          showIcon
+                                          style={{ marginBottom: '8px' }}
+                                        />
+                                        {/* 显示具体的输出数据 */}
+                                        {outputData.output_data && (
+                                          <div style={{ marginTop: '8px' }}>
+                                            <Text strong style={{ color: '#52c41a' }}>具体输出结果:</Text>
+                                            <div style={{ marginTop: '4px', padding: '8px', background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: '4px' }}>
+                                              {typeof outputData.output_data === 'object' ? (
+                                                Object.entries(outputData.output_data).map(([key, value]: [string, any]) => (
+                                                  <div key={key} style={{ marginBottom: '4px' }}>
+                                                    <Text strong>{key}: </Text>
+                                                    <Text>{String(value)}</Text>
+                                                  </div>
+                                                ))
+                                              ) : (
+                                                <Text>{String(outputData.output_data)}</Text>
+                                              )}
+                                            </div>
+                                          </div>
+                                        )}
+                                        <details style={{ marginTop: '8px' }}>
+                                          <summary style={{ cursor: 'pointer', color: '#1890ff', fontSize: '12px' }}>
+                                            🔍 查看完整数据结构
+                                          </summary>
+                                          <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', marginTop: '8px', maxHeight: '150px', overflow: 'auto', fontSize: '11px' }}>
+                                            {JSON.stringify(outputData, null, 2)}
+                                          </pre>
+                                        </details>
+                                      </div>
+                                    );
+                                  } else {
+                                    // 简单输出数据
+                                    return (
+                                      <Alert
+                                        message="📄 执行结果"
+                                        description={
+                                          <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', maxHeight: '150px', overflow: 'auto', fontSize: '11px', margin: 0, whiteSpace: 'pre-wrap' }}>
+                                            {JSON.stringify(outputData, null, 2)}
+                                          </pre>
+                                        }
+                                        type="info"
+                                        showIcon
+                                      />
+                                    );
+                                  }
+                                })()}
+                              </div>
+                            </div>
+                          ) : (
+                            <Alert
+                              message="⚠️ 该节点无输出数据"
+                              type="warning"
+                              showIcon={false}
+                              style={{ fontSize: '12px' }}
+                            />
+                          )}
+                        </Card>
+                      ))}
+                    </Panel>
+                  )}
+                  
                   {/* 兼容旧的input_data格式 */}
                   {currentTask.input_data && (
                     <>
@@ -1264,7 +1453,10 @@ const Todo: React.FC = () => {
                 </Collapse>
                 
                 {/* 无上下文数据提示 */}
-                {(!currentTask.context_data || Object.keys(currentTask.context_data).length === 0) &&
+                {(!currentTask.context_data || (
+                   Object.keys(currentTask.context_data).length === 0 || 
+                   (!currentTask.context_data.upstream_outputs && !currentTask.context_data.immediate_upstream_results)
+                 )) &&
                  (!currentTask.input_data || (
                    (!currentTask.input_data.immediate_upstream || Object.keys(currentTask.input_data.immediate_upstream).length === 0) &&
                    (!currentTask.input_data.workflow_global || Object.keys(currentTask.input_data.workflow_global).length === 0)
@@ -1440,8 +1632,12 @@ const Todo: React.FC = () => {
                 name="result"
                 label="任务结果"
                 rules={[{ required: true, message: '请输入任务结果' }]}
-                extra={currentTask?.input_data?.immediate_upstream || currentTask?.input_data?.workflow_global ? 
-                  '提示：您可以在上方的"任务详情"中查看上游上下文数据' : null
+                extra={
+                  (currentTask?.input_data?.immediate_upstream || 
+                   currentTask?.input_data?.workflow_global ||
+                   currentTask?.context_data?.immediate_upstream_results ||
+                   currentTask?.context_data?.upstream_outputs) ? 
+                    '提示：您可以在上方的"任务详情"中查看上游处理器执行结果和上下文数据' : null
                 }
               >
                 <TextArea rows={8} placeholder="请详细描述任务完成情况...
