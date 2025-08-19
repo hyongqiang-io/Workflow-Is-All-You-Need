@@ -1180,7 +1180,8 @@ class ExecutionEngine:
                 
                 # 检查这些节点的依赖是否已满足，如果满足则触发执行
                 logger.trace(f"检查pending节点的依赖关系")
-                await self._check_and_trigger_ready_nodes(workflow_instance_id, pending_nodes)
+                triggered_count = await self._check_and_trigger_ready_nodes(workflow_instance_id, pending_nodes)
+                logger.trace(f"触发了 {triggered_count} 个准备就绪的节点")
             else:
                 logger.trace(f"没有找到pending状态的节点，工作流可能已完成或出现异常")
                 
@@ -1190,8 +1191,9 @@ class ExecutionEngine:
             logger.error(f"异常堆栈: {traceback.format_exc()}")
     
     
-    async def _check_and_trigger_ready_nodes(self, workflow_instance_id: uuid.UUID, pending_nodes: List[Dict]):
-        """检查并触发准备好的节点"""
+    async def _check_and_trigger_ready_nodes(self, workflow_instance_id: uuid.UUID, pending_nodes: List[Dict]) -> int:
+        """检查并触发准备好的节点，返回触发的节点数量"""
+        triggered_count = 0
         try:
             logger.trace(f"检查 {len(pending_nodes)} 个pending节点的依赖关系")
             
@@ -1202,23 +1204,33 @@ class ExecutionEngine:
                 # 检查节点依赖是否满足
                 if await self._check_node_dependencies_satisfied(workflow_instance_id, node_instance_id):
                     logger.trace(f"✅ 节点 {node_name} 的依赖已满足，触发执行")
-                    await self._execute_node_when_ready(workflow_instance_id, node_instance_id)
+                    # 获取工作流上下文并执行节点
+                    from .workflow_execution_context import get_context_manager
+                    context_manager = get_context_manager()
+                    workflow_context = await context_manager.get_context(workflow_instance_id)
+                    if workflow_context:
+                        await self._execute_node_with_unified_context(workflow_context, workflow_instance_id, node_instance_id)
+                    triggered_count += 1
                 else:
                     logger.trace(f"⏳ 节点 {node_name} 的依赖尚未满足，等待中")
+            
+            return triggered_count
                     
         except Exception as e:
             logger.error(f"检查和触发准备好的节点失败: {e}")
             import traceback
             logger.error(f"异常堆栈: {traceback.format_exc()}")
+            return triggered_count
     
     # _collect_task_context_data 方法已被 WorkflowContextManager.get_task_context_data 替换
 
     async def _check_node_dependencies_satisfied(self, workflow_instance_id: uuid.UUID, node_instance_id: uuid.UUID) -> bool:
-        """检查节点的依赖是否已满足（修复版：严格检查依赖顺序）"""
+        """检查节点的依赖是否已满足（增强版：支持自动恢复）"""
         try:
-            # 🔍 首先检查工作流上下文是否存在
-            if workflow_instance_id not in self.context_manager.contexts:
-                logger.warning(f"⚠️ [依赖检查] 工作流上下文 {workflow_instance_id} 不存在，跳过节点 {node_instance_id}")
+            # 🔍 使用新的 get_context 方法，自动支持恢复
+            context = await self.context_manager.get_context(workflow_instance_id)
+            if not context:
+                logger.warning(f"⚠️ [依赖检查] 无法获取或恢复工作流上下文: {workflow_instance_id}")
                 return False
             
             # 🔍 严格检查节点状态 - 防止重复执行
@@ -1240,7 +1252,6 @@ class ExecutionEngine:
             deps = self.context_manager.get_node_dependency_info(node_instance_id)
             if not deps:
                 logger.warning(f"⚠️ [依赖检查] 节点 {node_instance_id} 在上下文管理器中没有依赖信息，尝试从数据库恢复")
-                
                 # 🔄 降级策略：从数据库重新构建依赖信息
                 try:
                     await self._rebuild_node_dependencies_from_db(workflow_instance_id, node_instance_id)
@@ -2958,9 +2969,9 @@ class ExecutionEngine:
             }
     
     async def _check_workflow_completion(self, workflow_instance_id: uuid.UUID):
-        """检查工作流是否可以完成"""
+        """检查工作流是否可以完成，并触发准备就绪的节点"""
         try:
-            logger.trace(f"🏁 检查工作流完成状态: {workflow_instance_id}")
+            logger.info(f"🔍 检查工作流完成状态和触发准备就绪节点: {workflow_instance_id}")
             
             # 查询所有节点实例的状态
             nodes_status_query = '''
@@ -2974,14 +2985,28 @@ class ExecutionEngine:
                 nodes_status_query, workflow_instance_id
             )
             
-            logger.trace(f"  工作流总节点数: {len(all_nodes)}")
+            logger.info(f"  📊 工作流总节点数: {len(all_nodes)}")
             
-            # 检查所有节点是否都已完成
+            # 检查各种状态的节点
             completed_nodes = [n for n in all_nodes if n['status'] == 'completed']
             failed_nodes = [n for n in all_nodes if n['status'] == 'failed']
+            pending_nodes = [n for n in all_nodes if n['status'] == 'pending']
+            running_nodes = [n for n in all_nodes if n['status'] == 'running']
             
-            logger.trace(f"  已完成节点: {len(completed_nodes)}")
-            logger.trace(f"  失败节点: {len(failed_nodes)}")
+            logger.info(f"  📊 节点状态分布: 完成 {len(completed_nodes)}, 失败 {len(failed_nodes)}, 等待 {len(pending_nodes)}, 运行中 {len(running_nodes)}")
+            
+            # 🔧 关键修复：检查并触发准备就绪的节点
+            if pending_nodes:
+                logger.info(f"🔄 检查 {len(pending_nodes)} 个等待节点是否准备就绪:")
+                for node in pending_nodes:
+                    logger.info(f"  - {node['name']} ({node['node_instance_id']}) 状态: {node['status']}")
+                
+                # 触发准备就绪的节点
+                triggered_count = await self._check_and_trigger_ready_nodes(workflow_instance_id, pending_nodes)
+                if triggered_count > 0:
+                    logger.info(f"✅ 成功触发了 {triggered_count} 个准备就绪的节点")
+                else:
+                    logger.info(f"ℹ️ 没有节点准备就绪，等待更多依赖完成")
             
             # 如果有失败节点，标记工作流为失败
             if failed_nodes:
@@ -2991,17 +3016,17 @@ class ExecutionEngine:
                     error_message=f"工作流包含 {len(failed_nodes)} 个失败节点"
                 )
                 await self.workflow_instance_repo.update_instance(workflow_instance_id, update_data)
-                logger.trace(f"❌ 工作流标记为失败")
+                logger.info(f"❌ 工作流标记为失败")
                 return
             
             # 如果所有节点都已完成，标记工作流为完成
-            if len(completed_nodes) == len(all_nodes):
+            if len(completed_nodes) == len(all_nodes) and len(all_nodes) > 0:
                 from ..models.instance import WorkflowInstanceUpdate, WorkflowInstanceStatus
                 update_data = WorkflowInstanceUpdate(status=WorkflowInstanceStatus.COMPLETED)
                 await self.workflow_instance_repo.update_instance(workflow_instance_id, update_data)
-                logger.trace(f"✅ 工作流标记为完成")
+                logger.info(f"✅ 工作流标记为完成")
             else:
-                logger.trace(f"⏳ 工作流仍在进行中: {len(completed_nodes)}/{len(all_nodes)} 节点完成")
+                logger.info(f"⏳ 工作流仍在进行中: {len(completed_nodes)}/{len(all_nodes)} 节点完成, {len(pending_nodes)} 节点等待, {len(running_nodes)} 节点运行中")
             
         except Exception as e:
             logger.error(f"❌ 检查工作流完成状态失败: {e}")

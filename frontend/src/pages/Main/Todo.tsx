@@ -148,14 +148,35 @@ const Todo: React.FC = () => {
     return canSubdivide;
   };
 
-  // 检查任务是否有细分结果可以编辑（模拟：任务类型为human，状态为in_progress，且包含细分标识）
+  // 检查任务是否有细分结果可以编辑（严格检查：基于context_data中的标记字段）
   const hasSubdivisionResult = (task: any) => {
-    // 这里是模拟逻辑，实际应该通过API检查任务是否有细分工作流且已完成
-    return task.task_type === 'human' && 
-           task.status?.toLowerCase() === 'in_progress' && 
-           ((task.result_summary || '').includes('细分') || 
-           (task.task_title || '').includes('细分') ||
-           (task.output_data || '').includes('细分工作流'));
+    // 只有当任务明确标记为有参考数据且未自动提交时，才显示编辑细分结果按钮
+    if (task.task_type !== 'human' || task.status?.toLowerCase() !== 'in_progress') {
+      return false;
+    }
+    
+    // 检查context_data中的具体标记字段
+    const contextData = task.context_data;
+    if (contextData) {
+      try {
+        let parsedContext;
+        if (typeof contextData === 'string') {
+          parsedContext = JSON.parse(contextData);
+        } else if (typeof contextData === 'object') {
+          parsedContext = contextData;
+        }
+        
+        // 只有当明确标记为参考数据且未自动提交时，才认为有细分结果
+        return parsedContext && 
+               parsedContext.is_reference_data === true && 
+               parsedContext.auto_submitted === false;
+      } catch (e) {
+        // 解析失败，返回false
+        return false;
+      }
+    }
+    
+    return false;
   };
 
   // 检查任务是否已进行拆解（有子工作流）

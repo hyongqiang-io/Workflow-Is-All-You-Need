@@ -349,15 +349,79 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                     result['quality_metrics'] = json.loads(result['quality_metrics'])
                 if result.get('data_lineage'):
                     result['data_lineage'] = json.loads(result['data_lineage'])
-                if result.get('output_summary'):
-                    result['output_summary'] = json.loads(result['output_summary'])
-                    
+                
                 formatted_results.append(result)
             
             return formatted_results
         except Exception as e:
-            logger.error(f"获取运行中实例列表失败: {e}")
-            raise
+            logger.error(f"获取运行中实例失败: {e}")
+            return []
+    
+    async def get_instances_by_status(self, statuses: List[str], limit: int = 100) -> List[Dict[str, Any]]:
+        """按状态获取工作流实例"""
+        try:
+            # 构建状态占位符
+            status_placeholders = ', '.join([f'${i+1}' for i in range(len(statuses))])
+            
+            query = f"""
+                SELECT wi.*, w.name as workflow_name, u.username as executor_name
+                FROM workflow_instance wi
+                LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
+                LEFT JOIN "user" u ON u.user_id = wi.executor_id
+                WHERE wi.status IN ({status_placeholders}) AND wi.is_deleted = FALSE
+                ORDER BY wi.created_at DESC
+                LIMIT ${len(statuses) + 1}
+            """
+            
+            # 添加limit参数
+            query_params = statuses + [limit]
+            results = await self.db.fetch_all(query, *query_params)
+            
+            # 解析JSON字段
+            formatted_results = []
+            for result in results:
+                result = dict(result)
+                result['input_data'] = json.loads(result.get('input_data', '{}'))
+                result['context_data'] = json.loads(result.get('context_data', '{}'))
+                if result.get('output_data'):
+                    result['output_data'] = json.loads(result['output_data'])
+                
+                formatted_results.append(result)
+            
+            return formatted_results
+        except Exception as e:
+            logger.error(f"按状态获取实例失败: {e}")
+            return []
+    
+    async def get_recent_instances(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """获取最近的工作流实例"""
+        try:
+            query = """
+                SELECT wi.*, w.name as workflow_name, u.username as executor_name
+                FROM workflow_instance wi
+                LEFT JOIN workflow w ON w.workflow_id = wi.workflow_id
+                LEFT JOIN "user" u ON u.user_id = wi.executor_id
+                WHERE wi.is_deleted = FALSE
+                ORDER BY wi.created_at DESC
+                LIMIT $1
+            """
+            results = await self.db.fetch_all(query, limit)
+            
+            # 解析JSON字段
+            formatted_results = []
+            for result in results:
+                result = dict(result)
+                result['input_data'] = json.loads(result.get('input_data', '{}'))
+                result['context_data'] = json.loads(result.get('context_data', '{}'))
+                if result.get('output_data'):
+                    result['output_data'] = json.loads(result['output_data'])
+                
+                formatted_results.append(result)
+            
+            return formatted_results
+        except Exception as e:
+            logger.error(f"获取最近实例失败: {e}")
+            return []
     
     async def delete_instance(self, instance_id: uuid.UUID, soft_delete: bool = True) -> bool:
         """删除工作流实例"""

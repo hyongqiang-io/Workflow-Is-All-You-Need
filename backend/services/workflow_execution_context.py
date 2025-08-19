@@ -133,6 +133,11 @@ class WorkflowExecutionContext:
     async def mark_node_executing(self, node_id: uuid.UUID, node_instance_id: uuid.UUID):
         """标记节点开始执行"""
         async with self._context_lock:
+            # 🔧 防护：确保关键集合字段是set类型
+            if not isinstance(self.execution_context.get('current_executing_nodes'), set):
+                logger.warning("🔧 修复current_executing_nodes类型从list到set")
+                self.execution_context['current_executing_nodes'] = set(self.execution_context.get('current_executing_nodes', []))
+            
             self.node_states[node_instance_id] = 'EXECUTING'
             # 🔧 修复：统一使用node_instance_id管理执行状态
             self.execution_context['current_executing_nodes'].add(node_instance_id)
@@ -142,6 +147,17 @@ class WorkflowExecutionContext:
     async def mark_node_completed(self, node_id: uuid.UUID, node_instance_id: uuid.UUID, output_data: Dict[str, Any]):
         """标记节点完成"""
         async with self._context_lock:
+            # 🔧 防护：确保关键集合字段是set类型（修复JSON恢复后的类型问题）
+            if not isinstance(self.execution_context.get('completed_nodes'), set):
+                logger.warning("🔧 修复completed_nodes类型从list到set")
+                self.execution_context['completed_nodes'] = set(self.execution_context.get('completed_nodes', []))
+            if not isinstance(self.execution_context.get('current_executing_nodes'), set):
+                logger.warning("🔧 修复current_executing_nodes类型从list到set")
+                self.execution_context['current_executing_nodes'] = set(self.execution_context.get('current_executing_nodes', []))
+            if not isinstance(self.execution_context.get('failed_nodes'), set):
+                logger.warning("🔧 修复failed_nodes类型从list到set")
+                self.execution_context['failed_nodes'] = set(self.execution_context.get('failed_nodes', []))
+            
             # 防重复处理 - 检查内存状态
             # 🔧 修复：使用node_instance_id检查完成状态，因为我们管理的是实例状态
             if node_instance_id in self.execution_context['completed_nodes']:
@@ -198,6 +214,14 @@ class WorkflowExecutionContext:
     async def mark_node_failed(self, node_id: uuid.UUID, node_instance_id: uuid.UUID, error_info: Dict[str, Any]):
         """标记节点失败"""
         async with self._context_lock:
+            # 🔧 防护：确保关键集合字段是set类型
+            if not isinstance(self.execution_context.get('failed_nodes'), set):
+                logger.warning("🔧 修复failed_nodes类型从list到set")
+                self.execution_context['failed_nodes'] = set(self.execution_context.get('failed_nodes', []))
+            if not isinstance(self.execution_context.get('current_executing_nodes'), set):
+                logger.warning("🔧 修复current_executing_nodes类型从list到set")
+                self.execution_context['current_executing_nodes'] = set(self.execution_context.get('current_executing_nodes', []))
+            
             self.node_states[node_instance_id] = 'FAILED'
             # 🔧 修复：统一使用node_instance_id管理失败状态，保持一致性
             self.execution_context['failed_nodes'].add(node_instance_id)
@@ -627,16 +651,26 @@ class WorkflowExecutionContextManager:
     
     管理多个工作流实例的上下文管理器
     一个工作流实例对应一个WorkflowExecutionContext
+    支持持久化和自动恢复
     """
     
     def __init__(self):
         self.contexts: Dict[uuid.UUID, WorkflowExecutionContext] = {}
         self._contexts_lock = asyncio.Lock()
+        self._persistence_enabled = True
+        self._auto_recovery_enabled = True
     
     
     async def get_context(self, workflow_instance_id: uuid.UUID) -> Optional[WorkflowExecutionContext]:
-        """获取工作流执行上下文"""
-        return self.contexts.get(workflow_instance_id)
+        """获取工作流执行上下文（支持自动恢复）"""
+        context = self.contexts.get(workflow_instance_id)
+        
+        # 如果上下文不存在且启用了自动恢复，尝试从数据库恢复
+        if context is None and self._auto_recovery_enabled:
+            logger.info(f"🔧 上下文不存在，尝试从数据库自动恢复: {workflow_instance_id}")
+            context = await self._restore_context_from_database(workflow_instance_id)
+            
+        return context
     
     async def remove_context(self, workflow_instance_id: uuid.UUID):
         """移除工作流执行上下文"""
@@ -771,6 +805,190 @@ class WorkflowExecutionContextManager:
         """确保上下文生命周期一致性"""
         # 确保工作流上下文存在
         await self.get_or_create_context(workflow_instance_id)
+    
+    async def _restore_context_from_database(self, workflow_instance_id: uuid.UUID) -> Optional[WorkflowExecutionContext]:
+        """从数据库恢复工作流上下文（核心恢复逻辑）"""
+        try:
+            logger.info(f"🔄 开始从数据库恢复工作流上下文: {workflow_instance_id}")
+            
+            # 1. 检查工作流实例是否存在
+            from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+            workflow_repo = WorkflowInstanceRepository()
+            workflow = await workflow_repo.get_instance_by_id(workflow_instance_id)
+            
+            if not workflow:
+                logger.warning(f"❌ 工作流实例不存在，无法恢复上下文: {workflow_instance_id}")
+                return None
+            
+            # 2. 创建新的上下文实例
+            async with self._contexts_lock:
+                context = WorkflowExecutionContext(workflow_instance_id)
+                await context.initialize_context()
+                self.contexts[workflow_instance_id] = context
+                logger.info(f"✅ 创建空白上下文成功: {workflow_instance_id}")
+            
+            # 3. 恢复节点实例状态
+            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            node_repo = NodeInstanceRepository()
+            nodes = await node_repo.get_instances_by_workflow_instance(workflow_instance_id)
+            
+            logger.info(f"📋 发现 {len(nodes)} 个节点实例，开始恢复状态...")
+            
+            completed_count = 0
+            for node in nodes:
+                node_instance_id = node['node_instance_id']
+                node_id = node['node_id'] 
+                node_name = node.get('node_instance_name', '未知')
+                status = node.get('status', 'pending')
+                
+                # 恢复节点状态到内存
+                context.node_states[node_instance_id] = status
+                
+                # 如果节点已完成，恢复其输出数据
+                if status == 'completed':
+                    output_data = {
+                        'status': 'completed',
+                        'node_name': node_name,
+                        'completed_at': str(node.get('completed_at', '')),
+                        'output_data': node.get('output_data', {})
+                    }
+                    
+                    # 标记节点完成
+                    await context.mark_node_completed(node_id, node_instance_id, output_data)
+                    completed_count += 1
+                    logger.debug(f"✅ 恢复已完成节点: {node_name}")
+                
+                elif status == 'running':
+                    # 标记节点正在执行
+                    await context.mark_node_executing(node_id, node_instance_id)
+                    logger.debug(f"🔄 恢复执行中节点: {node_name}")
+            
+            logger.info(f"🎯 上下文恢复完成: {completed_count} 个已完成节点已恢复")
+            
+            # 4. 持久化上下文状态
+            if self._persistence_enabled:
+                await self._persist_context_snapshot(workflow_instance_id, context)
+            
+            return context
+            
+        except Exception as e:
+            logger.error(f"❌ 从数据库恢复上下文失败: {workflow_instance_id}, 错误: {e}")
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
+            return None
+    
+    async def _persist_context_snapshot(self, workflow_instance_id: uuid.UUID, context: WorkflowExecutionContext):
+        """持久化上下文快照到数据库"""
+        try:
+            if not self._persistence_enabled:
+                return
+                
+            logger.debug(f"💾 持久化上下文快照: {workflow_instance_id}")
+            
+            # 构造快照数据
+            snapshot_data = {
+                'workflow_instance_id': str(workflow_instance_id),
+                'execution_context': _serialize_for_json(context.execution_context),
+                'node_states': {str(k): v for k, v in context.node_states.items()},
+                'completed_nodes_count': len(context.execution_context.get('completed_nodes', set())),
+                'snapshot_time': datetime.utcnow().isoformat(),
+                'context_version': '2.0'  # 版本标识
+            }
+            
+            # 这里可以存储到Redis或数据库表中
+            # 暂时使用日志记录（生产环境中可替换为实际存储）
+            logger.debug(f"📊 上下文快照数据: {len(str(snapshot_data))} 字符")
+            
+        except Exception as e:
+            logger.error(f"持久化上下文快照失败: {e}")
+    
+    async def create_context_snapshot(self, workflow_instance_id: uuid.UUID) -> Optional[Dict[str, Any]]:
+        """创建上下文快照（用于细分工作流隔离）"""
+        context = await self.get_context(workflow_instance_id)
+        if not context:
+            return None
+            
+        return {
+            'workflow_instance_id': str(workflow_instance_id),
+            'execution_context': _serialize_for_json(context.execution_context),
+            'node_states': {str(k): v for k, v in context.node_states.items()},
+            'node_dependencies': {str(k): v for k, v in context.node_dependencies.items()},
+            'snapshot_time': datetime.utcnow().isoformat()
+        }
+    
+    async def restore_from_snapshot(self, workflow_instance_id: uuid.UUID, snapshot: Dict[str, Any]):
+        """从快照恢复上下文（用于细分工作流隔离）"""
+        try:
+            logger.info(f"🔄 从快照恢复上下文: {workflow_instance_id}")
+            
+            async with self._contexts_lock:
+                if workflow_instance_id not in self.contexts:
+                    context = WorkflowExecutionContext(workflow_instance_id)
+                    self.contexts[workflow_instance_id] = context
+                else:
+                    context = self.contexts[workflow_instance_id]
+                
+                # 恢复执行上下文，确保集合类型字段正确恢复
+                execution_context = snapshot.get('execution_context', {})
+                context.execution_context.update(execution_context)
+                
+                # 修复：确保关键的集合字段被正确恢复为set类型（JSON序列化会将set转为list）
+                if 'completed_nodes' in execution_context:
+                    context.execution_context['completed_nodes'] = set(execution_context['completed_nodes'])
+                if 'current_executing_nodes' in execution_context:
+                    context.execution_context['current_executing_nodes'] = set(execution_context['current_executing_nodes'])
+                if 'failed_nodes' in execution_context:
+                    context.execution_context['failed_nodes'] = set(execution_context['failed_nodes'])
+                
+                # 恢复节点状态
+                node_states = snapshot.get('node_states', {})
+                for node_id_str, state in node_states.items():
+                    context.node_states[uuid.UUID(node_id_str)] = state
+                
+                logger.info(f"✅ 从快照恢复上下文成功: {workflow_instance_id}")
+                
+        except Exception as e:
+            logger.error(f"❌ 从快照恢复上下文失败: {e}")
+    
+    async def check_context_health(self, workflow_instance_id: uuid.UUID) -> Dict[str, Any]:
+        """检查上下文健康状态"""
+        try:
+            context = self.contexts.get(workflow_instance_id)
+            
+            if not context:
+                return {
+                    'healthy': False,
+                    'status': 'context_missing',
+                    'message': '上下文不存在于内存中',
+                    'auto_recovery_available': self._auto_recovery_enabled
+                }
+            
+            # 检查内存状态与数据库状态一致性
+            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            node_repo = NodeInstanceRepository()
+            db_nodes = await node_repo.get_instances_by_workflow_instance(workflow_instance_id)
+            
+            db_completed_count = sum(1 for node in db_nodes if node.get('status') == 'completed')
+            memory_completed_count = len(context.execution_context.get('completed_nodes', set()))
+            
+            consistent = db_completed_count == memory_completed_count
+            
+            return {
+                'healthy': consistent,
+                'status': 'consistent' if consistent else 'inconsistent',
+                'memory_completed_nodes': memory_completed_count,
+                'db_completed_nodes': db_completed_count,
+                'total_nodes': len(db_nodes),
+                'context_size': len(context.node_dependencies),
+                'last_activity': context.execution_context.get('last_snapshot_time')
+            }
+            
+        except Exception as e:
+            return {
+                'healthy': False,
+                'status': 'check_failed',
+                'error': str(e)
+            }
 
 
 # 全局上下文管理器实例

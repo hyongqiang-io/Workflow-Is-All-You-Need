@@ -481,7 +481,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                                                 TaskInstanceStatus.PENDING.value,
                                                 TaskInstanceStatus.ASSIGNED.value, limit)
                                                 
-            logger.info(f"   - 查询结果: 找到 {len(results)} 个任务")
+            # logger.info(f"   - 查询结果: 找到 {len(results)} 个任务")
             
             # 解析JSON字段
             formatted_results = []
@@ -493,13 +493,13 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 assigned_agent_id = result.get('assigned_agent_id', 'none')
                 processor_id = result.get('processor_id', 'none')
                 
-                logger.info(f"   - 任务{i+1}: {task_title} (ID: {task_id})")
-                logger.info(f"     状态: {task_status}, Agent: {assigned_agent_id}, Processor: {processor_id}")
+                # logger.info(f"   - 任务{i+1}: {task_title} (ID: {task_id})")
+                # logger.info(f"     状态: {task_status}, Agent: {assigned_agent_id}, Processor: {processor_id}")
                 
                 # input_data和output_data现在是文本格式，不需要JSON解析
                 formatted_results.append(result)
             
-            logger.info(f"[OK] [TASK-REPO] Agent任务查找完成，返回 {len(formatted_results)} 个任务")
+            # logger.info(f"[OK] [TASK-REPO] Agent任务查找完成，返回 {len(formatted_results)} 个任务")
             return formatted_results
         except Exception as e:
             logger.error(f"[ERROR] [TASK-REPO] 获取Agent待处理任务失败: {e}")

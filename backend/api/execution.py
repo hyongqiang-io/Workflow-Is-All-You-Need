@@ -1320,12 +1320,54 @@ async def delete_task(
                 detail="任务不存在"
             )
         
-        # 2. 检查权限：只有任务分配者可以删除
-        if task.get('assigned_user_id') != current_user.user_id:
+        # 2. 检查权限：允许以下用户删除任务
+        # - 被分配的用户
+        # - 管理员用户
+        # - 任务所属工作流的创建者
+        has_permission = False
+        permission_reason = ""
+        
+        # 检查是否是被分配的用户 - 修复UUID类型匹配问题
+        assigned_user_id = task.get('assigned_user_id')
+        current_user_id = current_user.user_id
+        
+        logger.debug(f"🔍 权限检查调试信息:")
+        logger.debug(f"   任务分配用户ID: {assigned_user_id} (类型: {type(assigned_user_id)})")
+        logger.debug(f"   当前用户ID: {current_user_id} (类型: {type(current_user_id)})")
+        
+        # 统一转换为字符串进行比较
+        if assigned_user_id and str(assigned_user_id) == str(current_user_id):
+            has_permission = True
+            permission_reason = "任务分配者"
+        
+        # 检查是否是管理员（用户名为admin或具有管理员角色）
+        elif current_user.username.lower() == 'admin' or getattr(current_user, 'is_admin', False):
+            has_permission = True
+            permission_reason = "管理员权限"
+        
+        # 检查是否是工作流创建者
+        else:
+            # 获取工作流实例信息
+            from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+            workflow_repo = WorkflowInstanceRepository()
+            workflow_instance = await workflow_repo.get_instance_by_id(task.get('workflow_instance_id'))
+            if workflow_instance:
+                created_by = workflow_instance.get('created_by')
+                logger.debug(f"   工作流创建者: {created_by} (类型: {type(created_by)})")
+                if created_by and str(created_by) == str(current_user_id):
+                    has_permission = True
+                    permission_reason = "工作流创建者"
+        
+        if not has_permission:
+            logger.warning(f"❌ 用户 {current_user.username} 无权删除任务 {task_id}")
+            logger.warning(f"   - 任务分配给: {assigned_user_id}")
+            logger.warning(f"   - 当前用户: {current_user_id}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="无权删除此任务"
             )
+        
+        logger.info(f"✅ 用户 {current_user.username} 具有删除权限 ({permission_reason})")
         
         # 3. 检查任务状态：只允许删除已完成或已取消的任务
         task_status = task.get('status', '').lower()

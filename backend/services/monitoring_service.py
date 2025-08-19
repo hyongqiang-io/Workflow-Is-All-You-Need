@@ -763,6 +763,8 @@ class MonitoringService:
     async def _collect_workflow_results(self, workflow_instance_id: uuid.UUID) -> Dict[str, Any]:
         """收集工作流执行结果"""
         try:
+            logger.info(f"🔍 收集工作流执行结果: {workflow_instance_id}")
+            
             # 获取工作流实例信息
             workflow_instance = await self.workflow_instance_repo.get_workflow_instance_by_id(workflow_instance_id)
             
@@ -774,9 +776,10 @@ class MonitoringService:
             completed_tasks = len([t for t in tasks if t.get('status') == 'completed'])
             failed_tasks = len([t for t in tasks if t.get('status') == 'failed'])
             
+            logger.info(f"📊 任务统计: 总计 {total_tasks}, 完成 {completed_tasks}, 失败 {failed_tasks}")
+            
             # 收集任务结果
             task_results = []
-            final_outputs = []
             
             for task in tasks:
                 task_result = {
@@ -787,10 +790,57 @@ class MonitoringService:
                     'result_summary': task.get('result_summary', '')
                 }
                 task_results.append(task_result)
+            
+            # 🔧 新增：查找结束节点的输出数据，获取完整的工作流上下文
+            end_node_output = None
+            end_nodes_query = """
+            SELECT ni.output_data, n.name as node_name, ni.node_instance_id
+            FROM node_instance ni
+            JOIN node n ON ni.node_id = n.node_id
+            WHERE ni.workflow_instance_id = %s 
+            AND n.type = 'end'
+            AND ni.status = 'completed'
+            ORDER BY ni.updated_at DESC
+            LIMIT 1
+            """
+            
+            try:
+                end_node = await self.workflow_instance_repo.db.fetch_one(end_nodes_query, workflow_instance_id)
+                if end_node and end_node['output_data']:
+                    end_node_output = end_node['output_data']
+                    logger.info(f"✅ 找到结束节点输出: {end_node['node_name']}, 数据长度: {len(str(end_node_output))} 字符")
+                else:
+                    logger.warning(f"⚠️ 未找到结束节点输出数据")
+            except Exception as end_node_e:
+                logger.error(f"❌ 查询结束节点失败: {end_node_e}")
+            
+            # 🔧 确定最终输出：优先使用结束节点输出，否则使用任务输出拼接
+            final_output = ""
+            if end_node_output:
+                # 如果结束节点有输出，使用结束节点的完整上下文
+                if isinstance(end_node_output, dict):
+                    # 如果是字典，尝试获取完整上下文或格式化输出
+                    if 'full_context' in end_node_output:
+                        final_output = str(end_node_output['full_context'])
+                    elif 'context_data' in end_node_output:
+                        final_output = str(end_node_output['context_data'])
+                    else:
+                        # 格式化字典输出
+                        final_output = self._format_dict_output(end_node_output)
+                else:
+                    # 如果是字符串，直接使用
+                    final_output = str(end_node_output)
                 
-                # 收集输出数据
-                if task.get('output_data'):
-                    final_outputs.append(task.get('output_data'))
+                logger.info(f"📋 使用结束节点输出作为最终结果，长度: {len(final_output)} 字符")
+            else:
+                # 回退到原来的逻辑：收集所有完成任务的输出
+                final_outputs = []
+                for task in tasks:
+                    if task.get('status') == 'completed' and task.get('output_data'):
+                        final_outputs.append(str(task.get('output_data')))
+                
+                final_output = '\n\n=== 任务输出分隔 ===\n\n'.join(final_outputs) if final_outputs else ''
+                logger.info(f"📋 使用任务输出拼接作为最终结果，长度: {len(final_output)} 字符")
             
             # 构建结果对象
             results = {
@@ -800,17 +850,53 @@ class MonitoringService:
                 'completed_tasks': completed_tasks,
                 'failed_tasks': failed_tasks,
                 'task_results': task_results,
-                'final_output': '\n\n'.join(final_outputs) if final_outputs else '',
+                'final_output': final_output,
+                'has_end_node_output': end_node_output is not None,
                 'execution_duration': self._calculate_execution_duration(workflow_instance),
                 'started_at': workflow_instance.get('created_at'),
                 'completed_at': workflow_instance.get('updated_at')
             }
             
+            logger.info(f"✅ 工作流结果收集完成，最终输出长度: {len(final_output)} 字符")
             return results
             
         except Exception as e:
             logger.error(f"收集工作流执行结果失败: {e}")
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
             return {}
+    
+    def _format_dict_output(self, data: dict) -> str:
+        """格式化字典输出为可读文本"""
+        try:
+            if not data:
+                return "无输出数据"
+            
+            # 尝试格式化为可读文本
+            output_parts = []
+            
+            for key, value in data.items():
+                if key.startswith('_'):  # 跳过私有字段
+                    continue
+                
+                if isinstance(value, dict):
+                    output_parts.append(f"**{key}:**")
+                    for sub_key, sub_value in value.items():
+                        output_parts.append(f"  • {sub_key}: {str(sub_value)}")
+                elif isinstance(value, list):
+                    output_parts.append(f"**{key}:** ({len(value)} 项)")
+                    for i, item in enumerate(value[:5]):  # 只显示前5项
+                        output_parts.append(f"  {i+1}. {str(item)}")
+                    if len(value) > 5:
+                        output_parts.append(f"  ... 还有 {len(value) - 5} 项")
+                else:
+                    output_parts.append(f"**{key}:** {str(value)}")
+            
+            return "\n".join(output_parts)
+            
+        except Exception as e:
+            logger.error(f"格式化字典输出失败: {e}")
+            return str(data)
     
     def _calculate_execution_duration(self, workflow_instance: Dict[str, Any]) -> str:
         """计算执行时长"""

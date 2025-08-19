@@ -431,6 +431,26 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
             logger.error(f"获取工作流实例执行路径失败: {e}")
             raise
     
+    async def get_recent_instances(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """获取最近的节点实例"""
+        try:
+            query = """
+                SELECT ni.*,
+                       n.name as node_name,
+                       n.type as node_type,
+                       wi.workflow_instance_name
+                FROM node_instance ni
+                JOIN node n ON n.node_id = ni.node_id
+                JOIN workflow_instance wi ON wi.workflow_instance_id = ni.workflow_instance_id
+                WHERE ni.is_deleted = FALSE
+                ORDER BY ni.created_at DESC
+                LIMIT $1
+            """
+            return await self.db.fetch_all(query, limit)
+        except Exception as e:
+            logger.error(f"获取最近节点实例失败: {e}")
+            return []
+    
     async def get_failed_instances_with_retries(self, max_retry_count: int = 3) -> List[Dict[str, Any]]:
         """获取失败但可重试的节点实例"""
         try:

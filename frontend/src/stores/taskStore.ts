@@ -303,7 +303,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       const token = localStorage.getItem('token');
       console.log('🔐 获取到token:', token ? '有token' : '无token');
       
-      const url = `/api/execution/tasks/${taskId}`;
+      const url = `http://localhost:8001/api/execution/tasks/${taskId}`;
       console.log('📡 准备发送DELETE请求到:', url);
       
       const response = await fetch(url, {

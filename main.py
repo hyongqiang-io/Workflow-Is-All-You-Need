@@ -26,6 +26,7 @@ from backend.api.mcp_user_tools import router as mcp_user_tools_router
 from backend.api.agent_tools import router as agent_tools_router
 from backend.api.ai_workflow import router as ai_workflow_router
 from backend.api.task_subdivision import router as task_subdivision_router
+from backend.api.context_health import router as context_health_router
 from backend.utils.database import initialize_database, close_database
 from backend.utils.exceptions import BusinessException, ErrorResponse
 from backend.services.execution_service import execution_engine
@@ -86,6 +87,66 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+async def startup_context_health_check():
+    """启动时的上下文健康检查和预热"""
+    try:
+        logger.info("🔍 执行启动时上下文健康检查...")
+        
+        from backend.services.workflow_execution_context import get_context_manager
+        from backend.repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+        
+        context_manager = get_context_manager()
+        workflow_repo = WorkflowInstanceRepository()
+        
+        # 获取正在运行和等待中的工作流实例
+        running_workflows = await workflow_repo.get_instances_by_status(['running', 'pending'])
+        
+        if running_workflows:
+            logger.info(f"🔄 发现 {len(running_workflows)} 个活动工作流，进行上下文预热...")
+            
+            recovered_count = 0
+            failed_count = 0
+            
+            for workflow in running_workflows:
+                workflow_instance_id = workflow['workflow_instance_id']
+                workflow_name = workflow.get('workflow_instance_name', '未知')
+                
+                try:
+                    # 检查上下文健康状态
+                    health_status = await context_manager.check_context_health(workflow_instance_id)
+                    
+                    if not health_status['healthy']:
+                        logger.info(f"🔧 恢复工作流上下文: {workflow_name} ({workflow_instance_id})")
+                        # 触发自动恢复
+                        context = await context_manager._restore_context_from_database(workflow_instance_id)
+                        if context:
+                            recovered_count += 1
+                            logger.debug(f"✅ 工作流上下文恢复成功: {workflow_name}")
+                        else:
+                            failed_count += 1
+                            logger.warning(f"❌ 工作流上下文恢复失败: {workflow_name}")
+                    else:
+                        logger.debug(f"✅ 工作流上下文健康: {workflow_name}")
+                        
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(f"❌ 检查工作流上下文失败: {workflow_name} - {e}")
+            
+            logger.info(f"📊 上下文预热完成: 恢复 {recovered_count} 个，失败 {failed_count} 个")
+        else:
+            logger.info("📋 没有发现活动工作流，跳过上下文预热")
+        
+        # 输出上下文管理器配置
+        logger.info("⚙️ 上下文管理器配置:")
+        logger.info(f"   - 自动恢复: {'启用' if context_manager._auto_recovery_enabled else '禁用'}")
+        logger.info(f"   - 持久化: {'启用' if context_manager._persistence_enabled else '禁用'}")
+        logger.info(f"   - 当前上下文数: {len(context_manager.contexts)}")
+        
+    except Exception as e:
+        logger.error(f"启动时上下文健康检查失败: {e}")
+        # 不抛出异常，避免阻止应用启动
 
 
 @app.exception_handler(RequestValidationError)
@@ -217,6 +278,10 @@ async def startup_event():
         await monitoring_service.start_monitoring()
         logger.trace("监控服务启动成功")
         
+        # 🔧 启动上下文健康检查服务
+        await startup_context_health_check()
+        logger.trace("上下文健康检查完成")
+        
         logger.trace("工作流管理框架启动完成")
         
     except Exception as e:
@@ -298,6 +363,11 @@ logger.trace("AI工作流生成路由注册完成")
 logger.trace("注册任务细分路由...")
 app.include_router(task_subdivision_router, prefix="/api", tags=["任务细分"])
 logger.trace("任务细分路由注册完成")
+
+# 注册上下文健康监控路由
+logger.trace("注册上下文健康监控路由...")
+app.include_router(context_health_router, tags=["上下文健康监控"])
+logger.trace("上下文健康监控路由注册完成")
 
 logger.trace("所有路由注册完成")
 

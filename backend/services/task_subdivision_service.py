@@ -115,23 +115,23 @@ class TaskSubdivisionService:
                 raise ValidationError("原始任务不存在")
             
             # 调试信息：输出任务分配和当前用户信息
-            logger.info(f"🔍 任务权限验证调试:")
-            logger.info(f"   - 任务ID: {subdivision_data.original_task_id}")
-            logger.info(f"   - 任务分配用户ID: {original_task.get('assigned_user_id')}")
-            logger.info(f"   - 当前用户ID: {subdivision_data.subdivider_id}")
-            logger.info(f"   - 任务状态: {original_task.get('status')}")
-            logger.info(f"   - 任务标题: {original_task.get('task_title')}")
+            # logger.info(f"🔍 任务权限验证调试:")
+            # logger.info(f"   - 任务ID: {subdivision_data.original_task_id}")
+            # logger.info(f"   - 任务分配用户ID: {original_task.get('assigned_user_id')}")
+            # logger.info(f"   - 当前用户ID: {subdivision_data.subdivider_id}")
+            # logger.info(f"   - 任务状态: {original_task.get('status')}")
+            # logger.info(f"   - 任务标题: {original_task.get('task_title')}")
             
             # 添加类型调试信息
             assigned_user_id = original_task.get('assigned_user_id')
             current_user_id = subdivision_data.subdivider_id
             logger.info(f"🔬 类型调试:")
-            logger.info(f"   - 任务分配用户ID类型: {type(assigned_user_id)}")
-            logger.info(f"   - 当前用户ID类型: {type(current_user_id)}")
-            logger.info(f"   - 任务分配用户ID值: {repr(assigned_user_id)}")
-            logger.info(f"   - 当前用户ID值: {repr(current_user_id)}")
-            logger.info(f"   - 相等比较: {assigned_user_id == current_user_id}")
-            logger.info(f"   - 字符串比较: {str(assigned_user_id) == str(current_user_id)}")
+            # logger.info(f"   - 任务分配用户ID类型: {type(assigned_user_id)}")
+            # logger.info(f"   - 当前用户ID类型: {type(current_user_id)}")
+            # logger.info(f"   - 任务分配用户ID值: {repr(assigned_user_id)}")
+            # logger.info(f"   - 当前用户ID值: {repr(current_user_id)}")
+            # logger.info(f"   - 相等比较: {assigned_user_id == current_user_id}")
+            # logger.info(f"   - 字符串比较: {str(assigned_user_id) == str(current_user_id)}")
             
             # 修复类型不匹配问题：将两个值都转换为字符串进行比较
             if str(original_task.get('assigned_user_id')) != str(subdivision_data.subdivider_id):
@@ -272,11 +272,44 @@ class TaskSubdivisionService:
                 }
             )
             
-            # 执行工作流
-            result = await execution_engine.execute_workflow(execute_request, executor_id)
+            # 🛡️ 保护父工作流上下文：创建快照
+            # 获取细分记录以获得原始任务ID
+            subdivision_record = await self.subdivision_repo.get_subdivision_by_id(subdivision_id)
+            if subdivision_record:
+                original_task_id = subdivision_record['original_task_id']
+                parent_workflow_id = await self._get_parent_workflow_id(original_task_id)
+            else:
+                parent_workflow_id = None
+                logger.warning(f"⚠️ 无法获取细分记录: {subdivision_id}")
+            parent_context_snapshot = None
             
-            logger.info(f"🔍 执行引擎返回结果: {result}")
-            logger.info(f"🔍 结果类型: {type(result)}")
+            if parent_workflow_id:
+                from .workflow_execution_context import get_context_manager
+                context_manager = get_context_manager()
+                parent_context_snapshot = await context_manager.create_context_snapshot(parent_workflow_id)
+                logger.info(f"🔒 已创建父工作流上下文快照: {parent_workflow_id}")
+            
+            try:
+                # 执行工作流
+                result = await execution_engine.execute_workflow(execute_request, executor_id)
+                
+                logger.info(f"🔍 执行引擎返回结果: {result}")
+                logger.info(f"🔍 结果类型: {type(result)}")
+            finally:
+                # 🔄 恢复父工作流上下文（无论子工作流是否成功）
+                if parent_workflow_id and parent_context_snapshot:
+                    try:
+                        await context_manager.restore_from_snapshot(parent_workflow_id, parent_context_snapshot)
+                        logger.info(f"✅ 已恢复父工作流上下文: {parent_workflow_id}")
+                    except Exception as restore_error:
+                        logger.error(f"❌ 恢复父工作流上下文失败: {restore_error}")
+                        # 尝试从数据库恢复
+                        try:
+                            await context_manager._restore_context_from_database(parent_workflow_id)
+                            logger.info(f"🔧 从数据库恢复父工作流上下文成功: {parent_workflow_id}")
+                        except Exception as db_restore_error:
+                            logger.error(f"❌ 从数据库恢复父工作流上下文也失败: {db_restore_error}")
+            
             
             # 处理不同的返回格式
             instance_id = None
@@ -366,8 +399,8 @@ class TaskSubdivisionService:
             if final_status == 'completed':
                 await self._update_subdivision_status(subdivision_id, 'completed', results)
                 
-                # 自动提交结果给原始任务
-                await self._submit_results_to_parent_task(
+                # 🔧 修改：仅保存结果供用户参考，不自动提交任务
+                await self._save_subdivision_results_for_reference(
                     original_task_id, subdivision_id, results, executor_id
                 )
             elif final_status in ['failed', 'timeout']:
@@ -427,13 +460,13 @@ class TaskSubdivisionService:
         else:
             return obj
     
-    async def _submit_results_to_parent_task(self, original_task_id: uuid.UUID,
-                                           subdivision_id: uuid.UUID,
-                                           results: dict,
-                                           executor_id: uuid.UUID):
-        """将细分工作流结果提交给原始任务"""
+    async def _save_subdivision_results_for_reference(self, original_task_id: uuid.UUID,
+                                                     subdivision_id: uuid.UUID,
+                                                     results: dict,
+                                                     executor_id: uuid.UUID):
+        """保存细分工作流结果作为用户参考，不自动提交任务"""
         try:
-            logger.info(f"📤 提交细分结果给原始任务: {original_task_id}")
+            logger.info(f"💾 保存细分结果供用户参考: {original_task_id}")
             
             # 清理results中的datetime对象，确保可以JSON序列化
             clean_results = self._serialize_for_json(results)
@@ -443,40 +476,168 @@ class TaskSubdivisionService:
                 'subdivision_id': str(subdivision_id),
                 'execution_results': clean_results,
                 'completion_time': now_utc().isoformat(),
-                'executed_by': str(executor_id)
+                'executed_by': str(executor_id),
+                'is_reference_data': True,  # 标记为参考数据
+                'auto_submitted': False     # 未自动提交
             }
             
-            # 格式化为文本形式的任务输出
-            output_text = self._format_subdivision_output(clean_results)
+            # 格式化为可读文本
+            formatted_output = self._format_subdivision_output(clean_results)
             
-            # 导入任务仓库来更新任务
+            # 导入任务仓库来更新任务上下文
             from ..repositories.instance.task_instance_repository import TaskInstanceRepository
-            from ..models.instance import TaskInstanceUpdate, TaskInstanceStatus
+            from ..models.instance import TaskInstanceUpdate
             
             task_repo = TaskInstanceRepository()
             
-            # 创建任务更新数据
+            # 仅更新context_data和instructions，不改变任务状态
             task_update = TaskInstanceUpdate(
-                status=TaskInstanceStatus.COMPLETED,
-                output_data=output_text,
-                result_summary=f"通过细分工作流完成 (细分ID: {str(subdivision_id)[:8]})",
-                context_data=json.dumps(result_data, ensure_ascii=False, indent=2)
+                context_data=json.dumps(result_data, ensure_ascii=False, indent=2),
+                instructions=f"细分工作流已完成，结果可作为提交参考。\n\n【参考结果】:\n{formatted_output}"
             )
             
-            # 更新原始任务
+            # 更新任务上下文（不改变状态）
             updated_task = await task_repo.update_task(original_task_id, task_update)
             
             if updated_task:
-                logger.info(f"✅ 原始任务更新成功: {original_task_id}")
-                logger.info(f"   - 任务状态: {updated_task.get('status')}")
-                logger.info(f"   - 输出数据长度: {len(output_text)} 字符")
+                logger.info(f"✅ 细分结果已保存供用户参考: {original_task_id}")
+                logger.info(f"   - 任务状态: {updated_task.get('status')} (保持不变)")
+                logger.info(f"   - 用户可在任务详情中查看细分结果并手动提交")
+                
+                # 🔧 重要修复：细分工作流完成后应该更新父节点实例状态
+                # 即使任务状态保持不变（供用户手动提交），节点实例也应该标记为完成
+                # 这样后续节点才能被触发
+                try:
+                    await self._update_parent_node_instance_status(original_task_id, formatted_output)
+                    logger.info(f"✅ 父节点实例状态更新完成")
+                except Exception as node_update_error:
+                    logger.error(f"❌ 更新父节点实例状态失败: {node_update_error}")
+                    import traceback
+                    logger.error(f"节点状态更新错误详情: {traceback.format_exc()}")
             else:
-                logger.error(f"原始任务更新失败: {original_task_id}")
+                logger.error(f"❌ 保存细分结果失败: {original_task_id}")
             
         except Exception as e:
-            logger.error(f"提交细分结果给原始任务失败: {e}")
+            logger.error(f"❌ 保存细分结果失败: {e}")
             import traceback
             logger.error(f"详细错误: {traceback.format_exc()}")
+    
+    async def _update_parent_node_instance_status(self, original_task_id: uuid.UUID, output_data: str):
+        """更新父节点实例状态为已完成"""
+        try:
+            logger.info(f"🔄 开始更新父节点实例状态: 任务 {original_task_id}")
+            
+            # 1. 通过任务ID获取节点实例ID
+            from ..repositories.instance.task_instance_repository import TaskInstanceRepository
+            task_repo = TaskInstanceRepository()
+            
+            task_info = await task_repo.get_task_by_id(original_task_id)
+            if not task_info:
+                logger.error(f"❌ 无法找到原始任务: {original_task_id}")
+                return
+            
+            node_instance_id = task_info.get('node_instance_id')
+            workflow_instance_id = task_info.get('workflow_instance_id')
+            
+            if not node_instance_id:
+                logger.error(f"❌ 任务 {original_task_id} 没有关联的节点实例")
+                return
+            
+            logger.info(f"   - 节点实例ID: {node_instance_id}")
+            logger.info(f"   - 工作流实例ID: {workflow_instance_id}")
+            
+            # 2. 检查节点的所有任务是否都已完成
+            node_tasks = await task_repo.get_tasks_by_node_instance(uuid.UUID(node_instance_id))
+            if not node_tasks:
+                logger.warning(f"⚠️ 节点实例 {node_instance_id} 没有关联的任务")
+                return
+            
+            # 统计任务状态
+            total_tasks = len(node_tasks)
+            completed_tasks = [task for task in node_tasks if task.get('status') == 'completed']
+            failed_tasks = [task for task in node_tasks if task.get('status') == 'failed']
+            
+            logger.info(f"   - 节点任务统计: 总计 {total_tasks}, 完成 {len(completed_tasks)}, 失败 {len(failed_tasks)}")
+            
+            # 3. 检查是否应该更新节点实例状态
+            # 对于细分工作流完成的情况，即使原任务还未手动提交，也应该更新节点状态
+            # 因为细分工作流的完成意味着节点的工作已经完成，只是等待用户确认
+            should_update_node = False
+            
+            if len(completed_tasks) == total_tasks and len(failed_tasks) == 0:
+                # 所有任务都已完成的标准情况
+                should_update_node = True
+                logger.info(f"🎯 节点 {node_instance_id} 的所有任务都已完成，更新节点状态")
+            elif len(completed_tasks) == total_tasks - 1 and len(failed_tasks) == 0:
+                # 细分工作流完成的特殊情况：只有一个任务未完成但有细分结果
+                incomplete_tasks = [task for task in node_tasks if task.get('status') not in ['completed', 'failed']]
+                if len(incomplete_tasks) == 1:
+                    incomplete_task = incomplete_tasks[0]
+                    # 检查这个未完成的任务是否有细分结果（即当前正在处理的任务）
+                    if str(incomplete_task.get('task_instance_id')) == str(original_task_id):
+                        should_update_node = True
+                        logger.info(f"🎯 节点 {node_instance_id} 的细分工作流已完成，更新节点状态（任务等待手动提交）")
+                        
+            if should_update_node:
+                
+                # 导入节点实例相关模块
+                from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+                from ..models.instance import NodeInstanceUpdate, NodeInstanceStatus
+                
+                node_instance_repo = NodeInstanceRepository()
+                
+                # 准备节点更新数据
+                node_update = NodeInstanceUpdate(
+                    status=NodeInstanceStatus.COMPLETED,
+                    output_data={
+                        'subdivision_result': output_data,
+                        'completed_by': 'task_subdivision',
+                        'completion_time': now_utc().isoformat()
+                    },
+                    completed_at=now_utc()
+                )
+                
+                # 更新节点实例状态
+                updated_node = await node_instance_repo.update_node_instance(
+                    uuid.UUID(node_instance_id), node_update
+                )
+                
+                if updated_node:
+                    logger.info(f"✅ 节点实例状态更新成功: {node_instance_id}")
+                    logger.info(f"   - 新状态: COMPLETED")
+                    logger.info(f"   - 输出数据长度: {len(output_data)} 字符")
+                    
+                    # 4. 通知执行引擎检查工作流是否可以继续执行
+                    await self._notify_workflow_engine_node_completion(
+                        uuid.UUID(workflow_instance_id), uuid.UUID(node_instance_id)
+                    )
+                    
+                else:
+                    logger.error(f"❌ 节点实例状态更新失败: {node_instance_id}")
+            else:
+                logger.info(f"ℹ️ 节点 {node_instance_id} 还有未完成的任务，暂不更新节点状态")
+                
+        except Exception as e:
+            logger.error(f"❌ 更新父节点实例状态失败: {e}")
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
+    
+    async def _notify_workflow_engine_node_completion(self, workflow_instance_id: uuid.UUID, node_instance_id: uuid.UUID):
+        """通知工作流执行引擎节点已完成"""
+        try:
+            logger.info(f"📢 通知执行引擎节点完成: 工作流 {workflow_instance_id}, 节点 {node_instance_id}")
+            
+            # 导入执行引擎
+            from ..services.execution_service import execution_engine
+            
+            # 触发工作流状态检查，让执行引擎检查是否有新的节点可以执行
+            await execution_engine._check_workflow_completion(workflow_instance_id)
+            
+            logger.info(f"✅ 已通知执行引擎检查工作流状态: {workflow_instance_id}")
+            
+        except Exception as e:
+            logger.error(f"❌ 通知执行引擎失败: {e}")
+            # 这个失败不影响主流程，只记录错误
     
     def _generate_result_summary(self, results: dict) -> str:
         """生成结果摘要"""
@@ -511,42 +672,96 @@ class TaskSubdivisionService:
             if not results:
                 return "细分工作流执行完成，但没有生成输出数据。"
             
-            output_parts = ["=== 细分工作流执行结果 ===\n"]
+            logger.info(f"🎨 格式化细分工作流输出，结果数据键: {list(results.keys())}")
+            
+            output_parts = [f"=== {results.get('workflow_instance_id', '子工作流')} 执行结果 ===\n"]
             
             # 基本统计信息
             if 'total_tasks' in results:
                 output_parts.append(f"📊 执行统计:")
                 output_parts.append(f"   • 总任务数: {results.get('total_tasks', 0)}")
                 output_parts.append(f"   • 完成任务数: {results.get('completed_tasks', 0)}")
+                output_parts.append(f"   • 失败任务数: {results.get('failed_tasks', 0)}")
                 output_parts.append(f"   • 执行时长: {results.get('execution_duration', 'N/A')}")
                 output_parts.append("")
             
-            # 主要输出结果
-            if 'final_output' in results:
-                output_parts.append("📋 执行结果:")
-                output_parts.append(str(results['final_output']))
+            # 🔧 增强：主要输出结果（优先显示结束节点的完整输出）
+            final_output = results.get('final_output', '')
+            has_end_node_output = results.get('has_end_node_output', False)
+            
+            if final_output:
+                if has_end_node_output:
+                    output_parts.append("📋 工作流最终结果（来自结束节点）:")
+                else:
+                    output_parts.append("📋 工作流最终结果（来自任务输出）:")
+                
+                # 如果是长文本，进行适当的格式化
+                if len(final_output) > 1000:
+                    # 显示前500字符和后200字符
+                    output_parts.append(final_output[:500])
+                    output_parts.append("\n... [内容过长，已省略部分内容] ...\n")
+                    output_parts.append(final_output[-200:])
+                else:
+                    output_parts.append(final_output)
                 output_parts.append("")
             
-            # 各个任务的详细结果
-            if 'task_results' in results and isinstance(results['task_results'], list):
-                output_parts.append("📝 任务详情:")
-                for i, task_result in enumerate(results['task_results'], 1):
-                    if isinstance(task_result, dict):
-                        task_title = task_result.get('title', f'任务 {i}')
-                        task_output = task_result.get('output', '无输出')
-                        output_parts.append(f"   {i}. {task_title}")
-                        output_parts.append(f"      结果: {task_output}")
-                    else:
-                        output_parts.append(f"   {i}. {str(task_result)}")
-                output_parts.append("")
+            # 🔧 增强：如果没有详细的最终输出，显示各个任务的详细结果
+            if not final_output or len(final_output) < 50:
+                if 'task_results' in results and isinstance(results['task_results'], list):
+                    completed_task_results = [t for t in results['task_results'] if t.get('status') == 'completed']
+                    
+                    if completed_task_results:
+                        output_parts.append("📝 已完成任务的详细结果:")
+                        for i, task_result in enumerate(completed_task_results, 1):
+                            if isinstance(task_result, dict):
+                                task_title = task_result.get('title', f'任务 {i}')
+                                task_output = task_result.get('output', '无输出')
+                                task_summary = task_result.get('result_summary', '')
+                                
+                                output_parts.append(f"   {i}. **{task_title}**")
+                                
+                                if task_summary:
+                                    output_parts.append(f"      摘要: {task_summary}")
+                                
+                                if task_output and task_output != '无输出':
+                                    # 限制单个任务输出的长度
+                                    if len(str(task_output)) > 300:
+                                        truncated_output = str(task_output)[:300] + "... [已截断]"
+                                        output_parts.append(f"      结果: {truncated_output}")
+                                    else:
+                                        output_parts.append(f"      结果: {task_output}")
+                                
+                                output_parts.append("")
+                            else:
+                                output_parts.append(f"   {i}. {str(task_result)}")
+                        output_parts.append("")
             
-            # 总结
-            output_parts.append("✅ 细分工作流已成功完成所有任务。")
+            # 执行状态和时间信息
+            status = results.get('status', 'unknown')
+            if status == 'completed':
+                output_parts.append("✅ 细分工作流已成功完成所有任务。")
+            elif status == 'failed':
+                output_parts.append("❌ 细分工作流执行失败。")
+            else:
+                output_parts.append(f"ℹ️ 细分工作流状态: {status}")
             
-            return "\n".join(output_parts)
+            # 时间信息
+            started_at = results.get('started_at')
+            completed_at = results.get('completed_at')
+            if started_at:
+                output_parts.append(f"🕐 开始时间: {started_at}")
+            if completed_at:
+                output_parts.append(f"🕐 完成时间: {completed_at}")
+            
+            formatted_output = "\n".join(output_parts)
+            logger.info(f"✅ 细分工作流输出格式化完成，总长度: {len(formatted_output)} 字符")
+            
+            return formatted_output
             
         except Exception as e:
             logger.error(f"格式化细分工作流输出失败: {e}")
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
             return f"细分工作流执行完成，但输出格式化失败: {str(e)}"
     
     async def get_task_subdivisions(self, task_id: uuid.UUID) -> List[TaskSubdivisionResponse]:
@@ -921,3 +1136,19 @@ class TaskSubdivisionService:
             total_sub_nodes=total_nodes,
             completed_sub_nodes=completed_nodes
         )
+    
+    async def _get_parent_workflow_id(self, task_id: uuid.UUID) -> Optional[uuid.UUID]:
+        """获取任务所属的父工作流实例ID"""
+        try:
+            # 通过任务ID获取对应的工作流实例ID
+            task = await self.task_repo.get_task_by_id(task_id)
+            if task:
+                return task.get('workflow_instance_id')
+            return None
+        except Exception as e:
+            logger.error(f"获取父工作流ID失败: {e}")
+            return None
+
+
+# 创建任务细分服务实例
+task_subdivision_service = TaskSubdivisionService()
