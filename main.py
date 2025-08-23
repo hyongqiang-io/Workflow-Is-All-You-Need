@@ -24,6 +24,9 @@ from backend.api.workflow_output import router as workflow_output_router
 from backend.api.mcp import router as mcp_router
 from backend.api.mcp_user_tools import router as mcp_user_tools_router
 from backend.api.agent_tools import router as agent_tools_router
+from backend.api.ai_workflow import router as ai_workflow_router
+from backend.api.feishu import router as feishu_router
+from backend.api.feishu_bot import router as feishu_bot_router
 from backend.utils.database import initialize_database, close_database
 from backend.utils.exceptions import BusinessException, ErrorResponse
 from backend.services.execution_service import execution_engine
@@ -273,6 +276,10 @@ app.include_router(execution_router)
 app.include_router(tools_router, prefix="/api")
 app.include_router(test_router, prefix="/api")
 app.include_router(workflow_output_router)
+# AI工作流生成路由
+logger.trace("注册AI工作流生成路由...")
+app.include_router(ai_workflow_router)
+logger.trace("AI工作流生成路由注册完成")
 logger.trace("注册MCP路由...")
 app.include_router(mcp_router, prefix="/api")
 logger.trace("MCP路由注册完成")
@@ -286,6 +293,13 @@ logger.trace("MCP用户工具管理路由注册完成")
 logger.trace("注册Agent工具绑定路由...")
 app.include_router(agent_tools_router, prefix="/api", tags=["Agent工具绑定"])
 logger.trace("Agent工具绑定路由注册完成")
+
+# 注册飞书OAuth路由
+logger.trace("注册飞书OAuth路由...")
+app.include_router(feishu_router, prefix="/api", tags=["飞书OAuth"])
+app.include_router(feishu_bot_router, prefix="/api", tags=["飞书机器人"])
+logger.trace("飞书OAuth路由注册完成")
+
 logger.trace("所有路由注册完成")
 
 # 打印所有已注册的路由用于调试

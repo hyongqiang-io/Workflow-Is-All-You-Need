@@ -6,6 +6,8 @@ import zhCN from 'antd/locale/zh_CN';
 // 页面组件
 import Login from './pages/Auth/Login';
 import Register from './pages/Auth/Register';
+import FeishuCallback from './pages/Auth/FeishuCallback';
+import FeishuLogin from './pages/Auth/FeishuLogin';
 import MainLayout from './pages/Main/MainLayout';
 import Dashboard from './pages/Main/Dashboard';
 import Workflow from './pages/Workflow/Workflow';
@@ -27,6 +29,8 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/feishu-login" element={<FeishuLogin />} />
+          <Route path="/auth/feishu/callback" element={<FeishuCallback />} />
           <Route path="/" element={
             <ProtectedRoute>
               <MainLayout />

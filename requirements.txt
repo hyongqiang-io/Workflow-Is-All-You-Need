@@ -1,16 +1,32 @@
-asyncpg==0.29.0
-asyncio-pool==0.6.0
+# 数据库驱动
+aiomysql>=0.2.0
+pymysql>=1.1.0
+
+# 核心依赖
 pydantic==2.5.0
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
 typing-extensions>=4.12.0
 loguru==0.7.2
+
+# Web框架
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
+
+# 认证和安全
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# AI服务
+openai>=1.0.0
+
+# 测试工具
 pytest==7.4.3
 pytest-asyncio==0.21.1
 pytest-cov==4.1.0
-fastapi==0.104.1
-uvicorn==0.24.0
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-python-multipart==0.0.6
-openai>=1.0.0
+
+# 其他工具
+asyncio-pool==0.6.0
+
+# 注意：asyncpg已移除，项目现在使用MySQL
