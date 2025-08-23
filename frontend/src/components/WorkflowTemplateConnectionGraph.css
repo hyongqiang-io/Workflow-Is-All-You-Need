@@ -1,0 +1,1027 @@
+/* 工作流模板连接图样式 */
+.workflow-template-connection-graph {
+  width: 100%;
+  height: calc(100% - 20px);
+  min-height: 700px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  background-color: #fafafa;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 内部节点特殊样式 */
+.workflow-template-node.internal-node {
+  border: 2px dashed #2196f3 !important;
+  background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%) !important;
+  box-shadow: 0 2px 8px rgba(33, 150, 243, 0.2) !important;
+}
+
+.workflow-template-node.internal-node .node-header {
+  background: rgba(33, 150, 243, 0.1);
+  padding: 6px 10px;
+  border-radius: 4px 4px 0 0;
+}
+
+.node-type-icon {
+  margin-right: 6px;
+  font-size: 16px;
+}
+
+.internal-node-badge {
+  display: inline-block;
+  background: #2196f3;
+  color: white;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  margin-left: 6px;
+}
+
+.node-type-info {
+  background: rgba(33, 150, 243, 0.05);
+  padding: 6px 10px;
+  border-top: 1px solid rgba(33, 150, 243, 0.2);
+  font-size: 11px;
+  color: #1976d2;
+}
+
+.node-type-label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.parent-workflow-info {
+  display: block;
+  color: #666;
+  font-size: 10px;
+}
+
+/* 加载状态 */
+.workflow-template-connection-graph.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #f9f9f9;
+}
+
+.loading-spinner {
+  text-align: center;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #2196f3;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-text {
+  color: #666;
+  font-size: 14px;
+}
+
+/* 错误状态 */
+.workflow-template-connection-graph.error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #fff5f5;
+}
+
+.error-message {
+  text-align: center;
+  padding: 32px;
+}
+
+.error-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.error-text {
+  color: #d32f2f;
+  font-size: 16px;
+  margin-bottom: 16px;
+}
+
+.retry-button {
+  background-color: #2196f3;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.retry-button:hover {
+  background-color: #1976d2;
+}
+
+/* 工作流模板节点样式 */
+.workflow-template-node {
+  padding: 12px;
+  border-radius: 8px;
+  border: 2px solid;
+  background-color: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+  cursor: pointer;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.workflow-template-node:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  transform: translateY(-1px);
+}
+
+.workflow-template-node.selected {
+  box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.3);
+}
+
+/* 父工作流节点 */
+.workflow-template-node.parent-workflow {
+  background-color: #e3f2fd;
+  border-color: #2196f3;
+  color: #1976d2;
+}
+
+.workflow-template-node.parent-workflow .node-header {
+  background-color: #bbdefb;
+  margin: -12px -12px 8px;
+  padding: 8px 12px;
+  border-radius: 6px 6px 0 0;
+}
+
+/* 子工作流节点 */
+.workflow-template-node.sub-workflow {
+  background-color: #f8f9fa;
+  border-color: #9e9e9e;
+  color: #424242;
+}
+
+.workflow-template-node.sub-workflow .node-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+/* 节点状态指示器 */
+.node-status-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* 节点标题 */
+.node-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+  line-height: 1.2;
+}
+
+/* 节点描述 */
+.node-description {
+  font-size: 12px;
+  color: #666;
+  line-height: 1.3;
+  max-height: 36px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* 连接节点信息 */
+.connected-nodes-info {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.info-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #1976d2;
+  margin-bottom: 4px;
+}
+
+.connected-node-item {
+  font-size: 10px;
+  color: #1976d2;
+  background-color: rgba(255, 255, 255, 0.5);
+  padding: 2px 6px;
+  border-radius: 10px;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.more-indicator {
+  font-size: 10px;
+  color: #1976d2;
+  font-style: italic;
+}
+
+/* 子工作流统计信息 */
+.sub-workflow-stats {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background-color: #e0e0e0;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.progress-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+  border-radius: 3px;
+}
+
+.stats-text {
+  font-size: 11px;
+  color: #666;
+  text-align: center;
+}
+
+/* 控制面板样式 - 优化布局，减少遮挡 */
+.graph-controls {
+  background-color: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  padding: 12px;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  min-width: 220px;
+  max-width: 280px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  font-size: 12px;
+}
+
+/* 合并模式标题样式优化 */
+.control-group.merge-header {
+  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin: -12px -12px 12px -12px;
+  border-bottom: 1px solid rgba(33, 150, 243, 0.2);
+}
+
+.control-group.merge-header h4 {
+  color: #1976d2;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+}
+
+.control-group.merge-header p {
+  color: #1976d2;
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 0;
+  opacity: 0.8;
+}
+
+.control-group {
+  margin-bottom: 10px;
+}
+
+.control-group label {
+  display: block;
+  font-size: 12px;
+  color: #555;
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.control-group select,
+.control-group input[type="number"] {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 12px;
+  background-color: white;
+  transition: border-color 0.2s;
+}
+
+.control-group select:focus,
+.control-group input[type="number"]:focus {
+  outline: none;
+  border-color: #2196f3;
+  box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
+}
+
+.control-group input[type="checkbox"] {
+  margin-right: 6px;
+  accent-color: #2196f3;
+}
+
+.control-group label input[type="checkbox"] + span {
+  user-select: none;
+}
+
+/* 合并状态信息面板 */
+.merge-status-info {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  padding: 10px;
+  margin: 10px 0;
+  font-size: 11px;
+  color: #495057;
+  line-height: 1.4;
+}
+
+.merge-status-info > div {
+  margin-bottom: 3px;
+}
+
+.merge-status-info > div:last-child {
+  margin-bottom: 0;
+}
+
+/* 合并按钮样式优化 */
+.merge-preview-button {
+  width: 100%;
+  background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%);
+  color: white;
+  border: none;
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 8px 0;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(33, 150, 243, 0.3);
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+}
+
+.merge-preview-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1976d2 0%, #1565c0 100%);
+  box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4);
+  transform: translateY(-1px);
+}
+
+.merge-preview-button:disabled {
+  background: linear-gradient(135deg, #e0e0e0 0%, #bdbdbd 100%);
+  color: #9e9e9e;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+/* 操作提示信息 */
+.merge-operation-tip {
+  background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+  border: 1px solid #ffcc02;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 8px 0;
+  font-size: 11px;
+  color: #e65100;
+  line-height: 1.4;
+}
+
+.merge-no-candidates-warning {
+  background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+  border: 1px solid #f44336;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 8px 0;
+  font-size: 11px;
+  color: #c62828;
+  line-height: 1.4;
+}
+
+.relayout-button {
+  width: 100%;
+  background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%);
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  margin-top: 8px;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 6px rgba(76, 175, 80, 0.3);
+}
+
+.relayout-button:hover {
+  background: linear-gradient(135deg, #388e3c 0%, #2e7d32 100%);
+  box-shadow: 0 3px 8px rgba(76, 175, 80, 0.4);
+  transform: translateY(-1px);
+}
+
+.auto-fit-button {
+  width: 100%;
+  background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  margin-top: 6px;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 6px rgba(255, 152, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.auto-fit-button:hover {
+  background: linear-gradient(135deg, #f57c00 0%, #ef6c00 100%);
+  box-shadow: 0 3px 8px rgba(255, 152, 0, 0.4);
+  transform: translateY(-1px);
+}
+
+/* 统计面板样式 - 优化布局 */
+.graph-stats {
+  background-color: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  padding: 12px;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  min-width: 180px;
+  max-width: 220px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* 合并候选面板样式 - 减少遮挡 */
+.merge-candidates-panel {
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(15px);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  padding: 16px;
+  max-width: 400px;
+  max-height: 50vh;
+  overflow-y: auto;
+  border: 1px solid rgba(33, 150, 243, 0.2);
+  margin: 8px;
+}
+
+.merge-candidates-panel h3 {
+  margin: 0 0 8px 0;
+  font-size: 16px;
+  color: #1976d2;
+  font-weight: 600;
+  border-bottom: 2px solid #e3f2fd;
+  padding-bottom: 8px;
+}
+
+.merge-candidates-panel p {
+  margin: 0 0 16px 0;
+  font-size: 12px;
+  color: #666;
+  line-height: 1.4;
+}
+
+.candidates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.candidate-item {
+  background: linear-gradient(135deg, #f8f9fa 0%, #fff 100%);
+  border: 2px solid #e9ecef;
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.candidate-item:hover {
+  border-color: #2196f3;
+  box-shadow: 0 4px 12px rgba(33, 150, 243, 0.15);
+  transform: translateY(-1px);
+}
+
+.candidate-item.selected {
+  border-color: #2196f3;
+  background: linear-gradient(135deg, #e3f2fd 0%, #f8f9fa 100%);
+  box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
+}
+
+.candidate-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.candidate-header input[type="checkbox"] {
+  accent-color: #2196f3;
+  transform: scale(1.2);
+}
+
+.candidate-name {
+  flex: 1;
+  font-weight: 600;
+  font-size: 14px;
+  color: #333;
+}
+
+.compatibility-badge {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.compatibility-badge.compatible {
+  background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%);
+  color: white;
+}
+
+.compatibility-badge.incompatible {
+  background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
+  color: white;
+}
+
+.candidate-details {
+  font-size: 12px;
+  color: #666;
+}
+
+.node-info {
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.compatibility-issues {
+  background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+  border: 1px solid #ffab91;
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 4px 0;
+}
+
+.issues-label {
+  font-weight: 600;
+  color: #d32f2f;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.issue-item {
+  color: #c62828;
+  font-size: 11px;
+  margin-left: 8px;
+  position: relative;
+}
+
+.issue-item::before {
+  content: '•';
+  position: absolute;
+  left: -8px;
+  color: #f44336;
+}
+
+.compatibility-recommendations {
+  background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%);
+  border: 1px solid #a5d6a7;
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 4px 0;
+}
+
+.recommendations-label {
+  font-weight: 600;
+  color: #2e7d32;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.recommendation-item {
+  color: #388e3c;
+  font-size: 11px;
+  margin-left: 8px;
+  position: relative;
+}
+
+.recommendation-item::before {
+  content: '→';
+  position: absolute;
+  left: -8px;
+  color: #4caf50;
+  font-weight: bold;
+}
+
+/* 自定义滚动条 */
+.merge-candidates-panel::-webkit-scrollbar,
+.candidates-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.merge-candidates-panel::-webkit-scrollbar-track,
+.candidates-list::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.merge-candidates-panel::-webkit-scrollbar-thumb,
+.candidates-list::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+.merge-candidates-panel::-webkit-scrollbar-thumb:hover,
+.candidates-list::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+
+.stat-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.stat-label {
+  color: #666;
+}
+
+.stat-value {
+  font-weight: 600;
+  color: #2196f3;
+}
+
+/* 边详情弹窗 */
+.edge-detail-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.edge-detail-content {
+  background-color: white;
+  border-radius: 8px;
+  max-width: 500px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  animation: slideIn 0.2s ease;
+}
+
+@keyframes slideIn {
+  from { 
+    transform: translateY(-20px);
+    opacity: 0;
+  }
+  to { 
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.edge-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e0e0e0;
+  background-color: #f8f9fa;
+  border-radius: 8px 8px 0 0;
+}
+
+.edge-detail-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #333;
+}
+
+.close-button {
+  background: none;
+  border: none;
+  font-size: 24px;
+  color: #666;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.close-button:hover {
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+.edge-detail-body {
+  padding: 20px;
+}
+
+.detail-section {
+  margin-bottom: 20px;
+}
+
+.detail-section:last-child {
+  margin-bottom: 0;
+}
+
+.detail-section h4 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  color: #333;
+  border-bottom: 1px solid #e0e0e0;
+  padding-bottom: 6px;
+}
+
+.detail-item {
+  display: flex;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.detail-label {
+  min-width: 100px;
+  color: #666;
+  font-weight: 500;
+}
+
+.detail-value {
+  flex: 1;
+  color: #333;
+}
+
+.detail-value.status-completed {
+  color: #4caf50;
+  font-weight: 600;
+}
+
+.detail-value.status-running {
+  color: #ff9800;
+  font-weight: 600;
+}
+
+.detail-value.status-failed {
+  color: #f44336;
+  font-weight: 600;
+}
+
+.detail-value.status-pending {
+  color: #9e9e9e;
+  font-weight: 600;
+}
+
+/* ReactFlow自定义样式 */
+.react-flow__node.react-flow__node-workflowTemplate {
+  border: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+.react-flow__edge-path {
+  stroke-width: 2;
+}
+
+.react-flow__edge.react-flow__edge-smoothstep {
+  stroke: #666;
+}
+
+.react-flow__edge.selected {
+  stroke: #2196f3;
+  stroke-width: 3;
+}
+
+/* 树状布局专用样式 */
+.workflow-template-connection-graph[data-layout="tree"] {
+  background: linear-gradient(180deg, #f8fffe 0%, #f0f9ff 100%);
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-width: 2px;
+  transition: all 0.3s ease;
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+/* 树状布局中的父工作流节点 */
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node.parent-workflow {
+  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+  border-color: #1976d2;
+  min-width: 200px;
+  position: relative;
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node.parent-workflow::before {
+  content: '🌳';
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  font-size: 16px;
+  background: white;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* 树状布局中的子工作流节点 */
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node.sub-workflow {
+  min-width: 180px;
+  position: relative;
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node.sub-workflow::before {
+  content: '🍃';
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  font-size: 14px;
+  background: white;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* 树状布局中的连接线样式 */
+.workflow-template-connection-graph[data-layout="tree"] .react-flow__edge-path {
+  stroke: #4caf50;
+  stroke-width: 2.5;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.1));
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .react-flow__edge.selected .react-flow__edge-path {
+  stroke: #2196f3;
+  stroke-width: 3.5;
+  animation: flowingLine 2s linear infinite;
+}
+
+@keyframes flowingLine {
+  0% {
+    stroke-dasharray: 5 5;
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dasharray: 5 5;
+    stroke-dashoffset: 10;
+  }
+}
+
+/* 树状布局中的连接线标签 */
+.workflow-template-connection-graph[data-layout="tree"] .react-flow__edge-label {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #4caf50;
+  border-radius: 12px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #2e7d32;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* 递归层级指示器 */
+.recursion-level-badge {
+  background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+  margin-left: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* 树状布局控制面板增强 */
+.workflow-template-connection-graph[data-layout="tree"] .graph-controls {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 249, 250, 0.95) 100%);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .graph-stats {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 249, 250, 0.95) 100%);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* 树状布局特殊动画 */
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node {
+  animation: nodeGrow 0.5s ease-out;
+}
+
+@keyframes nodeGrow {
+  0% {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .react-flow__edge {
+  animation: edgeGrow 0.8s ease-out;
+}
+
+@keyframes edgeGrow {
+  0% {
+    opacity: 0;
+    stroke-dasharray: 100%;
+    stroke-dashoffset: 100%;
+  }
+  100% {
+    opacity: 1;
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+  }
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .workflow-template-connection-graph {
+    height: 400px;
+  }
+  
+  .graph-controls,
+  .graph-stats {
+    min-width: 150px;
+    padding: 8px;
+  }
+  
+  .edge-detail-content {
+    max-width: 90vw;
+    margin: 20px;
+  }
+  
+  .edge-detail-header {
+    padding: 12px 16px;
+  }
+  
+  .edge-detail-body {
+    padding: 16px;
+  }
+}

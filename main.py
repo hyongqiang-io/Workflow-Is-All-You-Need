@@ -26,6 +26,8 @@ from backend.api.mcp_user_tools import router as mcp_user_tools_router
 from backend.api.agent_tools import router as agent_tools_router
 from backend.api.ai_workflow import router as ai_workflow_router
 from backend.api.task_subdivision import router as task_subdivision_router
+from backend.api.workflow_template_connection import router as workflow_template_connection_router
+from backend.api.workflow_merge import router as workflow_merge_router
 from backend.api.context_health import router as context_health_router
 from backend.utils.database import initialize_database, close_database
 from backend.utils.exceptions import BusinessException, ErrorResponse
@@ -363,6 +365,16 @@ logger.trace("AI工作流生成路由注册完成")
 logger.trace("注册任务细分路由...")
 app.include_router(task_subdivision_router, prefix="/api", tags=["任务细分"])
 logger.trace("任务细分路由注册完成")
+
+# 注册工作流模板连接路由
+logger.trace("注册工作流模板连接路由...")
+app.include_router(workflow_template_connection_router, tags=["工作流模板连接"])
+logger.trace("工作流模板连接路由注册完成")
+
+# 注册工作流合并路由
+logger.trace("注册工作流合并路由...")
+app.include_router(workflow_merge_router, prefix="/api", tags=["工作流合并"])
+logger.trace("工作流合并路由注册完成")
 
 # 注册上下文健康监控路由
 logger.trace("注册上下文健康监控路由...")

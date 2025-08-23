@@ -2209,14 +2209,39 @@ class ExecutionEngine:
                 logger.info(f"✅ [统一架构-执行] PROCESSOR节点 {node_info.get('name')} 任务执行调用完成")
             
             elif node_info.get('type') == NodeType.END.value:
-                # END节点：直接标记为完成
-                logger.info(f"🏁 [统一架构-执行] END节点 {node_info.get('name')} - 标记为完成")
+                # 🔧 修复：END节点应该收集所有上游节点的输出结果
+                logger.info(f"🏁 [统一架构-执行] END节点 {node_info.get('name')} - 收集上游结果")
                 
+                # 收集上游节点的输出数据
+                upstream_outputs = {}
+                try:
+                    # 获取完整的工作流上下文数据
+                    context_data = await self.context_manager.get_task_context_data(workflow_instance_id, node_instance_id)
+                    # 🔧 修复：使用正确的键名 'immediate_upstream_results' 而不是 'upstream_outputs'
+                    upstream_outputs = context_data.get('immediate_upstream_results', {})
+                    logger.info(f"   📊 收集到 {len(upstream_outputs)} 个上游节点的输出")
+                    
+                    # 调试输出
+                    logger.info(f"   🔍 上游输出详情: {list(upstream_outputs.keys())}")
+                    for node_name, node_data in upstream_outputs.items():
+                        output_preview = str(node_data.get('output_data', ''))[:100]
+                        logger.info(f"     - {node_name}: {output_preview}...")
+                        
+                except Exception as e:
+                    logger.warning(f"   ⚠️ 收集上游输出失败: {e}")
+                    import traceback
+                    logger.error(f"   详细错误: {traceback.format_exc()}")
+                
+                # 构建包含上游结果的完整输出
                 end_output = {
                     'workflow_completed': True,
                     'completion_time': datetime.utcnow().isoformat(),
-                    'end_node': node_info.get('name')
+                    'end_node': node_info.get('name'),
+                    'upstream_results': upstream_outputs,  # 🔧 关键修复：包含上游结果
+                    'full_context': self._format_workflow_final_output(upstream_outputs)  # 🔧 格式化的完整结果
                 }
+                
+                logger.info(f"   📋 最终输出包含完整上下文，长度: {len(str(end_output.get('full_context', '')))}")
                 
                 await workflow_context.mark_node_completed(
                     node_info.get('node_id'),
@@ -2224,7 +2249,7 @@ class ExecutionEngine:
                     end_output
                 )
                 
-                logger.info(f"✅ [统一架构-执行] END节点 {node_info.get('name')} 已标记为完成")
+                logger.info(f"✅ [统一架构-执行] END节点 {node_info.get('name')} 已标记为完成（包含上游结果）")
             
             else:
                 logger.warning(f"⚠️ [统一架构-执行] 未知节点类型: {node_info.get('type')}")
@@ -2234,15 +2259,68 @@ class ExecutionEngine:
             import traceback
             logger.error(f"错误堆栈: {traceback.format_exc()}")
     
+    def _format_workflow_final_output(self, upstream_outputs: Dict[str, Any]) -> str:
+        """格式化工作流的最终输出为可读文本"""
+        if not upstream_outputs:
+            return "工作流执行完成，但未找到上游节点输出。"
+        
+        output_lines = ["=== 工作流执行结果汇总 ===\n"]
+        
+        for node_name, node_data in upstream_outputs.items():
+            output_lines.append(f"【节点：{node_name}】")
+            
+            # 提取节点输出数据
+            if isinstance(node_data, dict):
+                # 处理结构化的输出数据
+                if 'output_data' in node_data:
+                    output_data = node_data['output_data']
+                    if isinstance(output_data, str) and output_data.strip():
+                        output_lines.append(f"输出结果：{output_data}")
+                    elif isinstance(output_data, dict):
+                        # 格式化字典输出
+                        formatted_output = self._format_dict_as_text(output_data)
+                        output_lines.append(f"输出结果：{formatted_output}")
+                    else:
+                        output_lines.append("输出结果：[无有效输出数据]")
+                
+                # 添加执行统计
+                if 'status' in node_data:
+                    output_lines.append(f"执行状态：{node_data['status']}")
+                if 'completed_at' in node_data:
+                    output_lines.append(f"完成时间：{node_data['completed_at']}")
+            else:
+                # 处理简单的输出数据
+                output_lines.append(f"输出结果：{str(node_data)}")
+            
+            output_lines.append("")  # 空行分隔
+        
+        output_lines.append("✅ 工作流执行完成，所有节点处理结果已汇总。")
+        
+        return "\n".join(output_lines)
+    
+    def _format_dict_as_text(self, data: dict) -> str:
+        """将字典数据格式化为可读文本"""
+        if not data:
+            return "[空数据]"
+        
+        lines = []
+        for key, value in data.items():
+            if isinstance(value, (str, int, float, bool)):
+                lines.append(f"  • {key}: {value}")
+            elif isinstance(value, dict):
+                lines.append(f"  • {key}: {json.dumps(value, ensure_ascii=False, indent=2)}")
+            elif isinstance(value, list):
+                lines.append(f"  • {key}: [{len(value)}项]")
+            else:
+                lines.append(f"  • {key}: {str(value)}")
+        
+        return "\n".join(lines) if lines else "[无数据]"
+    
     async def _log_task_assignment_event(self, task_id: uuid.UUID, assigned_user_id: Optional[uuid.UUID], task_title: str):
         """记录任务分配事件"""
         try:
             event_data = {
                 'event_type': 'task_assigned',
-                'task_id': str(task_id),
-                'assigned_user_id': str(assigned_user_id) if assigned_user_id else None,
-                'task_title': task_title,
-                'timestamp': now_utc().isoformat(),
                 'status': 'success'
             }
             

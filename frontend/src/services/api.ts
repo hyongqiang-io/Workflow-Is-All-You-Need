@@ -79,7 +79,9 @@ api.interceptors.response.use(
         throw new Error(responseData.message || '操作失败');
       }
       console.log('✅ [INTERCEPTOR-DEBUG] 返回业务数据');
-      // 返回data字段的数据
+      console.log('   - 返回的数据结构:', responseData);
+      console.log('   - 是否提取data字段:', responseData.data ? '是' : '否');
+      // 为了调试，暂时返回完整的responseData而不是data字段
       return responseData;
     }
     
@@ -525,17 +527,17 @@ export const executionAPI = {
   getWorkflowInstanceDetail: (instanceId: string) =>
     api.get(`/execution/workflows/${instanceId}/status`),
 
-  // 获取工作流节点详细输出信息 - 修复API路径
+  // 获取工作流节点详细输出信息 - 统一使用task-flow接口
   getWorkflowNodesDetail: (instanceId: string) =>
-    api.get(`/execution/workflows/${instanceId}/nodes-detail`),
+    api.get(`/execution/workflows/${instanceId}/task-flow`),
 
   // 获取工作流执行实例列表
   getWorkflowInstances: (workflowBaseId: string, limit: number = 20) =>
     api.get(`/execution/workflows/${workflowBaseId}/instances`, { params: { limit } }),
 
-  // 获取工作流任务流程 - 注意这里用的是workflow实例ID，不是workflow_id
+  // 获取工作流任务流程 - 统一接口（支持主工作流和子工作流）
   getWorkflowTaskFlow: (workflowInstanceId: string) => 
-    api.get(`/execution/workflow/${workflowInstanceId}/task-flow`),
+    api.get(`/execution/workflows/${workflowInstanceId}/task-flow`),
 
   // 获取Agent任务列表
   getPendingAgentTasks: (agentId?: string, limit: number = 50) =>
@@ -587,6 +589,38 @@ export const executionAPI = {
 
   // 获取系统状态
   getSystemStatus: () => api.get('/execution/system/status'),
+
+  // 获取节点的详细细分信息
+  getNodeSubdivisionDetail: (nodeInstanceId: string) =>
+    api.get(`/execution/nodes/${nodeInstanceId}/subdivision-detail`),
+
+  // 获取工作流实例的细分信息
+  getWorkflowSubdivisionInfo: (workflowInstanceId: string) =>
+    api.get(`/execution/workflows/${workflowInstanceId}/subdivision-info`),
+
+  // 获取工作流模板连接图数据
+  getWorkflowTemplateConnections: (workflowInstanceId: string, maxDepth: number = 10) =>
+    api.get(`/workflow-template-connections/workflow-instances/${workflowInstanceId}/template-connections`, {
+      params: { max_depth: maxDepth }
+    }),
+
+  // 获取工作流模板连接摘要
+  getWorkflowTemplateConnectionSummary: (workflowBaseId: string) =>
+    api.get(`/workflow-template-connections/workflow-templates/${workflowBaseId}/connection-summary`),
+
+  // 获取细分连接图数据（用于图形可视化）
+  getSubdivisionConnectionGraph: (workflowInstanceId: string, includePending: boolean = false, layoutAlgorithm: string = 'hierarchical', maxDepth: number = 10) =>
+    api.get(`/workflow-template-connections/workflow-instances/${workflowInstanceId}/subdivision-graph`, {
+      params: { 
+        include_pending: includePending, 
+        layout_algorithm: layoutAlgorithm,
+        max_depth: maxDepth
+      }
+    }),
+
+  // 获取单个细分连接的详细信息
+  getSubdivisionConnectionDetail: (subdivisionId: string) =>
+    api.get(`/workflow-template-connections/subdivisions/${subdivisionId}/connection-detail`),
 };
 
 // MCP相关API
@@ -951,6 +985,19 @@ export const taskSubdivisionApi = {
       return response;
     } catch (error: any) {
       console.error('❌ 获取细分详情失败:', error);
+      throw error;
+    }
+  },
+
+  // 获取子工作流的完整执行结果
+  getSubdivisionWorkflowResults: async (subdivisionId: string) => {
+    console.log('🔄 获取子工作流执行结果:', subdivisionId);
+    try {
+      const response = await api.get(`/task-subdivision/subdivisions/${subdivisionId}/workflow-results`);
+      console.log('✅ 获取子工作流执行结果成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 获取子工作流执行结果失败:', error);
       throw error;
     }
   },

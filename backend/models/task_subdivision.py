@@ -174,3 +174,66 @@ class AdoptSubdivisionRequest(BaseModel):
     subdivision_id: uuid.UUID = Field(..., description="要采纳的细分ID")
     target_node_id: uuid.UUID = Field(..., description="要替换的目标节点ID")
     adoption_name: str = Field(..., description="采纳后的节点名称")
+
+
+# ==================== 图形视图支持模型 ====================
+
+class SubWorkflowNodeInfo(BaseModel):
+    """子工作流节点信息模型 - 用于图形视图标记"""
+    node_instance_id: uuid.UUID = Field(..., description="节点实例ID")
+    has_subdivision: bool = Field(False, description="是否有细分工作流")
+    subdivision_count: int = Field(0, description="细分数量")
+    subdivision_status: Optional[SubWorkflowStatus] = Field(None, description="子工作流状态")
+    
+    # 展开状态相关
+    is_expandable: bool = Field(False, description="是否可展开")
+    expansion_level: int = Field(0, description="展开层级，0为根节点")
+
+
+class SubWorkflowDetail(BaseModel):
+    """子工作流详细信息模型 - 用于展开显示"""
+    subdivision_id: uuid.UUID = Field(..., description="细分ID")
+    sub_workflow_instance_id: Optional[uuid.UUID] = Field(None, description="子工作流实例ID")
+    subdivision_name: str = Field(..., description="细分名称")
+    status: SubWorkflowStatus = Field(..., description="子工作流状态")
+    
+    # 子工作流的节点和边信息
+    nodes: List[Dict[str, Any]] = Field(default_factory=list, description="子工作流节点列表")
+    edges: List[Dict[str, Any]] = Field(default_factory=list, description="子工作流连接列表")
+    
+    # 统计信息
+    total_nodes: int = Field(0, description="总节点数")
+    completed_nodes: int = Field(0, description="已完成节点数")
+    running_nodes: int = Field(0, description="运行中节点数")
+    failed_nodes: int = Field(0, description="失败节点数")
+    
+    # 时间信息
+    created_at: datetime = Field(..., description="创建时间")
+    started_at: Optional[datetime] = Field(None, description="开始时间")
+    completed_at: Optional[datetime] = Field(None, description="完成时间")
+
+
+class NodeSubdivisionInfo(BaseModel):
+    """节点细分信息模型 - API响应使用"""
+    node_instance_id: uuid.UUID = Field(..., description="节点实例ID")
+    node_name: str = Field(..., description="节点名称")
+    has_subdivision: bool = Field(False, description="是否有细分")
+    subdivisions: List[SubWorkflowDetail] = Field(default_factory=list, description="关联的子工作流列表")
+
+
+class WorkflowGraphViewResponse(BaseModel):
+    """工作流图形视图响应模型 - 包含细分信息"""
+    workflow_instance_id: uuid.UUID = Field(..., description="工作流实例ID")
+    workflow_name: str = Field(..., description="工作流名称")
+    
+    # 节点信息（包含细分标记）
+    nodes: List[Dict[str, Any]] = Field(..., description="节点列表")
+    edges: List[Dict[str, Any]] = Field(..., description="连接列表")
+    
+    # 细分信息映射 - key为node_instance_id
+    node_subdivisions: Dict[str, SubWorkflowNodeInfo] = Field(default_factory=dict, description="节点细分信息映射")
+    
+    # 统计信息
+    total_nodes: int = Field(0, description="总节点数")
+    nodes_with_subdivisions: int = Field(0, description="有细分的节点数")
+    total_subdivisions: int = Field(0, description="总细分数量")

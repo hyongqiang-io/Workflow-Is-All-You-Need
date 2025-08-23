@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Tag, Button, Space, Modal, message, Tooltip, Badge, Progress, Tabs } from 'antd';
-import { PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined, EyeOutlined, InfoCircleOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined, EyeOutlined, InfoCircleOutlined, DeleteOutlined, BranchesOutlined, ExpandAltOutlined, ShrinkOutlined } from '@ant-design/icons';
+
+// 导入统一的节点组件
+import { CustomInstanceNode } from './CustomInstanceNode';
 import ReactFlow, {
   Node,
   Edge,
@@ -14,6 +17,9 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { executionAPI } from '../services/api';
+import { useSubWorkflowExpansion } from '../hooks/useSubWorkflowExpansion';
+import SubWorkflowContainer from './SubWorkflowContainer';
+import WorkflowTemplateConnectionGraph from './WorkflowTemplateConnectionGraph';
 
 interface WorkflowInstance {
   instance_id: string;
@@ -42,104 +48,61 @@ interface WorkflowInstanceListProps {
   onClose: () => void;
 }
 
-// 自定义ReactFlow节点组件（移到组件外部避免重新创建）
-const CustomInstanceNode = ({ data, selected }: { data: any; selected?: boolean }) => {
-  const getNodeColor = (status?: string) => {
-    switch (status) {
-      case 'completed':
-        return '#52c41a';
-      case 'running':
-        return '#1890ff';
-      case 'failed':
-        return '#ff4d4f';
-      case 'pending':
-      case 'waiting':
-        return '#faad14';
-      case 'cancelled':
-        return '#8c8c8c';
-      default:
-        return '#d9d9d9';
-    }
+// 导出CustomInstanceNode供其他组件使用
+export { CustomInstanceNode };
+
+// ReactFlow节点适配器组件，用于包装SubWorkflowContainer
+const SubWorkflowNodeAdapter = ({ data }: { data: any }) => {
+  console.log('🔍 [SubWorkflowNodeAdapter] 渲染子工作流容器，数据:', data);
+  
+  // 构造SubWorkflowContainer需要的props
+  const subWorkflow = {
+    subdivision_id: data.subdivisionId,
+    sub_workflow_instance_id: data.subWorkflowInstanceId,
+    subdivision_name: data.subWorkflowName,
+    status: data.subWorkflowStatus,
+    nodes: data.nodes || [],
+    edges: data.edges || [],
+    total_nodes: data.totalNodes || 0,
+    completed_nodes: data.completedNodes || 0,
+    running_nodes: data.runningNodes || 0,
+    failed_nodes: data.failedNodes || 0,
+    created_at: data.createdAt,
+    started_at: data.startedAt,
+    completed_at: data.completedAt
   };
 
-  const getNodeBackground = (status?: string) => {
-    switch (status) {
-      case 'completed':
-        return '#f6ffed';
-      case 'running':
-        return '#e6f7ff';
-      case 'failed':
-        return '#fff2f0';
-      case 'pending':
-      case 'waiting':
-        return '#fffbe6';
-      case 'cancelled':
-        return '#f5f5f5';
-      default:
-        return '#fafafa';
-    }
+  const handleCollapse = (nodeId: string) => {
+    console.log('🔍 [SubWorkflowNodeAdapter] 收起子工作流:', nodeId);
+    // 这里可以添加收起逻辑，如果需要的话
   };
 
-  const getStatusText = (status?: string) => {
-    switch (status) {
-      case 'completed':
-        return '已完成';
-      case 'running':
-        return '运行中';
-      case 'failed':
-        return '失败';
-      case 'pending':
-        return '等待中';
-      case 'waiting':
-        return '等待中';
-      case 'cancelled':
-        return '已取消';
-      default:
-        return '未知';
+  // 处理子工作流内节点的双击事件 - 使用与主工作流节点相同的逻辑
+  const handleSubWorkflowNodeClick = (node: any) => {
+    console.log('🖱️ [SubWorkflowNodeAdapter] 子工作流节点被点击:', node);
+    
+    // 调用外部传入的回调函数来设置节点详情
+    if (data.onSubWorkflowNodeClick) {
+      data.onSubWorkflowNodeClick(node);
     }
   };
 
   return (
-    <div
-      style={{
-        padding: '12px',
-        borderRadius: '8px',
-        border: `2px solid ${selected ? '#1890ff' : getNodeColor(data.status)}`,
-        backgroundColor: getNodeBackground(data.status),
-        minWidth: '180px',
-        textAlign: 'center',
-        boxShadow: selected ? '0 0 0 2px rgba(24, 144, 255, 0.2)' : '0 2px 8px rgba(0,0,0,0.1)',
-        transition: 'all 0.3s ease',
-        cursor: 'pointer',
-      }}
-      onClick={() => data.onNodeClick && data.onNodeClick(data)}
-    >
-      <Handle type="target" position={Position.Top} />
-      <div style={{ fontWeight: 'bold', marginBottom: '6px', fontSize: '14px' }}>
-        {data.label}
-      </div>
-      <div style={{ marginBottom: '6px' }}>
-        <Tag color={getNodeColor(data.status)} style={{ fontSize: '11px' }}>
-          {getStatusText(data.status)}
-        </Tag>
-      </div>
-      {data.processor_name && (
-        <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>
-          {data.processor_name}
-        </div>
-      )}
-      {data.task_count && (
-        <div style={{ fontSize: '11px', color: '#999' }}>
-          任务数: {data.task_count}
-        </div>
-      )}
-      <Handle type="source" position={Position.Bottom} />
-    </div>
+    <SubWorkflowContainer
+      subWorkflow={subWorkflow}
+      parentNodeId={data.parentNodeId}
+      expansionLevel={data.expansionLevel || 0}
+      onCollapse={handleCollapse}
+      onNodeClick={handleSubWorkflowNodeClick}
+      workflowInstanceId={data.subWorkflowInstanceId} // 传递工作流实例ID支持递归subdivision
+    />
   );
 };
 
+// ReactFlow节点类型定义 - 移到组件外避免重复创建
 const nodeTypes = {
   customInstance: CustomInstanceNode,
+  subWorkflowContainer: SubWorkflowNodeAdapter,
 };
 
 const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
@@ -165,6 +128,24 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [selectedNodeForDetail, setSelectedNodeForDetail] = useState<any>(null);
+  
+  // 模板连接图状态
+  const [enableTemplateConnectionMergeMode, setEnableTemplateConnectionMergeMode] = useState(false);
+
+  // 添加subdivision功能支持
+  const {
+    loadSubdivisionInfo,
+    expandNode,
+    collapseNode,
+    getNodeExpansionState,
+    getNodeSubdivisionInfo,
+    subdivisionInfo
+  } = useSubWorkflowExpansion({
+    workflowInstanceId: selectedInstance?.instance_id,
+    onExpansionChange: (nodeId, isExpanded) => {
+      console.log('🔍 [WorkflowInstanceList] Node expansion changed:', nodeId, isExpanded);
+    }
+  });
 
 
 
@@ -313,28 +294,84 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
       })
     })));
     
-    // 计算节点位置
+    // 计算节点位置 - 改为垂直排列
     const nodePositions: { [key: string]: { x: number; y: number } } = {};
-    const layerHeight = 200;
-    const nodeWidth = 300;
     
-    layers.forEach((layer, layerIndex) => {
-      const y = layerIndex * layerHeight;
-      const layerWidth = layer.length * nodeWidth;
-      const startX = -layerWidth / 2; // 居中对齐
+    // 如果没有边数据，按节点类型和名称排序来确定执行顺序
+    if (edges.length === 0) {
+      console.log('📝 [布局算法] 无边数据，使用节点类型排序');
       
-      console.log(`📍 [布局算法] 计算第 ${layerIndex} 层位置 (y=${y}, startX=${startX})`);
+      // 按执行顺序排序节点
+      const sortedNodes = nodes.sort((a, b) => {
+        // 1. 按节点类型排序 (start -> processor -> end)
+        const typeOrder: Record<string, number> = { 
+          'start': 0, 
+          'process': 1, 
+          'processor': 1, 
+          'human': 1, 
+          'ai': 1, 
+          'decision': 2, 
+          'end': 3 
+        };
+        const aTypeOrder = typeOrder[a.node_type] || 1;
+        const bTypeOrder = typeOrder[b.node_type] || 1;
+        
+        if (aTypeOrder !== bTypeOrder) {
+          return aTypeOrder - bTypeOrder;
+        }
+        
+        // 2. 按创建时间排序
+        if (a.created_at && b.created_at) {
+          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        }
+        
+        // 3. 按节点名称排序
+        return (a.node_name || '').localeCompare(b.node_name || '');
+      });
       
-      layer.forEach((nodeId, nodeIndex) => {
+      console.log('📊 [布局算法] 排序后的节点顺序:', sortedNodes.map(n => `${n.node_name}(${n.node_type})`));
+      
+      // 垂直排列节点 - 动态调整间距
+      const verticalGap = Math.max(150, Math.min(220, 800 / Math.max(sortedNodes.length, 1))); // 动态间距，最小150px，最大220px
+      const horizontalCenter = 0; // 水平居中
+      
+      sortedNodes.forEach((node, index) => {
+        const nodeId = node.node_instance_id;
         const position = {
-          x: startX + nodeIndex * nodeWidth,
-          y: y
+          x: horizontalCenter,
+          y: 50 + index * verticalGap // 从顶部开始，按顺序垂直排列
         };
         nodePositions[nodeId] = position;
-        const nodeName = nodes.find(n => n.node_instance_id === nodeId)?.node_name || nodeId;
-        console.log(`   - 节点 ${nodeName} 位置: (${position.x}, ${position.y})`);
+        console.log(`📍 [布局算法] 节点 ${node.node_name} 垂直位置: (${position.x}, ${position.y})`);
       });
-    });
+    } else {
+      // 有边数据时，使用层次化布局（垂直分层，水平排列）
+      console.log('📈 [布局算法] 有边数据，使用层次化布局');
+      
+      const verticalGap = 200;   // 层间垂直距离
+      const horizontalGap = 250; // 同层节点间水平距离
+      const startX = 200;        // 起始X坐标
+      const startY = 100;        // 起始Y坐标
+      
+      layers.forEach((layer, layerIndex) => {
+        const layerY = startY + layerIndex * verticalGap;
+        
+        // 计算这一层节点的起始X坐标，使节点在该层水平居中
+        const layerWidth = (layer.length - 1) * horizontalGap;
+        const layerStartX = startX - layerWidth / 2;
+        
+        layer.forEach((nodeId, nodeIndex) => {
+          const position = {
+            x: layerStartX + nodeIndex * horizontalGap,
+            y: layerY
+          };
+          nodePositions[nodeId] = position;
+          
+          const nodeName = nodes.find(n => n.node_instance_id === nodeId)?.node_name || nodeId;
+          console.log(`📍 [布局算法] 节点 ${nodeName} 层次位置: Layer ${layerIndex} (${position.x}, ${position.y})`);
+        });
+      });
+    }
     
     console.log('🎯 [布局算法] 计算完成，返回位置:', nodePositions);
     return nodePositions;
@@ -367,11 +404,18 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
       
       console.log(`📍 [图形视图] 节点 ${node.node_name} 位置:`, position);
       
+      // 获取节点的subdivision信息
+      const subWorkflowInfo = getNodeSubdivisionInfo(nodeId);
+      const expansionState = getNodeExpansionState(nodeId);
+      
+      console.log(`🔍 [WorkflowInstanceList] 节点 ${node.node_name} subdivision信息:`, subWorkflowInfo);
+      
       return {
         id: nodeId,
         type: 'customInstance',
         position: position,
         data: {
+          nodeId: nodeId, // 添加节点ID
           label: node.node_name || `节点 ${index + 1}`,
           status: node.status,
           processor_name: node.processor_name,
@@ -385,7 +429,13 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
           start_at: node.start_at,
           completed_at: node.completed_at,
           tasks: node.tasks || [],
-          onNodeClick: setSelectedNodeForDetail
+          onNodeClick: setSelectedNodeForDetail,
+          // 添加subdivision相关数据
+          subWorkflowInfo,
+          isExpanded: expansionState.isExpanded,
+          isLoading: expansionState.isLoading,
+          onExpandNode: expandNode,
+          onCollapseNode: collapseNode
         },
       };
     });
@@ -439,13 +489,98 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
       }
     }
 
-    console.log('🎯 [图形视图] 最终结果:');
-    console.log('   - 节点数量:', flowNodes.length);
-    console.log('   - 边数量:', flowEdges.length);
-    console.log('   - 节点列表:', flowNodes.map(n => ({ id: n.id, label: n.data.label, position: n.position })));
-    console.log('   - 边列表:', flowEdges.map(e => ({ id: e.id, source: e.source, target: e.target })));
+    // 为展开的节点添加子工作流容器节点
+    const allNodes: Node[] = [...flowNodes];
+    const allEdges: Edge[] = [...flowEdges];
+    
+    flowNodes.forEach((node) => {
+      const expansionState = getNodeExpansionState(node.id);
+      
+      console.log(`🔍 [WorkflowInstanceList] 检查节点 ${node.data.label} 展开状态:`, {
+        isExpanded: expansionState.isExpanded,
+        hasSubWorkflowData: !!expansionState.subWorkflowData,
+        subWorkflowCount: expansionState.subWorkflowData?.length || 0
+      });
+      
+      if (expansionState.isExpanded && expansionState.subWorkflowData) {
+        console.log(`✅ [WorkflowInstanceList] 展开节点 ${node.data.label} 的子工作流，数量: ${expansionState.subWorkflowData.length}`);
+        
+        expansionState.subWorkflowData.forEach((subWorkflow, subIndex) => {
+          // 为每个子工作流创建一个容器节点
+          const containerId = `subworkflow-${node.id}-${subWorkflow.subdivision_id}`;
+          
+          // 智能计算子工作流容器位置
+          const containerPosition = {
+            x: node.position.x + 350, // 在父节点右侧
+            y: node.position.y + (subIndex * 450) // 垂直堆叠多个子工作流
+          };
+          
+          console.log(`📦 [WorkflowInstanceList] 添加子工作流容器: ${subWorkflow.subdivision_name} 位置:`, containerPosition);
+          
+          // 创建子工作流容器节点
+          const containerNode: Node = {
+            id: containerId,
+            type: 'subWorkflowContainer',
+            position: containerPosition,
+            data: {
+              subWorkflowName: subWorkflow.subdivision_name,
+              subWorkflowStatus: subWorkflow.status,
+              parentNodeId: node.id,
+              parentNodeName: node.data.label,
+              subdivisionId: subWorkflow.subdivision_id,
+              subWorkflowInstanceId: subWorkflow.sub_workflow_instance_id,
+              expansionLevel: 0,
+              
+              // 子工作流的节点和统计信息
+              nodes: subWorkflow.nodes || [],
+              edges: subWorkflow.edges || [],
+              totalNodes: subWorkflow.total_nodes || 0,
+              completedNodes: subWorkflow.completed_nodes || 0,
+              runningNodes: subWorkflow.running_nodes || 0,
+              failedNodes: subWorkflow.failed_nodes || 0,
+              
+              // 时间信息
+              createdAt: subWorkflow.created_at,
+              startedAt: subWorkflow.started_at,
+              completedAt: subWorkflow.completed_at,
+              
+              // 添加节点详情回调，使用主工作流相同的Modal显示逻辑
+              onSubWorkflowNodeClick: setSelectedNodeForDetail
+            }
+          };
+          
+          allNodes.push(containerNode);
+          
+          // 添加从父节点到子工作流容器的连接
+          const parentToSubEdge: Edge = {
+            id: `parent-to-sub-${node.id}-${subWorkflow.subdivision_id}`,
+            source: node.id,
+            target: containerId,
+            type: 'smoothstep',
+            animated: true,
+            style: { 
+              stroke: '#52c41a', 
+              strokeWidth: 2,
+              strokeDasharray: '5,5'
+            },
+            label: '子工作流',
+            labelStyle: { fontSize: '10px', fill: '#52c41a', fontWeight: 'bold' },
+            labelBgStyle: { fill: '#f6ffed', fillOpacity: 0.9 }
+          };
+          
+          allEdges.push(parentToSubEdge);
+        });
+      }
+    });
 
-    return { nodes: flowNodes, edges: flowEdges };
+    console.log('🎯 [图形视图] 最终结果:');
+    console.log('   - 主节点数量:', flowNodes.length);
+    console.log('   - 总节点数量:', allNodes.length);
+    console.log('   - 边数量:', allEdges.length);
+    console.log('   - 节点列表:', allNodes.map(n => ({ id: n.id, label: n.data.label, type: n.type, position: n.position })));
+    console.log('   - 边列表:', allEdges.map(e => ({ id: e.id, source: e.source, target: e.target })));
+
+    return { nodes: allNodes, edges: allEdges };
   };
 
   // 当选择的实例或节点详情改变时，更新ReactFlow数据
@@ -571,6 +706,42 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
       }
     };
   }, [refreshInterval]);
+
+  // 当选中实例时加载subdivision信息
+  useEffect(() => {
+    if (selectedInstance?.instance_id) {
+      console.log('🔍 [WorkflowInstanceList] 加载subdivision信息, instanceId:', selectedInstance.instance_id);
+      loadSubdivisionInfo(selectedInstance.instance_id);
+    }
+  }, [selectedInstance?.instance_id, loadSubdivisionInfo]);
+
+  // 当subdivision信息更新时，重新转换ReactFlow数据
+  useEffect(() => {
+    if (nodesDetail && selectedInstance && Object.keys(subdivisionInfo).length > 0) {
+      console.log('🔍 [WorkflowInstanceList] subdivision信息已更新，重新转换ReactFlow数据');
+      const { nodes: flowNodes, edges: flowEdges } = convertToReactFlowData();
+      setNodes(flowNodes);
+      setEdges(flowEdges);
+    }
+  }, [subdivisionInfo, nodesDetail, selectedInstance]);
+
+  // 监听展开状态变化，重新渲染图形
+  useEffect(() => {
+    if (nodesDetail && selectedInstance) {
+      // 检查是否有任何节点的展开状态发生了变化
+      const hasExpandedNodes = Object.keys(subdivisionInfo).some(nodeId => {
+        const expansionState = getNodeExpansionState(nodeId);
+        return expansionState.isExpanded;
+      });
+      
+      if (hasExpandedNodes) {
+        console.log('🔍 [WorkflowInstanceList] 检测到展开状态变化，重新渲染图形');
+        const { nodes: flowNodes, edges: flowEdges } = convertToReactFlowData();
+        setNodes(flowNodes);
+        setEdges(flowEdges);
+      }
+    }
+  }, [nodesDetail, selectedInstance, getNodeExpansionState]);
 
   const getStatusTag = React.useCallback((status: string) => {
     const statusConfig = {
@@ -972,7 +1143,9 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
           setAutoRefresh(false);
           onClose();
         }}
-        width={1200}
+        width={1400}
+        style={{ top: 20 }}
+        styles={{ body: { height: '85vh', overflow: 'hidden' } }}
         footer={[
           <div key="footer-content" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
             <div style={{ fontSize: '12px', color: '#666' }}>
@@ -1495,6 +1668,91 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                       <Background />
                       <MiniMap />
                     </ReactFlow>
+                  </div>
+                )
+              },
+              {
+                key: 'template-connections',
+                label: '模板连接图',
+                children: (
+                  <div style={{ height: '100%', minHeight: '600px' }}>
+                    {selectedInstance?.status === 'completed' ? (
+                      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                        {/* 模板连接图控制面板 */}
+                        <div style={{ 
+                          padding: '12px 16px', 
+                          borderBottom: '1px solid #e0e0e0',
+                          background: '#fafafa',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center'
+                        }}>
+                          <div style={{ fontSize: '14px', color: '#666' }}>
+                            工作流模板连接关系图
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <label style={{ 
+                              display: 'flex', 
+                              alignItems: 'center', 
+                              gap: '6px',
+                              fontSize: '13px',
+                              color: '#555',
+                              cursor: 'pointer'
+                            }}>
+                              <input
+                                type="checkbox"
+                                checked={enableTemplateConnectionMergeMode}
+                                onChange={(e) => setEnableTemplateConnectionMergeMode(e.target.checked)}
+                                style={{ cursor: 'pointer' }}
+                              />
+                              启用合并操作模式
+                            </label>
+                          </div>
+                        </div>
+                        
+                        {/* 模板连接图组件 */}
+                        <div style={{ flex: 1 }}>
+                          <WorkflowTemplateConnectionGraph
+                            workflowInstanceId={selectedInstance.instance_id}
+                            enableMergeMode={enableTemplateConnectionMergeMode}  // 使用用户控制的合并模式状态
+                            onNodeClick={(node) => {
+                              console.log('🔍 [WorkflowInstanceList] 模板连接图节点点击:', node);
+                            }}
+                            onEdgeClick={(edge) => {
+                              console.log('🔍 [WorkflowInstanceList] 模板连接图边点击:', edge);
+                            }}
+                            onMergeInitiated={(mergeData) => {
+                              console.log('🔄 [WorkflowInstanceList] 合并操作启动:', mergeData);
+                              // 可以在这里添加合并完成后的回调处理
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        height: '100%',
+                        backgroundColor: '#f5f5f5',
+                        borderRadius: '8px',
+                        color: '#666',
+                        fontSize: '14px',
+                        textAlign: 'center',
+                        padding: '20px'
+                      }}>
+                        <div>
+                          <div style={{ fontSize: '48px', marginBottom: '16px' }}>📊</div>
+                          <div>工作流模板连接图</div>
+                          <div style={{ fontSize: '12px', marginTop: '8px' }}>
+                            只有在工作流执行完成后才能查看模板连接关系
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
+                            当前状态: {selectedInstance?.status || '未知'}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               }

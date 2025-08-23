@@ -381,6 +381,79 @@ async def get_subdivision_details(
         )
 
 
+@router.get("/subdivisions/{subdivision_id}/workflow-results", response_model=BaseResponse)
+async def get_subdivision_workflow_results(
+    subdivision_id: uuid.UUID = Path(..., description="细分ID"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    获取子工作流的完整执行结果
+    
+    Args:
+        subdivision_id: 细分ID
+        current_user: 当前用户
+        
+    Returns:
+        子工作流的完整执行结果
+    """
+    try:
+        logger.info(f"🔍 获取细分工作流结果: {subdivision_id}")
+        
+        # 获取细分信息
+        subdivision = await subdivision_service.subdivision_repo.get_subdivision_by_id(subdivision_id)
+        if not subdivision:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="细分不存在"
+            )
+        
+        # 获取子工作流实例ID
+        sub_workflow_instance_id = subdivision.get('sub_workflow_instance_id')
+        if not sub_workflow_instance_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="子工作流实例不存在"
+            )
+        
+        # 使用 monitoring_service 获取完整的工作流执行结果
+        from ..services.monitoring_service import MonitoringService
+        monitoring_service = MonitoringService()
+        
+        workflow_results = await monitoring_service._collect_workflow_results(sub_workflow_instance_id)
+        
+        # 格式化结果为可读文本
+        formatted_result = subdivision_service._format_subdivision_output(workflow_results)
+        
+        response_data = {
+            "subdivision_id": str(subdivision_id),
+            "sub_workflow_instance_id": str(sub_workflow_instance_id),
+            "subdivision_name": subdivision.get('subdivision_name'),
+            "workflow_status": workflow_results.get('status'),
+            "execution_results": workflow_results,
+            "formatted_result": formatted_result,
+            "has_end_node_output": workflow_results.get('has_end_node_output', False),
+            "final_output": workflow_results.get('final_output', ''),
+            "total_tasks": workflow_results.get('total_tasks', 0),
+            "completed_tasks": workflow_results.get('completed_tasks', 0),
+            "failed_tasks": workflow_results.get('failed_tasks', 0)
+        }
+        
+        return BaseResponse(
+            success=True,
+            message="获取子工作流执行结果成功",
+            data=response_data
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取子工作流执行结果异常: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取子工作流执行结果失败"
+        )
+
+
 @router.delete("/subdivisions/{subdivision_id}", response_model=BaseResponse)
 async def delete_subdivision(
     subdivision_id: uuid.UUID = Path(..., description="细分ID"),

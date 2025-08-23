@@ -1,0 +1,323 @@
+/* 子工作流展开功能的视觉效果和动画 */
+
+/* 展开节点的悬停效果 */
+.expandable-node {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+}
+
+.expandable-node:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+/* 有子工作流的节点特殊样式 */
+.expandable-node.has-subdivision {
+  position: relative;
+}
+
+.expandable-node.has-subdivision::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  right: -3px;
+  bottom: -3px;
+  background: linear-gradient(45deg, #52c41a, #1890ff);
+  border-radius: 10px;
+  z-index: -1;
+  opacity: 0.3;
+  animation: gradient-pulse 3s ease-in-out infinite;
+}
+
+@keyframes gradient-pulse {
+  0%, 100% {
+    opacity: 0.3;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.02);
+  }
+}
+
+/* 展开按钮动画 */
+.expand-button {
+  transition: all 0.3s ease;
+  transform-origin: center;
+}
+
+.expand-button:hover {
+  transform: scale(1.1);
+  color: #52c41a;
+}
+
+.expand-button.expanded {
+  transform: rotate(180deg);
+}
+
+.expand-button.loading {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 子工作流容器动画 */
+.subworkflow-container {
+  animation: slideInFromRight 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-origin: left center;
+}
+
+@keyframes slideInFromRight {
+  from {
+    opacity: 0;
+    transform: translateX(100px) scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.subworkflow-container.collapsing {
+  animation: slideOutToRight 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes slideOutToRight {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(100px) scale(0.8);
+  }
+}
+
+/* 连接线动画 */
+.subdivision-connection {
+  stroke-dasharray: 8, 8;
+  stroke-dashoffset: 16;
+  animation: dash 2s linear infinite;
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* 子工作流内部节点样式 */
+.subworkflow-node {
+  border: 2px solid #52c41a;
+  background: rgba(240, 252, 240, 0.9);
+  transition: all 0.3s ease;
+}
+
+.subworkflow-node:hover {
+  background: rgba(240, 252, 240, 1);
+  transform: scale(1.05);
+}
+
+/* 层级指示器 */
+.expansion-level-indicator {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  background: #52c41a;
+  color: white;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: bold;
+  z-index: 1001;
+}
+
+/* 细分标记徽章动画 */
+.subdivision-badge {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* 状态指示器颜色动画 */
+.status-running {
+  background: linear-gradient(45deg, #1890ff, #52c41a);
+  background-size: 200% 200%;
+  animation: status-gradient 2s ease infinite;
+}
+
+@keyframes status-gradient {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+/* 加载状态动画 */
+.loading-shimmer {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* 成功/完成状态的庆祝动画 */
+.completion-celebration {
+  animation: celebrate 0.6s ease-out;
+}
+
+@keyframes celebrate {
+  0% {
+    transform: scale(1);
+  }
+  25% {
+    transform: scale(1.1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  75% {
+    transform: scale(1.02);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* 错误状态的摇摆动画 */
+.error-shake {
+  animation: shake 0.5s ease-in-out;
+}
+
+@keyframes shake {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-5px);
+  }
+  75% {
+    transform: translateX(5px);
+  }
+}
+
+/* 深度层级的视觉层次 */
+.expansion-level-0 {
+  z-index: 1000;
+}
+
+.expansion-level-1 {
+  z-index: 900;
+  filter: brightness(0.95);
+}
+
+.expansion-level-2 {
+  z-index: 800;
+  filter: brightness(0.9);
+}
+
+.expansion-level-3 {
+  z-index: 700;
+  filter: brightness(0.85);
+}
+
+/* 节点连接线的渐变效果 */
+.connection-gradient {
+  background: linear-gradient(90deg, #1890ff, #52c41a);
+  mask: url('#connection-mask');
+  -webkit-mask: url('#connection-mask');
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .subworkflow-container {
+    width: 90vw !important;
+    min-height: 300px !important;
+  }
+  
+  .expandable-node {
+    font-size: 12px;
+  }
+  
+  .expansion-level-indicator {
+    width: 16px;
+    height: 16px;
+    font-size: 8px;
+  }
+}
+
+/* 暗黑主题支持 */
+@media (prefers-color-scheme: dark) {
+  .subworkflow-container {
+    background: rgba(20, 20, 20, 0.9);
+    border-color: #52c41a;
+  }
+  
+  .subworkflow-node {
+    background: rgba(30, 30, 30, 0.9);
+    color: white;
+  }
+  
+  .loading-shimmer {
+    background: linear-gradient(90deg, #2a2a2a 25%, #3a3a3a 50%, #2a2a2a 75%);
+  }
+}
+
+/* 高对比度支持 */
+@media (prefers-contrast: high) {
+  .expandable-node.has-subdivision::before {
+    opacity: 0.8;
+  }
+  
+  .subdivision-connection {
+    stroke-width: 4px;
+  }
+  
+  .expansion-level-indicator {
+    border: 2px solid white;
+  }
+}
+
+/* 减少动画偏好支持 */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

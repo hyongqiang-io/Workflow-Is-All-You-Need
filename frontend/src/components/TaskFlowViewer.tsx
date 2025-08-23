@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, Tag, Button, Modal, Descriptions, Timeline, Badge, Space, Typography, Alert, Spin, message } from 'antd';
 import { 
   PlayCircleOutlined, 
@@ -23,6 +23,12 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import { executionAPI } from '../services/api';
 import TaskSubdivisionModal from './TaskSubdivisionModal';
+import ExpandableSubWorkflowNode from './ExpandableSubWorkflowNode';
+import SubWorkflowContainer from './SubWorkflowContainer';
+import { useSubWorkflowExpansion } from '../hooks/useSubWorkflowExpansion';
+
+// 导入主工作流的CustomInstanceNode组件
+import { CustomInstanceNode } from './CustomInstanceNode';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -30,8 +36,8 @@ interface TaskNode {
   id: string;
   name: string;
   description: string;
-  type: 'start' | 'process' | 'decision' | 'end' | 'human' | 'ai';
-  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'blocked';
+  type: 'start' | 'process' | 'decision' | 'end' | 'human' | 'ai' | 'processor';
+  status: 'pending' | 'waiting' | 'running' | 'in_progress' | 'completed' | 'failed' | 'blocked' | 'cancelled';
   assignee?: {
     id: string;
     name: string;
@@ -43,6 +49,13 @@ interface TaskNode {
   created_at: string;
   started_at?: string;
   completed_at?: string;
+  // 子工作流节点专有字段
+  isSubWorkflowNode?: boolean;
+  workflow_instance_id?: string;
+  node_instance_id?: string;
+  retry_count?: number;
+  task_count?: number;
+  error_message?: string;
 }
 
 interface TaskFlow {
@@ -91,154 +104,51 @@ interface TaskFlowViewerProps {
   onTaskAction?: (taskId: string, action: 'start' | 'complete' | 'pause') => void;
 }
 
-// 自定义节点组件
-const TaskNodeComponent: React.FC<{ data: any }> = ({ data }) => {
-  const { task, isAssignedToMe, isCreator } = data;
-  
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'pending': return '#faad14';
-      case 'in_progress': 
-      case 'running':
-      case 'assigned': return '#1890ff';
-      case 'completed': return '#52c41a';
-      case 'failed': 
-      case 'error': return '#ff4d4f';
-      case 'blocked': return '#722ed1';
-      case 'paused': return '#fa8c16';
-      default: return '#d9d9d9';
-    }
+// 使用主工作流的CustomInstanceNode组件，包装任务特定的功能
+const TaskNodeWrapper: React.FC<{ data: any }> = ({ data }) => {
+  // 检查是否是子工作流容器
+  if (data.isSubWorkflowContainer) {
+    console.log('🔍 [TaskNodeWrapper] 渲染子工作流容器:', data);
+    return (
+      <SubWorkflowContainer
+        subWorkflow={data.subWorkflow}
+        parentNodeId={data.parentNodeId}
+        expansionLevel={data.expansionLevel}
+        onCollapse={data.onCollapse}
+        onNodeClick={data.onNodeClick || (() => {})} // 传递节点点击回调
+        workflowInstanceId={data.subWorkflow?.sub_workflow_instance_id}
+      />
+    );
+  }
+
+  // 将TaskFlowViewer的数据格式转换为CustomInstanceNode需要的格式
+  const nodeData = {
+    ...data,
+    // 基础信息映射
+    label: data.task?.task_title || data.label,
+    status: data.task?.status || data.status,
+    
+    // 添加任务特定的标识
+    showTaskActions: true,
+    task: data.task,
+    
+    // 保持原有的回调
+    onNodeClick: data.onNodeClick,
+    onNodeDoubleClick: data.onNodeDoubleClick,
+    
+    // 任务操作回调映射
+    onStartTask: data.onStartTask,
+    onCompleteTask: data.onCompleteTask,
+    onPauseTask: data.onPauseTask,
+    onSubdivideTask: data.onSubdivideTask
   };
 
-  const getStatusBackgroundColor = (status: string) => {
-    switch (status) {
-      case 'pending': return '#fff7e6';
-      case 'in_progress': 
-      case 'running':
-      case 'assigned': return '#e6f7ff';
-      case 'completed': return '#f6ffed';
-      case 'failed': 
-      case 'error': return '#fff2f0';
-      case 'blocked': return '#f9f0ff';
-      case 'paused': return '#fff2e8';
-      default: return '#fafafa';
-    }
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'pending': return <ClockCircleOutlined />;
-      case 'in_progress': return <PlayCircleOutlined />;
-      case 'completed': return <CheckCircleOutlined />;
-      case 'failed': return <InfoCircleOutlined />;
-      case 'blocked': return <InfoCircleOutlined />;
-      default: return <ClockCircleOutlined />;
-    }
-  };
-
-  const getNodeTypeIcon = (type: string) => {
-    switch (type) {
-      case 'start': return <PlayCircleOutlined />;
-      case 'end': return <CheckCircleOutlined />;
-      case 'human': return <UserOutlined />;
-      case 'ai': return <RobotOutlined />;
-      case 'decision': return <BranchesOutlined />;
-      default: return <InfoCircleOutlined />;
-    }
-  };
-
-  const isHighlighted = isAssignedToMe || isCreator;
-
-  return (
-    <div 
-      style={{
-        padding: '12px',
-        borderRadius: '8px',
-        border: isHighlighted ? '2px solid #1890ff' : `2px solid ${getStatusColor(task.status)}`,
-        backgroundColor: getStatusBackgroundColor(task.status),
-        minWidth: '150px',
-        boxShadow: isHighlighted ? '0 2px 8px rgba(24, 144, 255, 0.2)' : `0 2px 8px ${getStatusColor(task.status)}33`
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
-        {getNodeTypeIcon(task.type)}
-        <Text strong style={{ marginLeft: '4px', fontSize: '12px' }}>
-          {task.name}
-        </Text>
-      </div>
-      
-      <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Tag 
-          color={getStatusColor(task.status)} 
-          icon={getStatusIcon(task.status)}
-          style={{ fontWeight: 'bold', fontSize: '11px' }}
-        >
-          {task.status === 'pending' ? '待处理' :
-           task.status === 'in_progress' ? '进行中' :
-           task.status === 'running' ? '运行中' :
-           task.status === 'assigned' ? '已分配' :
-           task.status === 'completed' ? '已完成' :
-           task.status === 'failed' ? '失败' :
-           task.status === 'error' ? '错误' :
-           task.status === 'blocked' ? '阻塞' :
-           task.status === 'paused' ? '暂停' : '未知'}
-        </Tag>
-      </div>
-
-      {task.assignee && (
-        <div style={{ marginBottom: '4px' }}>
-          <Text type="secondary" style={{ fontSize: '10px' }}>
-            {task.assignee.type === 'user' ? <UserOutlined /> : <RobotOutlined />}
-            {' '}{task.assignee.name}
-          </Text>
-        </div>
-      )}
-
-      {isAssignedToMe && task.status === 'pending' && (
-        <Button 
-          type="primary" 
-          size="small" 
-          style={{ width: '100%', marginTop: '4px' }}
-          onClick={() => data.onStartTask?.(task.id)}
-        >
-          开始任务
-        </Button>
-      )}
-
-      {isAssignedToMe && task.status === 'in_progress' && (
-        <Space direction="vertical" size="small" style={{ width: '100%', marginTop: '4px' }}>
-          <Space size="small" style={{ width: '100%' }}>
-            <Button 
-              type="primary" 
-              size="small" 
-              style={{ flex: 1 }}
-              onClick={() => data.onCompleteTask?.(task.id)}
-            >
-              完成任务
-            </Button>
-            <Button 
-              size="small" 
-              onClick={() => data.onPauseTask?.(task.id)}
-            >
-              暂停
-            </Button>
-          </Space>
-          <Button 
-            size="small" 
-            icon={<BranchesOutlined />}
-            style={{ width: '100%' }}
-            onClick={() => data.onSubdivideTask?.(task.id, task.name, task.description)}
-          >
-            细分任务
-          </Button>
-        </Space>
-      )}
-    </div>
-  );
+  return <CustomInstanceNode data={nodeData} selected={data.selected} />;
 };
 
 const nodeTypes: NodeTypes = {
-  taskNode: TaskNodeComponent,
+  taskNode: ExpandableSubWorkflowNode,
+  default: TaskNodeWrapper, // 使用包装后的CustomInstanceNode
 };
 
 const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({ 
@@ -257,15 +167,47 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
+  // 使用子工作流展开功能
+  const {
+    loadSubdivisionInfo,
+    expandNode,
+    collapseNode,
+    getNodeExpansionState,
+    getNodeSubdivisionInfo,
+    hasSubdivision,
+    isExpandable,
+    subdivisionInfo,
+    isLoadingSubdivisionInfo
+  } = useSubWorkflowExpansion({
+    workflowInstanceId: workflowId,
+    onExpansionChange: (nodeId, isExpanded) => {
+      console.log(`Node ${nodeId} expansion changed to:`, isExpanded);
+      // 可以在这里添加额外的逻辑，比如更新布局
+    }
+  });
+
   useEffect(() => {
     loadTaskFlow();
-  }, [workflowId]);
+  }, [workflowId]); // 移除loadSubdivisionInfo依赖
+
+  useEffect(() => {
+    // 单独处理subdivision信息加载
+    if (workflowId) {
+      console.log('🔍 TaskFlowViewer: 开始加载subdivision信息, workflowId:', workflowId);
+      loadSubdivisionInfo(workflowId);
+    }
+  }, [workflowId]); // 只依赖workflowId
+
+  useEffect(() => {
+    console.log('🔍 TaskFlowViewer: subdivisionInfo状态更新:', subdivisionInfo);
+    console.log('🔍 TaskFlowViewer: 有subdivision的节点:', Object.keys(subdivisionInfo).filter(id => subdivisionInfo[id]?.has_subdivision));
+  }, [subdivisionInfo]);
 
   useEffect(() => {
     if (taskFlow) {
       updateFlowView();
     }
-  }, [taskFlow]);
+  }, [taskFlow, subdivisionInfo]); // 当subdivisionInfo变化时也更新视图
 
   const loadTaskFlow = async () => {
     setLoading(true);
@@ -283,28 +225,248 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
     }
   };
 
+  // 智能布局算法 - 基于执行顺序的垂直排列
+  const calculateOptimizedLayout = (nodes: any[], expandedNodeIds: string[]) => {
+    console.log('🔄 [TaskFlowViewer] 开始计算垂直布局:', {
+      nodesCount: nodes.length,
+      expandedNodeIds,
+      nodes: nodes.map(n => ({ id: n.node_instance_id, name: n.node_name, type: n.node_type }))
+    });
+
+    const verticalGap = 180; // 节点间的垂直间距
+    const horizontalOffset = 300; // 水平偏移（居中）
+    
+    const positions: Record<string, { x: number; y: number }> = {};
+    
+    // 首先尝试根据节点连接关系确定执行顺序
+    const sortedNodes = calculateExecutionOrder(nodes);
+    console.log('📊 [TaskFlowViewer] 执行顺序计算完成:', {
+      originalOrder: nodes.map(n => n.node_name),
+      sortedOrder: sortedNodes.map(n => n.node_name)
+    });
+    
+    // 为每个节点按执行顺序计算垂直位置
+    let currentY = 50; // 起始Y坐标
+    
+    sortedNodes.forEach((node, orderIndex) => {
+      const nodeId = node.node_instance_id || `node-${orderIndex}`;
+      
+      // 基础位置：水平居中，垂直按顺序排列
+      let baseX = horizontalOffset;
+      let baseY = currentY;
+      
+      // 检查是否有展开的子工作流，如果有则为后续节点留出额外空间
+      if (expandedNodeIds.includes(nodeId)) {
+        // 为展开的子工作流预留更多垂直空间
+        currentY += verticalGap + 300; // 额外空间给子工作流
+      } else {
+        currentY += verticalGap;
+      }
+      
+      // 处理并行分支：如果多个节点没有严格的先后关系，可以水平排列
+      const parallelNodes = findParallelNodes(node);
+      if (parallelNodes.length > 1) {
+        parallelNodes.forEach((parallelNode, parallelIndex) => {
+          const parallelNodeId = parallelNode.node_instance_id || `node-${parallelIndex}`;
+          positions[parallelNodeId] = {
+            x: baseX + (parallelIndex - Math.floor(parallelNodes.length / 2)) * 250,
+            y: baseY
+          };
+        });
+      } else {
+        positions[nodeId] = {
+          x: baseX,
+          y: baseY
+        };
+      }
+
+      console.log(`📍 [TaskFlowViewer] 节点 ${node.node_name} (${nodeId}) 位置:`, {
+        x: positions[nodeId]?.x || baseX,
+        y: positions[nodeId]?.y || baseY,
+        orderIndex
+      });
+    });
+    
+    console.log('✅ [TaskFlowViewer] 垂直布局计算完成:', positions);
+    return positions;
+  };
+
+  // 计算节点的执行顺序
+  const calculateExecutionOrder = (nodes: any[]) => {
+    console.log('🔄 [calculateExecutionOrder] 开始计算执行顺序:', {
+      nodesCount: nodes.length,
+      hasEdges: !!(taskFlow?.edges && taskFlow.edges.length > 0),
+      edgesCount: taskFlow?.edges?.length || 0
+    });
+
+    // 如果有edges信息，根据连接关系进行拓扑排序
+    if (taskFlow?.edges && taskFlow.edges.length > 0) {
+      console.log('📈 [calculateExecutionOrder] 使用拓扑排序:', taskFlow.edges);
+      return topologicalSort(nodes, taskFlow.edges);
+    }
+    
+    console.log('📝 [calculateExecutionOrder] 使用属性排序（没有edges数据）');
+    // 如果没有连接信息，尝试根据其他属性排序
+    return nodes.sort((a, b) => {
+      // 1. 优先按节点类型排序（start -> process -> end）
+      const typeOrder: Record<string, number> = { 'start': 0, 'process': 1, 'processor': 1, 'human': 1, 'ai': 1, 'decision': 2, 'end': 3 };
+      const aTypeOrder = typeOrder[a.node_type as string] || 1;
+      const bTypeOrder = typeOrder[b.node_type as string] || 1;
+      
+      if (aTypeOrder !== bTypeOrder) {
+        console.log(`⚖️ [calculateExecutionOrder] 按类型排序: ${a.node_name}(${a.node_type}:${aTypeOrder}) vs ${b.node_name}(${b.node_type}:${bTypeOrder})`);
+        return aTypeOrder - bTypeOrder;
+      }
+      
+      // 2. 按创建时间排序
+      if (a.created_at && b.created_at) {
+        console.log(`⏰ [calculateExecutionOrder] 按时间排序: ${a.node_name}(${a.created_at}) vs ${b.node_name}(${b.created_at})`);
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      }
+      
+      // 3. 按位置排序（如果有position信息）
+      if (a.position && b.position) {
+        console.log(`📍 [calculateExecutionOrder] 按位置排序: ${a.node_name}(${a.position.y},${a.position.x}) vs ${b.node_name}(${b.position.y},${b.position.x})`);
+        return a.position.y - b.position.y || a.position.x - b.position.x;
+      }
+      
+      // 4. 最后按名称排序
+      console.log(`🔤 [calculateExecutionOrder] 按名称排序: ${a.node_name} vs ${b.node_name}`);
+      return (a.node_name || '').localeCompare(b.node_name || '');
+    });
+  };
+
+  // 拓扑排序实现
+  const topologicalSort = (nodes: any[], edges: any[]) => {
+    console.log('🔄 [topologicalSort] 开始拓扑排序:', { nodes: nodes.length, edges: edges.length });
+    
+    const graph = new Map<string, string[]>();
+    const inDegree = new Map<string, number>();
+    const nodeMap = new Map<string, any>();
+    
+    // 初始化图结构
+    nodes.forEach(node => {
+      const nodeId = node.node_instance_id || node.id;
+      graph.set(nodeId, []);
+      inDegree.set(nodeId, 0);
+      nodeMap.set(nodeId, node);
+    });
+    
+    // 构建图和计算入度
+    edges.forEach(edge => {
+      const from = edge.source;
+      const to = edge.target;
+      
+      if (graph.has(from) && graph.has(to)) {
+        graph.get(from)?.push(to);
+        inDegree.set(to, (inDegree.get(to) || 0) + 1);
+        console.log(`🔗 [topologicalSort] 边: ${from} -> ${to}`);
+      } else {
+        console.warn(`⚠️ [topologicalSort] 无效边: ${from} -> ${to} (节点不存在)`);
+      }
+    });
+    
+    // 拓扑排序
+    const queue: string[] = [];
+    const result: any[] = [];
+    
+    // 找到所有入度为0的节点
+    inDegree.forEach((degree, nodeId) => {
+      if (degree === 0) {
+        queue.push(nodeId);
+        console.log(`🚀 [topologicalSort] 起始节点: ${nodeId} (入度: ${degree})`);
+      }
+    });
+    
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      const currentNode = nodeMap.get(currentId);
+      if (currentNode) {
+        result.push(currentNode);
+        console.log(`✅ [topologicalSort] 处理节点: ${currentNode.node_name} (${currentId})`);
+      }
+      
+      // 减少邻接节点的入度
+      graph.get(currentId)?.forEach(neighborId => {
+        const newDegree = (inDegree.get(neighborId) || 0) - 1;
+        inDegree.set(neighborId, newDegree);
+        if (newDegree === 0) {
+          queue.push(neighborId);
+          console.log(`➡️ [topologicalSort] 节点可处理: ${neighborId} (入度: ${newDegree})`);
+        }
+      });
+    }
+    
+    // 如果还有节点没有被排序（可能存在环），则追加到结果中
+    nodes.forEach(node => {
+      const nodeId = node.node_instance_id || node.id;
+      if (!result.find(n => (n.node_instance_id || n.id) === nodeId)) {
+        result.push(node);
+        console.log(`⚠️ [topologicalSort] 追加未排序节点: ${node.node_name} (${nodeId})`);
+      }
+    });
+    
+    console.log('✅ [topologicalSort] 拓扑排序完成:', result.map(n => n.node_name));
+    return result;
+  };
+
+  // 查找并行执行的节点
+  const findParallelNodes = (currentNode: any) => {
+    // 简单实现：目前只返回当前节点，后续可以根据实际需求扩展
+    // 可以根据节点的依赖关系、执行时间等判断哪些节点可以并行执行
+    return [currentNode];
+  };
+
   const updateFlowView = () => {
     if (!taskFlow) return;
 
-    // 转换节点为ReactFlow格式（使用实时数据库状态）
+    // 获取当前展开的节点ID列表
+    const expandedNodeIds = Object.keys(subdivisionInfo).filter(nodeId => {
+      const expansionState = getNodeExpansionState(nodeId);
+      return expansionState.isExpanded;
+    });
+
+    // 计算优化后的布局
+    const optimizedPositions = calculateOptimizedLayout(taskFlow.nodes || [], expandedNodeIds);
+
+    // 生成主要的节点和子工作流容器
+    const allNodes: Node[] = [];
+    const allEdges: Edge[] = [];
+
+    // 转换主要节点为ReactFlow格式（使用优化后的位置）
     const flowNodes: Node[] = (taskFlow.nodes || []).map((node, index) => {
       // 查找该节点关联的任务以获取分配信息
       const nodeTasks = (taskFlow.tasks || []).filter(task => task.node_instance_id === node.node_instance_id);
       const primaryTask = nodeTasks.length > 0 ? nodeTasks[0] : null;
+      const nodeInstanceId = node.node_instance_id || `node-${index}`;
+      
+      // 获取节点的细分信息和展开状态
+      const subWorkflowInfo = getNodeSubdivisionInfo(nodeInstanceId);
+      const expansionState = getNodeExpansionState(nodeInstanceId);
+      
+      // 使用优化后的位置
+      const position = optimizedPositions[nodeInstanceId] || { x: 300, y: 50 + index * 180 }; // 垂直布局作为回退
+      
+      console.log(`🎯 [updateFlowView] 节点 ${node.node_name} 最终位置:`, {
+        nodeInstanceId,
+        position,
+        hasOptimizedPosition: !!optimizedPositions[nodeInstanceId],
+        optimizedPosition: optimizedPositions[nodeInstanceId]
+      });
       
       return {
-        id: node.node_instance_id || `node-${index}`,
+        id: nodeInstanceId,
         type: 'taskNode',
-        position: { x: (index % 3) * 300, y: Math.floor(index / 3) * 200 },
+        position,
         data: {
           task: {
-            id: node.node_instance_id,
+            id: nodeInstanceId,
             name: node.node_name || '未命名节点',
             type: node.node_type || 'process',
             status: node.status || 'pending', // 来自数据库的实时状态
             description: node.description || '',
             assignee: primaryTask?.assignee || null, // 从任务中获取分配信息
-            position: { x: (index % 3) * 300, y: Math.floor(index / 3) * 200 },
+            position,
             execution_duration_seconds: node.execution_duration_seconds,
             retry_count: node.retry_count,
             task_count: node.task_count,
@@ -314,13 +476,21 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
           },
           isAssignedToMe: primaryTask?.assignee?.id === currentUserId,
           isCreator: taskFlow.creator ? currentUserId === taskFlow.creator.id : false,
+          subWorkflowInfo,
+          isExpanded: expansionState.isExpanded,
+          isLoading: expansionState.isLoading,
           onStartTask: handleStartTask,
           onCompleteTask: handleCompleteTask,
           onPauseTask: handlePauseTask,
-          onSubdivideTask: handleSubdivideTask
+          onSubdivideTask: handleSubdivideTask,
+          onExpandNode: expandNode,
+          onCollapseNode: collapseNode,
+          onNodeClick: handleNodeClick // 添加主工作流节点点击处理
         }
       };
     });
+
+    allNodes.push(...flowNodes);
 
     // 转换边为ReactFlow格式（使用实际的边缘数据）
     const flowEdges: Edge[] = (taskFlow.edges || []).map(edge => ({
@@ -332,8 +502,66 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
       style: { stroke: '#1890ff', strokeWidth: 2 }
     }));
 
-    setNodes(flowNodes);
-    setEdges(flowEdges);
+    allEdges.push(...flowEdges);
+
+    // 为展开的节点添加子工作流容器节点
+    flowNodes.forEach((node) => {
+      const expansionState = getNodeExpansionState(node.id);
+      
+      if (expansionState.isExpanded && expansionState.subWorkflowData) {
+        expansionState.subWorkflowData.forEach((subWorkflow, subIndex) => {
+          // 为每个子工作流创建一个容器节点
+          const containerId = `subworkflow-${node.id}-${subWorkflow.subdivision_id}`;
+          
+          // 智能计算子工作流容器位置
+          const containerPosition = {
+            x: node.position.x + 350, // 在父节点右侧
+            y: node.position.y + (subIndex * 450) // 垂直堆叠多个子工作流
+          };
+          
+          const containerNode: Node = {
+            id: containerId,
+            type: 'default', // 使用默认类型，在渲染中特殊处理
+            position: containerPosition,
+            data: {
+              isSubWorkflowContainer: true,
+              subWorkflow,
+              parentNodeId: node.id,
+              expansionLevel: 0,
+              onCollapse: collapseNode,
+              onNodeClick: handleSubWorkflowNodeClick // 传递子工作流节点点击处理函数
+            },
+            draggable: false,
+            selectable: false,
+            zIndex: 1000 // 确保子工作流容器在最上层
+          };
+
+          allNodes.push(containerNode);
+
+          // 添加从父节点到子工作流容器的连接线
+          const connectionEdge: Edge = {
+            id: `connection-${node.id}-${containerId}`,
+            source: node.id,
+            target: containerId,
+            type: 'smoothstep',
+            style: { 
+              stroke: '#52c41a', 
+              strokeWidth: 3,
+              strokeDasharray: '8,8' 
+            },
+            label: '细分工作流',
+            labelStyle: { fontSize: '12px', fontWeight: 'bold', fill: '#52c41a' },
+            labelBgStyle: { fill: '#f6ffed', fillOpacity: 0.9 },
+            zIndex: 999
+          };
+
+          allEdges.push(connectionEdge);
+        });
+      }
+    });
+
+    setNodes(allNodes);
+    setEdges(allEdges);
   };
 
   const handleStartTask = (taskId: string) => {
@@ -406,11 +634,58 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
   };
 
   const handleNodeClick = (event: any, node: Node) => {
-    const task = taskFlow?.nodes.find(n => n.id === node.id);
+    console.log('🖱️ [TaskFlowViewer] 节点点击处理:', { event, node });
+    
+    // 首先尝试从taskFlow.nodes中查找（主工作流节点）
+    let task = taskFlow?.nodes.find(n => n.id === node.id);
+    
     if (task) {
+      console.log('🔍 [TaskFlowViewer] 找到主工作流节点:', task);
       setSelectedTask(task);
       setDetailModalVisible(true);
+    } else {
+      console.log('⚠️ [TaskFlowViewer] 未在主工作流中找到节点，可能是子工作流节点');
+      // 对于子工作流节点，直接使用node.data中的task信息
+      if (node.data && node.data.task) {
+        console.log('🔍 [TaskFlowViewer] 使用节点data中的task信息:', node.data.task);
+        setSelectedTask(node.data.task);
+        setDetailModalVisible(true);
+      } else {
+        console.warn('❌ [TaskFlowViewer] 无法获取节点信息');
+      }
     }
+  };
+
+  // 新增：处理子工作流节点点击的专用函数
+  const handleSubWorkflowNodeClick = (nodeData: any) => {
+    console.log('🖱️ [TaskFlowViewer] 子工作流节点点击:', nodeData);
+    
+    // 将子工作流节点数据转换为统一的task格式
+    const unifiedTask = {
+      id: nodeData.id || nodeData.node_instance_id,
+      name: nodeData.name || nodeData.node_name || '未命名节点',
+      description: nodeData.task_description || nodeData.description || '',
+      type: nodeData.type || nodeData.node_type || 'process',
+      status: nodeData.status || 'pending',
+      assignee: nodeData.assignee || null,
+      position: { x: 0, y: 0 }, // 子工作流节点位置信息
+      created_at: nodeData.created_at || nodeData.start_at || '',
+      started_at: nodeData.started_at || nodeData.start_at || '',
+      completed_at: nodeData.completed_at || '',
+      estimated_duration: nodeData.estimated_duration,
+      actual_duration: nodeData.execution_duration_seconds,
+      retry_count: nodeData.retry_count || 0,
+      task_count: nodeData.task_count || 0,
+      error_message: nodeData.error_message || '',
+      // 子工作流特有信息
+      workflow_instance_id: nodeData.workflow_instance_id,
+      node_instance_id: nodeData.node_instance_id,
+      isSubWorkflowNode: true
+    };
+    
+    console.log('🔄 [TaskFlowViewer] 统一化后的任务数据:', unifiedTask);
+    setSelectedTask(unifiedTask);
+    setDetailModalVisible(true);
   };
 
   const formatDuration = (seconds?: number) => {
@@ -630,29 +905,57 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
                 selectedTask.type === 'start' ? 'green' :
                 selectedTask.type === 'end' ? 'red' :
                 selectedTask.type === 'human' ? 'blue' :
-                selectedTask.type === 'ai' ? 'purple' : 'orange'
+                selectedTask.type === 'ai' ? 'purple' :
+                selectedTask.type === 'processor' ? 'cyan' : 'orange'
               }>
                 {selectedTask.type === 'start' ? '开始节点' :
                  selectedTask.type === 'end' ? '结束节点' :
                  selectedTask.type === 'human' ? '人工任务' :
                  selectedTask.type === 'ai' ? 'AI任务' :
+                 selectedTask.type === 'processor' ? '处理节点' :
                  selectedTask.type === 'decision' ? '决策节点' : '处理节点'}
               </Tag>
             </Descriptions.Item>
             <Descriptions.Item label="任务状态">
               <Tag color={
                 selectedTask.status === 'pending' ? 'orange' :
+                selectedTask.status === 'waiting' ? 'blue' :
+                selectedTask.status === 'running' ? 'blue' :
                 selectedTask.status === 'in_progress' ? 'blue' :
                 selectedTask.status === 'completed' ? 'green' :
-                selectedTask.status === 'failed' ? 'red' : 'purple'
+                selectedTask.status === 'failed' ? 'red' :
+                selectedTask.status === 'cancelled' ? 'gray' : 'purple'
               }>
                 {selectedTask.status === 'pending' ? '待处理' :
+                 selectedTask.status === 'waiting' ? '等待中' :
+                 selectedTask.status === 'running' ? '运行中' :
                  selectedTask.status === 'in_progress' ? '进行中' :
                  selectedTask.status === 'completed' ? '已完成' :
                  selectedTask.status === 'failed' ? '失败' :
+                 selectedTask.status === 'cancelled' ? '已取消' :
                  selectedTask.status === 'blocked' ? '阻塞' : '未知'}
               </Tag>
             </Descriptions.Item>
+            
+            {/* 子工作流节点特有信息 */}
+            {selectedTask.isSubWorkflowNode && (
+              <>
+                <Descriptions.Item label="节点来源">
+                  <Tag color="purple">子工作流节点</Tag>
+                </Descriptions.Item>
+                {selectedTask.workflow_instance_id && (
+                  <Descriptions.Item label="所属工作流实例">
+                    <Text code>{selectedTask.workflow_instance_id}</Text>
+                  </Descriptions.Item>
+                )}
+                {selectedTask.node_instance_id && (
+                  <Descriptions.Item label="节点实例ID">
+                    <Text code>{selectedTask.node_instance_id}</Text>
+                  </Descriptions.Item>
+                )}
+              </>
+            )}
+            
             {selectedTask.assignee && (
               <Descriptions.Item label="执行者">
                 <Space>
@@ -661,8 +964,28 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
                 </Space>
               </Descriptions.Item>
             )}
+            
+            {/* 执行详细信息 */}
+            {(selectedTask.retry_count && selectedTask.retry_count > 0) && (
+              <Descriptions.Item label="重试次数">
+                <Tag color="orange">{selectedTask.retry_count} 次</Tag>
+              </Descriptions.Item>
+            )}
+            
+            {(selectedTask.task_count && selectedTask.task_count > 0) && (
+              <Descriptions.Item label="任务数量">
+                <Badge count={selectedTask.task_count} style={{ backgroundColor: '#52c41a' }} />
+              </Descriptions.Item>
+            )}
+            
+            {selectedTask.error_message && (
+              <Descriptions.Item label="错误信息">
+                <Text type="danger">{selectedTask.error_message}</Text>
+              </Descriptions.Item>
+            )}
+            
             <Descriptions.Item label="创建时间">
-              {formatDate(selectedTask.created_at)}
+              {selectedTask.created_at ? formatDate(selectedTask.created_at) : '-'}
             </Descriptions.Item>
             {selectedTask.started_at && (
               <Descriptions.Item label="开始时间">

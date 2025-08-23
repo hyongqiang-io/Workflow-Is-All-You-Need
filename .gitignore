@@ -150,6 +150,10 @@ run_*.py
 simple_*.py
 start_*.py
 update_*.py
+*debug*
+*test*
+verify*
+*.png
 
 # SQL 脚本（如果不需要版本控制）
 *.sql

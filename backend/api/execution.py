@@ -530,12 +530,17 @@ async def get_workflow_task_flow(
                 detail="工作流实例不存在"
             )
         
-        # 获取工作流实例的所有节点实例（按依赖关系排序）
+        # 获取工作流实例的所有节点实例（包含处理器详细信息和位置信息）
         nodes_query = """
         SELECT 
             ni.*,
             n.name as node_name,
             n.type as node_type,
+            n.position_x,
+            n.position_y,
+            -- 处理器信息（通过node_processor关联表）
+            p.name as processor_name,
+            p.type as processor_type,
             -- 计算节点执行时间 (MySQL兼容)
             CASE 
                 WHEN ni.started_at IS NOT NULL AND ni.completed_at IS NOT NULL 
@@ -546,6 +551,8 @@ async def get_workflow_task_flow(
             END as execution_duration_seconds
         FROM node_instance ni
         JOIN node n ON ni.node_id = n.node_id
+        LEFT JOIN node_processor np ON n.node_id = np.node_id
+        LEFT JOIN processor p ON np.processor_id = p.processor_id
         WHERE ni.workflow_instance_id = $1
         AND ni.is_deleted = FALSE
         ORDER BY 
@@ -645,7 +652,7 @@ async def get_workflow_task_flow(
                 task_flow["current_user_role"] = "assignee"
                 task_flow["assigned_tasks"] = []
         
-        # 格式化节点数据（包含实时状态和执行信息）
+        # 格式化节点数据（包含实时状态、执行信息、处理器信息和位置信息）
         for node in nodes:
             node_data = {
                 "node_instance_id": str(node['node_instance_id']),
@@ -659,8 +666,38 @@ async def get_workflow_task_flow(
                 "execution_duration_seconds": node['execution_duration_seconds'],
                 "error_message": node['error_message'],
                 "retry_count": node.get('retry_count', 0),
+                # 🔧 新增：位置信息用于前端布局
+                "position": {
+                    "x": float(node['position_x']) if node['position_x'] is not None else None,
+                    "y": float(node['position_y']) if node['position_y'] is not None else None
+                },
+                # 处理器详细信息
+                "processor_name": node['processor_name'],
+                "processor_type": node['processor_type'],
                 # 节点关联的任务数量
-                "task_count": len([task for task in tasks if str(task['node_instance_id']) == str(node['node_instance_id'])])
+                "task_count": len([task for task in tasks if str(task['node_instance_id']) == str(node['node_instance_id'])]),
+                # 关联的任务详细信息
+                "tasks": [
+                    {
+                        "task_instance_id": str(task['task_instance_id']),
+                        "task_title": task['task_title'],
+                        "task_type": task['task_type'],
+                        "status": task['status'],
+                        "assignee": task['assigned_username'] or task['assigned_agent_name'],
+                        "priority": task['priority'],
+                        "input_data": task['input_data'],
+                        "output_data": task['output_data'],
+                        "result_summary": task.get('result_summary'),
+                        "error_message": task.get('error_message')
+                    }
+                    for task in tasks if str(task['node_instance_id']) == str(node['node_instance_id'])
+                ],
+                # 时间戳信息
+                "timestamps": {
+                    "created_at": node['created_at'].isoformat() if node['created_at'] else None,
+                    "started_at": node['started_at'].isoformat() if node['started_at'] else None,
+                    "completed_at": node['completed_at'].isoformat() if node['completed_at'] else None
+                }
             }
             task_flow["nodes"].append(node_data)
         
@@ -710,16 +747,103 @@ async def get_workflow_task_flow(
                 task_flow["assigned_tasks"].append(task_data)
         
         # 格式化边缘数据（用于流程图显示）
+        # 创建node_id到node_instance_id的映射
+        node_id_to_instance_id = {}
+        for node in nodes:
+            node_id_to_instance_id[str(node['node_id'])] = str(node['node_instance_id'])
+        
         for edge in edges:
-            edge_data = {
-                "id": f"{edge['from_node_id']}-{edge['to_node_id']}",
-                "source": str(edge['from_node_id']),
-                "target": str(edge['to_node_id']),
-                "label": str(edge['condition_config']) if edge['condition_config'] else "",
-                "from_node_name": edge['from_node_name'],
-                "to_node_name": edge['to_node_name']
-            }
-            task_flow["edges"].append(edge_data)
+            from_node_id = str(edge['from_node_id'])
+            to_node_id = str(edge['to_node_id'])
+            
+            # 将node_id映射为node_instance_id
+            source_instance_id = node_id_to_instance_id.get(from_node_id)
+            target_instance_id = node_id_to_instance_id.get(to_node_id)
+            
+            # 只有当两个节点都有对应的实例时才添加边
+            if source_instance_id and target_instance_id:
+                edge_data = {
+                    "id": f"{source_instance_id}-{target_instance_id}",
+                    "source": source_instance_id,
+                    "target": target_instance_id,
+                    "label": str(edge['condition_config']) if edge['condition_config'] else "",
+                    "from_node_name": edge['from_node_name'],
+                    "to_node_name": edge['to_node_name']
+                }
+                task_flow["edges"].append(edge_data)
+        
+        # 🔧 新增：智能布局算法 - 当节点缺少位置信息时自动计算层次化布局
+        def calculate_hierarchical_layout(nodes_data, edges_data):
+            """基于依赖关系的层次化布局算法"""
+            # 构建依赖图
+            graph = {}
+            in_degree = {}
+            node_dict = {node["node_instance_id"]: node for node in nodes_data}
+            
+            # 初始化
+            for node in nodes_data:
+                node_id = node["node_instance_id"]
+                graph[node_id] = []
+                in_degree[node_id] = 0
+            
+            # 构建边关系
+            for edge in edges_data:
+                source = edge["source"]
+                target = edge["target"]
+                if source in graph and target in graph:
+                    graph[source].append(target)
+                    in_degree[target] += 1
+            
+            # 拓扑排序获得层次
+            layers = []
+            current_layer = [node_id for node_id, degree in in_degree.items() if degree == 0]
+            
+            while current_layer:
+                layers.append(current_layer[:])
+                next_layer = []
+                for node_id in current_layer:
+                    for neighbor in graph[node_id]:
+                        in_degree[neighbor] -= 1
+                        if in_degree[neighbor] == 0:
+                            next_layer.append(neighbor)
+                current_layer = next_layer
+            
+            # 计算布局参数
+            LAYER_WIDTH = 300  # 层间距离
+            NODE_HEIGHT = 120  # 节点间垂直距离
+            START_X = 100      # 起始X坐标
+            START_Y = 100      # 起始Y坐标
+            
+            # 应用层次化布局
+            for layer_idx, layer_nodes in enumerate(layers):
+                layer_x = START_X + layer_idx * LAYER_WIDTH
+                
+                # 在当前层内垂直排列节点
+                for node_idx, node_id in enumerate(layer_nodes):
+                    if node_id in node_dict:
+                        node = node_dict[node_id]
+                        
+                        # 只有当节点没有有效位置信息时才重新计算
+                        current_pos = node.get("position", {})
+                        if (current_pos.get("x") is None or current_pos.get("y") is None or 
+                            (current_pos.get("x") == 0 and current_pos.get("y") == 0)):
+                            
+                            # 计算Y坐标 - 居中对齐
+                            layer_height = len(layer_nodes) * NODE_HEIGHT
+                            start_y = START_Y + (layer_idx * 50)  # 每层稍微错开
+                            node_y = start_y + (node_idx - len(layer_nodes)/2 + 0.5) * NODE_HEIGHT
+                            
+                            node["position"] = {
+                                "x": float(layer_x),
+                                "y": float(node_y)
+                            }
+                            
+                            print(f"🔧 [布局] {node.get('node_name')} -> 层{layer_idx} 位置({layer_x}, {node_y})")
+            
+            return nodes_data
+        
+        # 应用智能布局
+        task_flow["nodes"] = calculate_hierarchical_layout(task_flow["nodes"], task_flow["edges"])
         
         # 添加实时统计信息
         node_status_count = {}
@@ -765,6 +889,29 @@ async def get_workflow_task_flow(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取工作流任务流程失败: {str(e)}"
+        )
+
+
+@router.get("/workflows/{workflow_instance_id}/task-flow")
+async def get_workflow_instance_task_flow(
+    workflow_instance_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """获取工作流实例任务流程（统一接口 - 支持主工作流和子工作流）"""
+    try:
+        # 直接调用现有的函数，保持逻辑一致
+        result = await get_workflow_task_flow(workflow_instance_id, current_user)
+        
+        # 修改消息以反映这是通过新统一接口调用的
+        if result.get("success"):
+            result["message"] = result["message"].replace("获取实时任务流程成功", "通过统一接口获取工作流实例任务流程成功")
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取工作流实例任务流程失败: {str(e)}"
         )
 
 
@@ -1994,7 +2141,7 @@ async def get_workflow_nodes_detail(
                 detail="工作流实例不存在"
             )
         
-        # 2. 获取详细的节点实例信息（包括处理器信息）
+        # 2. 获取详细的节点实例信息（包括处理器信息和位置信息）
         nodes_query = """
         SELECT 
             ni.node_instance_id,
@@ -2012,6 +2159,8 @@ async def get_workflow_nodes_detail(
             -- 节点定义信息
             n.name as node_name,
             n.type as node_type,
+            n.position_x,
+            n.position_y,
             -- 处理器信息（通过node_processor关联表）
             p.name as processor_name,
             p.type as processor_type,
@@ -2148,6 +2297,11 @@ async def get_workflow_nodes_detail(
                 "node_type": node['node_type'],
                 "status": node['node_status'],
                 "retry_count": node['retry_count'] or 0,
+                # 🔧 新增：位置信息用于前端布局
+                "position": {
+                    "x": float(node['position_x']) if node['position_x'] is not None else None,
+                    "y": float(node['position_y']) if node['position_y'] is not None else None
+                },
                 "input_data": node_input_data,
                 "output_data": node_output_data,
                 "error_message": node['node_error'],
@@ -2433,4 +2587,264 @@ async def get_workflow_instance_deletion_preview(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="获取删除预览失败，请稍后再试"
+        )
+
+
+# ==================== 图形视图细分支持端点 ====================
+
+@router.get("/workflows/{workflow_instance_id}/subdivision-info")
+async def get_workflow_subdivision_info(
+    workflow_instance_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """获取工作流实例的细分信息 - 用于图形视图标记"""
+    try:
+        from ..repositories.task_subdivision.task_subdivision_repository import TaskSubdivisionRepository
+        from ..repositories.instance.task_instance_repository import TaskInstanceRepository
+        from ..models.task_subdivision import SubWorkflowNodeInfo
+        
+        subdivision_repo = TaskSubdivisionRepository()
+        task_repo = TaskInstanceRepository()
+        
+        # 获取该工作流实例的所有任务及其细分信息
+        # 修改查询以适配MySQL语法
+        query = """
+        SELECT 
+            ti.task_instance_id,
+            ti.node_instance_id,
+            ti.task_title,
+            COUNT(ts.subdivision_id) as subdivision_count,
+            GROUP_CONCAT(DISTINCT ts.status) as subdivision_statuses,
+            GROUP_CONCAT(DISTINCT ts.subdivision_id) as subdivision_ids
+        FROM task_instance ti
+        LEFT JOIN task_subdivision ts ON ti.task_instance_id = ts.original_task_id 
+            AND ts.is_deleted = FALSE
+        WHERE ti.workflow_instance_id = %s 
+            AND ti.is_deleted = FALSE
+        GROUP BY ti.task_instance_id, ti.node_instance_id, ti.task_title
+        """
+        
+        results = await subdivision_repo.db.fetch_all(query, workflow_instance_id)
+        
+        # 构建节点细分信息映射
+        node_subdivisions = {}
+        nodes_with_subdivisions = 0
+        total_subdivisions = 0
+        
+        for result in results:
+            node_instance_id = str(result['node_instance_id'])
+            subdivision_count = result['subdivision_count'] or 0
+            
+            # 初始化primary_status，确保总是有值
+            primary_status = None
+            
+            if subdivision_count > 0:
+                nodes_with_subdivisions += 1
+                total_subdivisions += subdivision_count
+                
+                # 确定子工作流状态 - 适配MySQL的GROUP_CONCAT结果
+                statuses_str = result['subdivision_statuses']
+                statuses = []
+                if statuses_str:
+                    statuses = [s.strip() for s in statuses_str.split(',')]
+                
+                if statuses:
+                    # 优先级：failed > running > completed > draft
+                    if 'failed' in statuses:
+                        primary_status = 'failed'
+                    elif 'running' in statuses:
+                        primary_status = 'running'
+                    elif 'completed' in statuses:
+                        primary_status = 'completed'
+                    else:
+                        primary_status = 'draft'
+            
+            node_subdivisions[node_instance_id] = {
+                'node_instance_id': result['node_instance_id'],
+                'has_subdivision': subdivision_count > 0,
+                'subdivision_count': subdivision_count,
+                'subdivision_status': primary_status,
+                'is_expandable': subdivision_count > 0,
+                'expansion_level': 0
+            }
+        
+        return {
+            "success": True,
+            "data": {
+                'workflow_instance_id': workflow_instance_id,
+                'node_subdivisions': node_subdivisions,
+                'nodes_with_subdivisions': nodes_with_subdivisions,
+                'total_subdivisions': total_subdivisions
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"获取工作流细分信息失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取细分信息失败: {str(e)}"
+        )
+
+
+@router.get("/nodes/{node_instance_id}/subdivision-detail")
+async def get_node_subdivision_detail(
+    node_instance_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """获取节点的详细细分信息 - 用于展开显示"""
+    try:
+        from ..repositories.task_subdivision.task_subdivision_repository import TaskSubdivisionRepository
+        from ..repositories.instance.task_instance_repository import TaskInstanceRepository
+        from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+        from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+        from ..models.task_subdivision import SubWorkflowDetail
+        
+        subdivision_repo = TaskSubdivisionRepository()
+        task_repo = TaskInstanceRepository()
+        workflow_repo = WorkflowInstanceRepository()
+        node_repo = NodeInstanceRepository()
+        
+        # 查找该节点实例关联的任务和细分
+        subdivisions_query = """
+        SELECT 
+            ts.*,
+            ti.task_title,
+            w.name as sub_workflow_name,
+            wi.workflow_instance_name as sub_workflow_instance_name,
+            wi.status as sub_workflow_status,
+            wi.created_at as sub_workflow_created_at,
+            wi.started_at as sub_workflow_started_at,
+            wi.completed_at as sub_workflow_completed_at
+        FROM task_subdivision ts
+        JOIN task_instance ti ON ts.original_task_id = ti.task_instance_id
+        LEFT JOIN workflow w ON ts.sub_workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
+        LEFT JOIN workflow_instance wi ON ts.sub_workflow_instance_id = wi.workflow_instance_id
+        WHERE ti.node_instance_id = %s 
+            AND ts.is_deleted = FALSE 
+            AND ti.is_deleted = FALSE
+        ORDER BY ts.subdivision_created_at DESC
+        """
+        
+        subdivisions = await subdivision_repo.db.fetch_all(subdivisions_query, node_instance_id)
+        
+        subdivision_details = []
+        
+        for subdivision in subdivisions:
+            # 获取子工作流的节点和边信息
+            sub_workflow_instance_id = subdivision.get('sub_workflow_instance_id')
+            nodes = []
+            edges = []
+            stats = {
+                'total_nodes': 0,
+                'completed_nodes': 0,
+                'running_nodes': 0,
+                'failed_nodes': 0
+            }
+            
+            if sub_workflow_instance_id:
+                # 获取子工作流的节点实例
+                nodes_query = """
+                SELECT 
+                    ni.*,
+                    n.name as node_name,
+                    n.type as node_type,
+                    n.position_x,
+                    n.position_y,
+                    COUNT(ti.task_instance_id) as task_count
+                FROM node_instance ni
+                LEFT JOIN node n ON ni.node_id = n.node_id
+                LEFT JOIN task_instance ti ON ni.node_instance_id = ti.node_instance_id AND ti.is_deleted = FALSE
+                WHERE ni.workflow_instance_id = %s AND ni.is_deleted = FALSE
+                GROUP BY ni.node_instance_id, n.name, n.type, n.position_x, n.position_y
+                ORDER BY ni.created_at
+                """
+                
+                sub_nodes = await node_repo.db.fetch_all(nodes_query, sub_workflow_instance_id)
+                
+                for node in sub_nodes:
+                    stats['total_nodes'] += 1
+                    status = node.get('status', 'pending')
+                    if status == 'completed':
+                        stats['completed_nodes'] += 1
+                    elif status == 'running':
+                        stats['running_nodes'] += 1
+                    elif status == 'failed':
+                        stats['failed_nodes'] += 1
+                    
+                    nodes.append({
+                        'node_instance_id': str(node['node_instance_id']),
+                        'node_id': str(node['node_id']),
+                        'node_name': node.get('node_name', '未命名'),
+                        'node_type': node.get('node_type', 'process'),
+                        'status': status,
+                        'task_count': node.get('task_count', 0),
+                        # 🔧 新增：位置信息用于前端布局
+                        'position': {
+                            'x': float(node['position_x']) if node['position_x'] is not None else None,
+                            'y': float(node['position_y']) if node['position_y'] is not None else None
+                        },
+                        'created_at': node['created_at'].isoformat() if node.get('created_at') else None,
+                        'completed_at': node['completed_at'].isoformat() if node.get('completed_at') else None
+                    })
+                
+                # 获取子工作流的连接关系
+                edges_query = """
+                SELECT 
+                    nc.*,
+                    fn.name as from_node_name,
+                    tn.name as to_node_name
+                FROM node_connection nc
+                JOIN node_instance fni ON nc.from_node_id = fni.node_id AND fni.workflow_instance_id = %s
+                JOIN node_instance tni ON nc.to_node_id = tni.node_id AND tni.workflow_instance_id = %s
+                JOIN node fn ON nc.from_node_id = fn.node_id
+                JOIN node tn ON nc.to_node_id = tn.node_id
+                WHERE nc.workflow_id = (
+                    SELECT workflow_base_id FROM workflow_instance WHERE workflow_instance_id = %s
+                )
+                """
+                
+                sub_edges = await subdivision_repo.db.fetch_all(edges_query, sub_workflow_instance_id, sub_workflow_instance_id, sub_workflow_instance_id)
+                
+                for edge in sub_edges:
+                    edges.append({
+                        'id': str(edge.get('connection_id', f"edge-{edge['from_node_id']}-{edge['to_node_id']}")),
+                        'source': str(edge['from_node_id']),
+                        'target': str(edge['to_node_id']),
+                        'label': edge.get('condition_config'),
+                        'from_node_name': edge.get('from_node_name'),
+                        'to_node_name': edge.get('to_node_name')
+                    })
+            
+            subdivision_detail = {
+                'subdivision_id': subdivision['subdivision_id'],
+                'sub_workflow_instance_id': sub_workflow_instance_id,
+                'subdivision_name': subdivision['subdivision_name'],
+                'status': subdivision.get('sub_workflow_status', subdivision['status']),
+                'nodes': nodes,
+                'edges': edges,
+                'total_nodes': stats['total_nodes'],
+                'completed_nodes': stats['completed_nodes'],
+                'running_nodes': stats['running_nodes'],
+                'failed_nodes': stats['failed_nodes'],
+                'created_at': subdivision['subdivision_created_at'].isoformat() if subdivision.get('subdivision_created_at') else None,
+                'started_at': subdivision['sub_workflow_started_at'].isoformat() if subdivision.get('sub_workflow_started_at') else None,
+                'completed_at': subdivision['sub_workflow_completed_at'].isoformat() if subdivision.get('sub_workflow_completed_at') else None
+            }
+            
+            subdivision_details.append(subdivision_detail)
+        
+        return {
+            "success": True,
+            "data": {
+                'node_instance_id': node_instance_id,
+                'has_subdivision': len(subdivision_details) > 0,
+                'subdivisions': subdivision_details
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"获取节点细分详情失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取节点细分详情失败: {str(e)}"
         )

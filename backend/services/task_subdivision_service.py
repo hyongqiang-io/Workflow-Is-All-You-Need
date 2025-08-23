@@ -490,10 +490,28 @@ class TaskSubdivisionService:
             
             task_repo = TaskInstanceRepository()
             
-            # 仅更新context_data和instructions，不改变任务状态
+            # 🔧 修复：将子工作流结果保存到output_data而不是instructions文本
+            # 这样前端就能正确显示结构化的结果数据
+            subdivision_output_data = {
+                'type': 'subdivision_result',
+                'subdivision_id': str(subdivision_id),
+                'final_output': clean_results.get('final_output', ''),
+                'has_end_node_output': clean_results.get('has_end_node_output', False),
+                'task_results': clean_results.get('task_results', []),
+                'execution_summary': {
+                    'total_tasks': clean_results.get('total_tasks', 0),
+                    'completed_tasks': clean_results.get('completed_tasks', 0),
+                    'failed_tasks': clean_results.get('failed_tasks', 0),
+                    'status': clean_results.get('status', 'unknown')
+                },
+                'completion_time': now_utc().isoformat(),
+                'auto_submitted': False
+            }
+            
             task_update = TaskInstanceUpdate(
+                output_data=json.dumps(subdivision_output_data, ensure_ascii=False, indent=2),
                 context_data=json.dumps(result_data, ensure_ascii=False, indent=2),
-                instructions=f"细分工作流已完成，结果可作为提交参考。\n\n【参考结果】:\n{formatted_output}"
+                instructions="细分工作流已完成，结果数据已可用。用户可查看结果并手动提交任务。"
             )
             
             # 更新任务上下文（不改变状态）
@@ -504,16 +522,13 @@ class TaskSubdivisionService:
                 logger.info(f"   - 任务状态: {updated_task.get('status')} (保持不变)")
                 logger.info(f"   - 用户可在任务详情中查看细分结果并手动提交")
                 
-                # 🔧 重要修复：细分工作流完成后应该更新父节点实例状态
-                # 即使任务状态保持不变（供用户手动提交），节点实例也应该标记为完成
-                # 这样后续节点才能被触发
-                try:
-                    await self._update_parent_node_instance_status(original_task_id, formatted_output)
-                    logger.info(f"✅ 父节点实例状态更新完成")
-                except Exception as node_update_error:
-                    logger.error(f"❌ 更新父节点实例状态失败: {node_update_error}")
-                    import traceback
-                    logger.error(f"节点状态更新错误详情: {traceback.format_exc()}")
+                # 🔧 重要修改：移除自动更新父节点状态的逻辑
+                # 细分工作流完成后，不应该自动将父节点标记为已完成
+                # 只有当用户手动提交父任务后，父节点才应该标记为已完成
+                # 这样确保了用户可以查看、编辑并确认细分结果后再提交
+                logger.info(f"💡 细分工作流已完成，但保持父节点状态不变，等待用户手动提交任务")
+                logger.info(f"   - 父节点状态将在用户提交任务时由执行引擎负责更新")
+                
             else:
                 logger.error(f"❌ 保存细分结果失败: {original_task_id}")
             
@@ -522,8 +537,25 @@ class TaskSubdivisionService:
             import traceback
             logger.error(f"详细错误: {traceback.format_exc()}")
     
-    async def _update_parent_node_instance_status(self, original_task_id: uuid.UUID, output_data: str):
-        """更新父节点实例状态为已完成"""
+    async def _update_parent_node_instance_status_deprecated(self, original_task_id: uuid.UUID, output_data: str):
+        """
+        🚫 已废弃：自动更新父节点实例状态为已完成
+        
+        此函数已被废弃，因为它会在子工作流完成后自动将父节点标记为已完成，
+        这与用户需要手动确认和提交任务的预期行为不符。
+        
+        正确的流程应该是：
+        1. 子工作流完成 -> 保存结果供用户参考
+        2. 用户查看结果，编辑并提交任务
+        3. 任务提交时，执行引擎负责更新节点状态
+        
+        Args:
+            original_task_id: 原始任务ID
+            output_data: 输出数据
+            
+        Note:
+            此函数保留仅用于记录历史逻辑，不应再被调用
+        """
         try:
             logger.info(f"🔄 开始更新父节点实例状态: 任务 {original_task_id}")
             

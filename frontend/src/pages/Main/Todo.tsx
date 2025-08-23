@@ -155,7 +155,27 @@ const Todo: React.FC = () => {
       return false;
     }
     
-    // 检查context_data中的具体标记字段
+    // 🔧 修复：优先检查output_data中的细分结果（新格式）
+    const outputData = task.output_data;
+    if (outputData) {
+      try {
+        let parsedOutput;
+        if (typeof outputData === 'string') {
+          parsedOutput = JSON.parse(outputData);
+        } else if (typeof outputData === 'object') {
+          parsedOutput = outputData;
+        }
+        
+        // 检查新的细分结果格式
+        if (parsedOutput && parsedOutput.type === 'subdivision_result' && parsedOutput.auto_submitted === false) {
+          return true;
+        }
+      } catch (error) {
+        console.warn('解析任务output_data失败:', error);
+      }
+    }
+    
+    // 回退检查：检查context_data中的具体标记字段（兼容旧格式）
     const contextData = task.context_data;
     if (contextData) {
       try {
@@ -418,86 +438,76 @@ const Todo: React.FC = () => {
     try {
       console.log('📝 选择子工作流结果:', subWorkflow);
       
-      // 获取子工作流的执行结果
+      // 获取subdivision_id
+      const subdivisionId = subWorkflow.subdivision_id;
+      if (!subdivisionId) {
+        message.error('无法获取细分ID');
+        return;
+      }
+      
+      console.log('🔍 正在获取子工作流的实际执行结果...');
+      message.loading('正在获取子工作流执行结果...', 0);
+      
+      // 调用新的API端点获取完整的子工作流执行结果
+      const response = await taskSubdivisionApi.getSubdivisionWorkflowResults(subdivisionId);
+      message.destroy(); // 销毁loading消息
+      
+      // 修复：根据API拦截器的实现，response已经是解构后的业务数据
+      // 但TypeScript认为它是AxiosResponse，所以需要类型断言
+      const responseData = response as any;
+      
+      if (!responseData || !responseData.success || !responseData.data) {
+        message.error('获取子工作流结果失败');
+        return;
+      }
+      
+      const resultData = responseData.data;
+      console.log('✅ 获取到子工作流执行结果:', resultData);
+      
+      // 优先使用后端格式化的结果
       let resultText = '';
       
-      // 从不同可能的位置提取结果
-      const workflowDetails = subWorkflow.workflowDetails || subWorkflow;
-      
-      if (workflowDetails.result_summary) {
-        resultText = workflowDetails.result_summary;
-      } else if (workflowDetails.output_data) {
-        // 如果有输出数据，格式化显示
-        try {
-          const outputData = typeof workflowDetails.output_data === 'string' 
-            ? JSON.parse(workflowDetails.output_data) 
-            : workflowDetails.output_data;
-          
-          console.log('🔍 分析输出数据结构:', outputData);
-          
-          // 检查是否是结束节点的输出格式（包含整合的上游结果）
-          if (outputData.workflow_completed && outputData.upstream_results) {
-            console.log('✅ 发现结束节点整合结果');
-            
-            // 构建整合结果的展示文本
-            const upstreamResults = outputData.upstream_results;
-            const upstreamCount = Object.keys(upstreamResults).length;
-            
-            if (upstreamCount > 0) {
-              let formattedResults = `=== ${subWorkflow.subdivision_name || '子工作流'} 执行结果 ===\n\n`;
-              formattedResults += `${outputData.summary}\n`;
-              formattedResults += `完成时间: ${outputData.completion_time}\n\n`;
-              formattedResults += `执行详情：\n`;
-              
-              Object.entries(upstreamResults).forEach(([nodeName, nodeResult]: [string, any]) => {
-                formattedResults += `\n🔹 ${nodeName}：\n`;
-                
-                // 提取节点的输出数据
-                const nodeOutput = nodeResult.output_data;
-                if (typeof nodeOutput === 'string') {
-                  formattedResults += nodeOutput;
-                } else if (typeof nodeOutput === 'object' && nodeOutput) {
-                  // 如果是对象，尝试提取有意义的内容
-                  if (nodeOutput.result) {
-                    formattedResults += nodeOutput.result;
-                  } else if (nodeOutput.content) {
-                    formattedResults += nodeOutput.content;
-                  } else if (nodeOutput.output) {
-                    formattedResults += nodeOutput.output;
-                  } else {
-                    // 格式化显示对象内容
-                    const formatted = JSON.stringify(nodeOutput, null, 2);
-                    formattedResults += formatted;
-                  }
-                } else {
-                  formattedResults += '无输出数据';
-                }
-                formattedResults += '\n';
-              });
-              
-              formattedResults += '\n=== 子工作流执行完成 ===';
-              resultText = formattedResults;
-            } else {
-              resultText = `=== ${subWorkflow.subdivision_name || '子工作流'} 执行结果 ===\n\n${outputData.summary || '工作流已完成，但未找到具体结果'}`;
-            }
+      if (resultData.formatted_result) {
+        // 使用后端格式化的完整结果
+        resultText = resultData.formatted_result;
+        console.log('📄 使用后端格式化的结果');
+      } else if (resultData.final_output) {
+        // 使用最终输出
+        const finalOutput = resultData.final_output;
+        const subdivisionName = resultData.subdivision_name || subWorkflow.subdivision_name || '子工作流';
+        
+        resultText = `=== ${subdivisionName} 执行结果 ===\n\n${finalOutput}`;
+        
+        // 添加执行统计信息
+        if (resultData.total_tasks || resultData.completed_tasks) {
+          resultText += `\n\n📊 执行统计:\n`;
+          resultText += `   • 总任务数: ${resultData.total_tasks || 0}\n`;
+          resultText += `   • 完成任务数: ${resultData.completed_tasks || 0}\n`;
+          if (resultData.failed_tasks > 0) {
+            resultText += `   • 失败任务数: ${resultData.failed_tasks}\n`;
           }
-          // 如果有直接的result字段
-          else if (outputData.result) {
-            resultText = outputData.result;
-          }
-          // 其他格式的输出数据
-          else {
-            resultText = JSON.stringify(outputData, null, 2);
-          }
-        } catch (e) {
-          console.warn('解析输出数据失败，使用原始数据:', e);
-          resultText = workflowDetails.output_data;
         }
+        
+        console.log('📄 使用最终输出构建结果');
       } else {
-        // 构造基本的结果描述
-        const status = workflowDetails.status || '未知';
-        const name = workflowDetails.subdivision_name || subWorkflow.subdivision_name || '子工作流';
-        resultText = `=== ${name} 执行结果 ===\n\n状态: ${status}\n执行时间: ${workflowDetails.completed_at || workflowDetails.created_at || '未知'}\n\n请根据子工作流的执行情况补充具体的任务完成结果。`;
+        // 回退到基本信息
+        const subdivisionName = resultData.subdivision_name || subWorkflow.subdivision_name || '子工作流';
+        const status = resultData.workflow_status || '未知';
+        
+        resultText = `=== ${subdivisionName} 执行结果 ===\n\n状态: ${status}\n\n`;
+        
+        if (resultData.total_tasks) {
+          resultText += `执行统计:\n`;
+          resultText += `   • 总任务数: ${resultData.total_tasks}\n`;
+          resultText += `   • 完成任务数: ${resultData.completed_tasks}\n`;
+          if (resultData.failed_tasks > 0) {
+            resultText += `   • 失败任务数: ${resultData.failed_tasks}\n`;
+          }
+          resultText += '\n';
+        }
+        
+        resultText += '请根据子工作流的执行情况补充具体的任务完成结果。';
+        console.log('📄 使用基本信息构建结果');
       }
       
       // 获取当前表单的结果值
@@ -527,8 +537,9 @@ const Todo: React.FC = () => {
       }
       
     } catch (error) {
+      message.destroy(); // 确保销毁loading消息
       console.error('❌ 选择子工作流结果失败:', error);
-      message.error('获取子工作流结果失败');
+      message.error('获取子工作流结果失败，请稍后重试');
     }
   };
 
@@ -716,42 +727,81 @@ const Todo: React.FC = () => {
 
   // 处理细分结果编辑
   const handleEditSubdivisionResult = (task: any) => {
-    // 模拟细分工作流结果数据
-    const mockSubdivisionResult = {
-      subdivision_id: 'sub-' + Math.random().toString(36).substr(2, 9),
-      subdivision_name: '数据分析细分流程',
-      original_result: `=== 细分工作流执行结果 ===
-
-📊 执行统计:
-   • 总任务数: 4
-   • 完成任务数: 4
-   • 执行时长: 15分钟
-
-📋 执行结果:
-1. 数据加载任务: 成功加载销售数据文件 sales_q4.csv，包含 1250 条记录
-2. 数据清洗任务: 清洗异常数据，移除 15 条无效记录，保留 1235 条有效记录
-3. 数据分析任务: 完成销售趋势分析，识别出 Q4 季度销售额增长 18.5%
-4. 报告生成任务: 生成 Excel 分析报告，包含图表和详细数据表
-
-📝 任务详情:
-   1. 数据加载
-      结果: 成功加载销售数据，数据格式验证通过
-   2. 数据清洗  
-      结果: 清理了缺失值和异常值，数据质量提升
-   3. 数据分析
-      结果: 生成了销售趋势图表和关键指标分析
-   4. 报告生成
-      结果: 输出格式为 Excel，包含所有分析结果
-
-✅ 细分工作流已成功完成所有任务。`,
-      execution_summary: '数据分析细分流程执行完成',
-      total_tasks: 4,
-      completed_tasks: 4,
-      execution_duration: '15分钟'
-    };
-
+    console.log('🔧 编辑细分结果，任务数据:', task);
+    
+    // 🔧 修复：从实际的output_data中提取细分结果
+    let subdivisionResult = null;
+    
+    // 尝试从output_data获取（新格式）
+    if (task.output_data) {
+      try {
+        let parsedOutput;
+        if (typeof task.output_data === 'string') {
+          parsedOutput = JSON.parse(task.output_data);
+        } else {
+          parsedOutput = task.output_data;
+        }
+        
+        if (parsedOutput && parsedOutput.type === 'subdivision_result') {
+          subdivisionResult = {
+            subdivision_id: parsedOutput.subdivision_id,
+            subdivision_name: `细分任务 ${parsedOutput.subdivision_id.slice(0, 8)}`,
+            original_result: parsedOutput.final_output || '细分工作流执行完成',
+            total_tasks: parsedOutput.execution_summary?.total_tasks || 0,
+            completed_tasks: parsedOutput.execution_summary?.completed_tasks || 0,
+            failed_tasks: parsedOutput.execution_summary?.failed_tasks || 0,
+            execution_summary: `任务执行完成：${parsedOutput.execution_summary?.completed_tasks || 0}/${parsedOutput.execution_summary?.total_tasks || 0}`
+          };
+        }
+      } catch (error) {
+        console.warn('解析output_data失败:', error);
+      }
+    }
+    
+    // 回退：从context_data获取（兼容旧格式）
+    if (!subdivisionResult && task.context_data) {
+      try {
+        let parsedContext;
+        if (typeof task.context_data === 'string') {
+          parsedContext = JSON.parse(task.context_data);
+        } else {
+          parsedContext = task.context_data;
+        }
+        
+        if (parsedContext && parsedContext.execution_results) {
+          const results = parsedContext.execution_results;
+          subdivisionResult = {
+            subdivision_id: parsedContext.subdivision_id,
+            subdivision_name: `细分任务 ${parsedContext.subdivision_id?.slice(0, 8) || '未知'}`,
+            original_result: results.final_output || '细分工作流执行完成',
+            total_tasks: results.total_tasks || 0,
+            completed_tasks: results.completed_tasks || 0,
+            failed_tasks: results.failed_tasks || 0,
+            execution_summary: `任务执行完成：${results.completed_tasks || 0}/${results.total_tasks || 0}`
+          };
+        }
+      } catch (error) {
+        console.warn('解析context_data失败:', error);
+      }
+    }
+    
+    // 如果都没有找到数据，使用基础信息
+    if (!subdivisionResult) {
+      subdivisionResult = {
+        subdivision_id: 'unknown-subdivision',
+        subdivision_name: '细分工作流结果',
+        original_result: task.instructions || '细分工作流执行完成，详细结果请查看任务说明。',
+        total_tasks: 1,
+        completed_tasks: 1,
+        failed_tasks: 0,
+        execution_summary: '基于现有信息构建的细分结果'
+      };
+    }
+    
+    console.log('📋 提取的细分结果数据:', subdivisionResult);
+    
     setCurrentTask(task);
-    setSubdivisionResultData(mockSubdivisionResult);
+    setSubdivisionResultData(subdivisionResult);
     setSubdivisionResultEditVisible(true);
   };
 
