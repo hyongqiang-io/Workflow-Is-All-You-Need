@@ -129,10 +129,14 @@ const LayoutAlgorithmTest: React.FC = () => {
     console.log('🧪 [测试] 开始布局算法测试');
     console.log('   - 节点数量:', testNodes.length);
     console.log('   - 边数量:', testEdges.length);
+    console.log('   - 测试节点详情:', testNodes.map(n => ({ id: n.node_instance_id, name: n.node_name, type: n.node_type })));
+    console.log('   - 测试边详情:', testEdges.map(e => ({ id: e.id, source: e.source, target: e.target })));
     
     // 验证和修复边数据
+    console.log('🔍 [测试] 调用validateAndFixEdges...');
     const validatedEdges = validateAndFixEdges(testNodes, testEdges);
     console.log('✅ [测试] 边验证完成，有效边:', validatedEdges.length);
+    console.log('   - 验证后的边:', validatedEdges);
     
     // 如果没有有效边，生成默认连接
     const finalEdges = validatedEdges.length > 0 ? 
@@ -140,10 +144,12 @@ const LayoutAlgorithmTest: React.FC = () => {
       generateMissingConnections(testNodes);
     
     console.log('🎯 [测试] 最终边数据:', finalEdges.length);
+    console.log('   - 最终边详情:', finalEdges);
     
-    // 计算布局
+    // 计算布局 - 这里会调用我们修复的算法
+    console.log('📐 [测试] 调用calculateDependencyBasedLayout...');
     const positions = calculateDependencyBasedLayout(testNodes, finalEdges);
-    console.log('📐 [测试] 布局计算完成');
+    console.log('📍 [测试] 布局计算完成，位置数据:', positions);
     
     // 转换为ReactFlow格式
     const flowNodes: Node[] = testNodes.map((node, index) => ({

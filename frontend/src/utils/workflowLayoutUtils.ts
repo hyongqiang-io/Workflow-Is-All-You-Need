@@ -26,41 +26,69 @@ interface WorkflowEdge {
  * 验证和修复边数据中的ID映射问题
  */
 export const validateAndFixEdges = (nodes: any[], edges: any[]): WorkflowEdge[] => {
+  console.log('🔍 [边验证] 开始验证和修复边数据');
+  console.log('   - 输入节点数:', nodes.length);
+  console.log('   - 输入边数:', edges.length);
+  console.log('   - 输入节点:', nodes.map(n => ({ id: n.node_instance_id || n.id, name: n.node_name || n.name })));
+  console.log('   - 输入边:', edges.map(e => ({ id: e.id, source: e.source, target: e.target })));
+  
   // 创建节点ID映射表 - 支持多种ID格式
   const nodeIdMap = new Map<string, string>();
   
+  console.log('📋 [边验证] 创建节点ID映射表:');
   nodes.forEach(node => {
     const primaryId = node.node_instance_id || node.id;
     
     // 建立各种可能的ID映射关系
-    if (node.node_instance_id) nodeIdMap.set(node.node_instance_id, primaryId);
-    if (node.id && node.id !== primaryId) nodeIdMap.set(node.id, primaryId);
-    if (node.node_id) nodeIdMap.set(node.node_id, primaryId);
+    if (node.node_instance_id) {
+      nodeIdMap.set(node.node_instance_id, primaryId);
+      console.log(`   - 映射: ${node.node_instance_id} -> ${primaryId}`);
+    }
+    if (node.id && node.id !== primaryId) {
+      nodeIdMap.set(node.id, primaryId);
+      console.log(`   - 映射: ${node.id} -> ${primaryId}`);
+    }
+    if (node.node_id) {
+      nodeIdMap.set(node.node_id, primaryId);
+      console.log(`   - 映射: ${node.node_id} -> ${primaryId}`);
+    }
   });
+  
+  console.log('🔗 [边验证] ID映射表构建完成:', Array.from(nodeIdMap.entries()));
   
   // 修复边数据
   const fixedEdges: WorkflowEdge[] = [];
   
-  edges.forEach(edge => {
+  console.log('🔧 [边验证] 开始修复边数据:');
+  edges.forEach((edge, index) => {
+    console.log(`   - 处理边 ${index + 1}/${edges.length}: ${edge.source} -> ${edge.target}`);
+    
     const sourceId = nodeIdMap.get(edge.source) || edge.source;
     const targetId = nodeIdMap.get(edge.target) || edge.target;
+    
+    console.log(`     修复后: ${sourceId} -> ${targetId}`);
     
     // 验证修复后的ID是否存在
     const sourceExists = nodes.some(n => (n.node_instance_id || n.id) === sourceId);
     const targetExists = nodes.some(n => (n.node_instance_id || n.id) === targetId);
     
+    console.log(`     源节点存在: ${sourceExists}, 目标节点存在: ${targetExists}`);
+    
     if (sourceExists && targetExists) {
-      fixedEdges.push({
+      const fixedEdge = {
         id: edge.id || `${sourceId}-${targetId}`,
         source: sourceId,
         target: targetId,
         label: edge.label
-      });
+      };
+      fixedEdges.push(fixedEdge);
+      console.log(`   ✅ 添加有效边:`, fixedEdge);
     } else {
-      console.warn(`跳过无效边: ${edge.source} -> ${edge.target} (修复后: ${sourceId} -> ${targetId})`);
+      console.warn(`   ❌ 跳过无效边: ${edge.source} -> ${edge.target} (修复后: ${sourceId} -> ${targetId})`);
     }
   });
   
+  console.log(`✅ [边验证] 边数据修复完成，有效边数: ${fixedEdges.length}/${edges.length}`);
   return fixedEdges;
 };
 
@@ -145,13 +173,19 @@ export const calculateDependencyBasedLayout = (
   
   if (nodes.length === 0) return positions;
   
-  console.log('📐 [布局算法] 开始基于连接关系的布局计算，节点数:', nodes.length, '边数:', edges.length);
+  console.log('📐 [布局算法] 开始基于连接关系的布局计算');
+  console.log('   - 节点数:', nodes.length);
+  console.log('   - 边数:', edges.length);
+  console.log('   - 节点详情:', nodes.map(n => ({ id: n.node_instance_id || n.id, name: n.node_name || n.name, type: n.node_type || n.type })));
+  console.log('   - 边详情:', edges.map(e => ({ id: e.id, source: e.source, target: e.target, label: e.label })));
   
   // **核心修复：优先基于连接关系排列**
   if (edges.length > 0) {
+    console.log('✅ [布局算法] 有边数据，使用连接关系优先布局');
     // 有连接关系时，严格按照连接关系排列
     return layoutByConnections(nodes, edges);
   } else {
+    console.log('⚠️ [布局算法] 无边数据，使用节点属性排序作为回退');
     // 无连接关系时，才考虑节点类型和时间
     return layoutByNodeAttributes(nodes);
   }
@@ -162,6 +196,8 @@ export const calculateDependencyBasedLayout = (
  */
 const layoutByConnections = (nodes: any[], edges: WorkflowEdge[]): Record<string, { x: number; y: number }> => {
   console.log('🔗 [布局算法] 使用连接关系优先布局');
+  console.log('   - 输入节点数:', nodes.length);
+  console.log('   - 输入边数:', edges.length);
   
   // 构建依赖图
   const dependents = new Map<string, string[]>();
@@ -169,21 +205,51 @@ const layoutByConnections = (nodes: any[], edges: WorkflowEdge[]): Record<string
   const nodeIdMap = new Map<string, any>();
   
   // 初始化节点映射
+  console.log('📋 [连接优先] 初始化节点映射:');
   nodes.forEach(node => {
     const nodeId = node.node_instance_id || node.id;
     dependents.set(nodeId, []);
     dependencies.set(nodeId, []);
     nodeIdMap.set(nodeId, node);
+    console.log(`   - 节点: ${nodeId} (${node.node_name || node.name})`);
   });
   
   // **关键：严格按照边的连接关系构建依赖**
-  edges.forEach(edge => {
+  console.log('🔗 [连接优先] 构建依赖关系:');
+  let validEdgeCount = 0;
+  edges.forEach((edge, index) => {
+    console.log(`   - 处理边 ${index + 1}/${edges.length}: ${edge.source} -> ${edge.target}`);
+    console.log(`     source存在: ${dependents.has(edge.source)}, target存在: ${dependencies.has(edge.target)}`);
+    
     if (dependents.has(edge.source) && dependencies.has(edge.target)) {
       dependents.get(edge.source)!.push(edge.target);
       dependencies.get(edge.target)!.push(edge.source);
-      console.log(`🔗 [连接优先] 添加连接依赖: ${edge.source} -> ${edge.target}`);
+      validEdgeCount++;
+      console.log(`   ✅ 成功添加连接依赖: ${edge.source} -> ${edge.target}`);
     } else {
-      console.warn(`⚠️ [连接优先] 跳过无效连接: ${edge.source} -> ${edge.target}`);
+      console.warn(`   ❌ 跳过无效连接: ${edge.source} -> ${edge.target}`);
+      console.warn(`     - 可用的source节点: [${Array.from(dependents.keys()).join(', ')}]`);
+      console.warn(`     - 可用的target节点: [${Array.from(dependencies.keys()).join(', ')}]`);
+    }
+  });
+  
+  console.log(`📊 [连接优先] 依赖关系构建完成，有效边数: ${validEdgeCount}/${edges.length}`);
+  
+  // 显示最终的依赖关系图
+  console.log('📈 [连接优先] 最终依赖关系图:');
+  dependents.forEach((targets, sourceId) => {
+    const sourceName = nodeIdMap.get(sourceId)?.node_name || sourceId;
+    if (targets.length > 0) {
+      const targetNames = targets.map(tId => nodeIdMap.get(tId)?.node_name || tId);
+      console.log(`   ${sourceName} -> [${targetNames.join(', ')}]`);
+    }
+  });
+  
+  dependencies.forEach((sources, targetId) => {
+    const targetName = nodeIdMap.get(targetId)?.node_name || targetId;
+    if (sources.length > 0) {
+      const sourceNames = sources.map(sId => nodeIdMap.get(sId)?.node_name || sId);
+      console.log(`   [${sourceNames.join(', ')}] -> ${targetName}`);
     }
   });
   

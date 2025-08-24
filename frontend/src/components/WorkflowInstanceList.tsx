@@ -155,234 +155,6 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
 
 
 
-  // 计算基于层次的节点布局
-  const calculateNodeLayout = (nodes: any[], edges: any[] = []) => {
-    console.log('📊 [布局算法] 开始计算节点布局');
-    console.log('   - 输入节点数量:', nodes.length);
-    console.log('   - 输入边数量:', edges.length);
-    
-    // 构建邻接列表
-    const adjacencyList: { [key: string]: string[] } = {};
-    const inDegree: { [key: string]: number } = {};
-    
-    // 初始化所有节点
-    nodes.forEach(node => {
-      const nodeId = node.node_instance_id;
-      if (nodeId) {
-        adjacencyList[nodeId] = [];
-        inDegree[nodeId] = 0;
-      }
-    });
-    
-    console.log('📊 [布局算法] 初始化节点:', Object.keys(adjacencyList));
-    
-    // 构建图结构
-    edges.forEach(edge => {
-      const source = edge.source;
-      const target = edge.target;
-      
-      if (source && target && adjacencyList[source] && inDegree[target] !== undefined) {
-        adjacencyList[source].push(target);
-        inDegree[target]++;
-        console.log('🔗 [布局算法] 添加边:', source, '->', target);
-      } else {
-        console.warn('⚠️ [布局算法] 跳过无效边:', { source, target, 源存在: !!adjacencyList[source], 目标存在: inDegree[target] !== undefined });
-      }
-    });
-    
-    console.log('📊 [布局算法] 节点入度:', inDegree);
-    console.log('📊 [布局算法] 邻接列表:', adjacencyList);
-    
-    // 智能起始节点检测
-    const startNodes: string[] = [];
-    const endNodes: string[] = [];
-    
-    // 优先使用节点类型判断
-    nodes.forEach(node => {
-      const nodeId = node.node_instance_id;
-      if (nodeId) {
-        const nodeType = node.node_type?.toLowerCase() || '';
-        const nodeName = node.node_name?.toLowerCase() || '';
-        
-        if (nodeType === 'start' || nodeName.includes('start') || nodeName.includes('开始')) {
-          startNodes.push(nodeId);
-          console.log('🚀 [布局算法] 识别start节点:', nodeId, '(', node.node_name, ')');
-        } else if (nodeType === 'end' || nodeName.includes('end') || nodeName.includes('结束')) {
-          endNodes.push(nodeId);
-          console.log('🏁 [布局算法] 识别end节点:', nodeId, '(', node.node_name, ')');
-        }
-      }
-    });
-    
-    // 拓扑排序分层
-    const layers: string[][] = [];
-    const queue: string[] = [];
-    const processed = new Set<string>();
-    
-    // 如果有明确的start节点，优先使用
-    if (startNodes.length > 0) {
-      startNodes.forEach(nodeId => {
-        queue.push(nodeId);
-        console.log('🏁 [布局算法] 使用start节点作为起始:', nodeId);
-      });
-    } else {
-      // 否则使用入度为0的节点
-      Object.keys(inDegree).forEach(nodeId => {
-        if (inDegree[nodeId] === 0) {
-          queue.push(nodeId);
-          console.log('🏁 [布局算法] 使用入度为0的节点作为起始:', nodeId);
-        }
-      });
-    }
-    
-    // 如果没有入度为0的节点，取第一个节点作为起始
-    if (queue.length === 0 && nodes.length > 0) {
-      const firstNodeId = nodes[0].node_instance_id;
-      if (firstNodeId) {
-        queue.push(firstNodeId);
-        console.log('🏁 [布局算法] 使用首个节点作为起始:', firstNodeId);
-      }
-    }
-    
-    // 按层次分组节点
-    let layerIndex = 0;
-    while (queue.length > 0) {
-      const currentLayer: string[] = [];
-      const currentLevelSize = queue.length;
-      
-      console.log(`🎆 [布局算法] 处理第 ${layerIndex} 层，节点数量: ${currentLevelSize}`);
-      
-      for (let i = 0; i < currentLevelSize; i++) {
-        const nodeId = queue.shift()!;
-        currentLayer.push(nodeId);
-        processed.add(nodeId);
-        
-        const nodeName = nodes.find(n => n.node_instance_id === nodeId)?.node_name || nodeId;
-        console.log(`   - 添加节点到第 ${layerIndex} 层: ${nodeName} (${nodeId})`);
-        
-        // 将邻居节点的入度减1
-        adjacencyList[nodeId].forEach(neighbor => {
-          inDegree[neighbor]--;
-          console.log(`     - 更新邻居 ${neighbor} 入度: ${inDegree[neighbor]}`);
-          if (inDegree[neighbor] === 0 && !processed.has(neighbor)) {
-            queue.push(neighbor);
-            console.log(`     - 添加邻居到队列: ${neighbor}`);
-          }
-        });
-      }
-      
-      if (currentLayer.length > 0) {
-        layers.push(currentLayer);
-        console.log(`✅ [布局算法] 第 ${layerIndex} 层完成:`, currentLayer.map(id => {
-          const node = nodes.find(n => n.node_instance_id === id);
-          return `${node?.node_name}(${id})`;
-        }));
-      }
-      layerIndex++;
-    }
-    
-    // 处理未处理的节点（可能存在循环）
-    const unprocessed = nodes.filter(node => !processed.has(node.node_instance_id));
-    if (unprocessed.length > 0) {
-      const unprocessedIds = unprocessed.map(node => node.node_instance_id);
-      layers.push(unprocessedIds);
-      console.log('🔄 [布局算法] 添加未处理节点:', unprocessedIds.map(id => {
-        const node = nodes.find(n => n.node_instance_id === id);
-        return `${node?.node_name}(${id})`;
-      }));
-    }
-    
-    console.log('🏗️ [布局算法] 最终层次分组:', layers.map((layer, index) => ({
-      层级: index,
-      节点: layer.map(id => {
-        const node = nodes.find(n => n.node_instance_id === id);
-        return `${node?.node_name}(${id})`;
-      })
-    })));
-    
-    // 计算节点位置 - 改为垂直排列
-    const nodePositions: { [key: string]: { x: number; y: number } } = {};
-    
-    // 如果没有边数据，按节点类型和名称排序来确定执行顺序
-    if (edges.length === 0) {
-      console.log('📝 [布局算法] 无边数据，使用节点类型排序');
-      
-      // 按执行顺序排序节点
-      const sortedNodes = nodes.sort((a, b) => {
-        // 1. 按节点类型排序 (start -> processor -> end)
-        const typeOrder: Record<string, number> = { 
-          'start': 0, 
-          'process': 1, 
-          'processor': 1, 
-          'human': 1, 
-          'ai': 1, 
-          'decision': 2, 
-          'end': 3 
-        };
-        const aTypeOrder = typeOrder[a.node_type] || 1;
-        const bTypeOrder = typeOrder[b.node_type] || 1;
-        
-        if (aTypeOrder !== bTypeOrder) {
-          return aTypeOrder - bTypeOrder;
-        }
-        
-        // 2. 按创建时间排序
-        if (a.created_at && b.created_at) {
-          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-        }
-        
-        // 3. 按节点名称排序
-        return (a.node_name || '').localeCompare(b.node_name || '');
-      });
-      
-      console.log('📊 [布局算法] 排序后的节点顺序:', sortedNodes.map(n => `${n.node_name}(${n.node_type})`));
-      
-      // 垂直排列节点 - 动态调整间距
-      const verticalGap = Math.max(150, Math.min(220, 800 / Math.max(sortedNodes.length, 1))); // 动态间距，最小150px，最大220px
-      const horizontalCenter = 0; // 水平居中
-      
-      sortedNodes.forEach((node, index) => {
-        const nodeId = node.node_instance_id;
-        const position = {
-          x: horizontalCenter,
-          y: 50 + index * verticalGap // 从顶部开始，按顺序垂直排列
-        };
-        nodePositions[nodeId] = position;
-        console.log(`📍 [布局算法] 节点 ${node.node_name} 垂直位置: (${position.x}, ${position.y})`);
-      });
-    } else {
-      // 有边数据时，使用层次化布局（垂直分层，水平排列）
-      console.log('📈 [布局算法] 有边数据，使用层次化布局');
-      
-      const verticalGap = 200;   // 层间垂直距离
-      const horizontalGap = 250; // 同层节点间水平距离
-      const startX = 200;        // 起始X坐标
-      const startY = 100;        // 起始Y坐标
-      
-      layers.forEach((layer, layerIndex) => {
-        const layerY = startY + layerIndex * verticalGap;
-        
-        // 计算这一层节点的起始X坐标，使节点在该层水平居中
-        const layerWidth = (layer.length - 1) * horizontalGap;
-        const layerStartX = startX - layerWidth / 2;
-        
-        layer.forEach((nodeId, nodeIndex) => {
-          const position = {
-            x: layerStartX + nodeIndex * horizontalGap,
-            y: layerY
-          };
-          nodePositions[nodeId] = position;
-          
-          const nodeName = nodes.find(n => n.node_instance_id === nodeId)?.node_name || nodeId;
-          console.log(`📍 [布局算法] 节点 ${nodeName} 层次位置: Layer ${layerIndex} (${position.x}, ${position.y})`);
-        });
-      });
-    }
-    
-    console.log('🎯 [布局算法] 计算完成，返回位置:', nodePositions);
-    return nodePositions;
-  };
-
   // 将节点数据转换为ReactFlow格式
   const convertToReactFlowData = () => {
     if (!selectedInstance || !nodesDetail?.nodes) {
@@ -399,10 +171,25 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
     const edgesData = nodesDetail?.edges || [];
     
     console.log('🔗 [图形视图] 使用后端返回的边数据:', edgesData);
+
+    // **修复：先处理边数据，再计算布局**
+    console.log('🔗 [图形视图] 开始处理边数据，原始边数量:', edgesData.length);
     
-    // 计算节点布局
-    const nodePositions = calculateNodeLayout(nodesDetail.nodes, edgesData);
-    console.log('📐 [图形视图] 计算的节点位置:', nodePositions);
+    // 验证和修复边数据
+    const validatedEdges = validateAndFixEdges(nodesDetail.nodes, edgesData);
+    console.log('✅ [图形视图] 边数据验证完成，有效边数量:', validatedEdges.length);
+    
+    // 如果没有有效边，生成智能连接
+    const finalEdges = validatedEdges.length > 0 ? 
+      validatedEdges : 
+      generateMissingConnections(nodesDetail.nodes);
+    
+    console.log('🎯 [图形视图] 最终边数据数量:', finalEdges.length);
+    
+    // **关键修复：使用最终边数据计算布局**
+    console.log('📐 [图形视图] 使用最终边数据计算布局...');
+    const nodePositions = calculateDependencyBasedLayout(nodesDetail.nodes, finalEdges);
+    console.log('📍 [图形视图] 布局计算完成，位置数据:', nodePositions);
 
     const flowNodes: Node[] = nodesDetail.nodes.map((node: any, index: number) => {
       const nodeId = node.node_instance_id || `node-${index}`;
@@ -446,19 +233,8 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
       };
     });
 
-    // 使用重构的边数据处理逻辑
-    console.log('🔗 [图形视图] 开始处理边数据，原始边数量:', edgesData.length);
-    
-    // 验证和修复边数据
-    const validatedEdges = validateAndFixEdges(nodesDetail.nodes, edgesData);
-    console.log('✅ [图形视图] 边数据验证完成，有效边数量:', validatedEdges.length);
-    
-    // 如果没有有效边，生成智能连接
-    const finalEdges = validatedEdges.length > 0 ? 
-      validatedEdges : 
-      generateMissingConnections(nodesDetail.nodes);
-    
-    console.log('🎯 [图形视图] 最终边数据数量:', finalEdges.length);
+    // **使用已经处理好的边数据，不再重复处理**
+    console.log('🎯 [图形视图] 直接使用已处理的边数据构建ReactFlow边');
     
     // 构建ReactFlow边
     const flowEdges: Edge[] = finalEdges.map(edge => ({
