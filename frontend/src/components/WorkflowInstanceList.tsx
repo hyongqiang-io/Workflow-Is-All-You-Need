@@ -18,6 +18,12 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import { executionAPI } from '../services/api';
 import { useSubWorkflowExpansion } from '../hooks/useSubWorkflowExpansion';
+// 导入重构的布局工具函数
+import { 
+  validateAndFixEdges, 
+  generateMissingConnections, 
+  calculateDependencyBasedLayout 
+} from '../utils/workflowLayoutUtils';
 import SubWorkflowContainer from './SubWorkflowContainer';
 import WorkflowTemplateConnectionGraph from './WorkflowTemplateConnectionGraph';
 
@@ -440,54 +446,36 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
       };
     });
 
-    // 直接使用后端返回的边数据构建ReactFlow边
-    const flowEdges: Edge[] = [];
-    if (edgesData && edgesData.length > 0) {
-      edgesData.forEach((edge: any) => {
-        // 确保源节点和目标节点都存在
-        const sourceExists = flowNodes.find(n => n.id === edge.source);
-        const targetExists = flowNodes.find(n => n.id === edge.target);
-        
-        if (sourceExists && targetExists) {
-          const edgeId = edge.id || `edge-${edge.source}-${edge.target}`;
-          flowEdges.push({
-            id: edgeId,
-            source: edge.source,
-            target: edge.target,
-            type: 'smoothstep',
-            style: { 
-              stroke: '#1890ff', 
-              strokeWidth: 2 
-            },
-            label: edge.label || (edge.condition_config ? String(edge.condition_config) : undefined),
-            labelStyle: { fontSize: '10px', fill: '#666' },
-            labelBgPadding: [4, 4],
-            labelBgBorderRadius: 4,
-            labelBgStyle: { fill: '#fff', color: '#666', fillOpacity: 0.8 }
-          });
-          console.log('✅ [图形视图] 创建边:', edgeId, '从', edge.source, '到', edge.target);
-        } else {
-          console.warn('❌ [图形视图] 跳过无效连接:', {
-            edge,
-            源节点存在: !!sourceExists,
-            目标节点存在: !!targetExists,
-            可用节点: flowNodes.map(n => n.id)
-          });
-        }
-      });
-    } else {
-      // 如果没有边数据，回退到简单的顺序连接
-      console.warn('⚠️ [图形视图] 未找到有效边数据，使用顺序连接');
-      for (let i = 0; i < flowNodes.length - 1; i++) {
-        flowEdges.push({
-          id: `edge-${i}`,
-          source: flowNodes[i].id,
-          target: flowNodes[i + 1].id,
-          type: 'smoothstep',
-          style: { stroke: '#1890ff', strokeWidth: 2 },
-        });
-      }
-    }
+    // 使用重构的边数据处理逻辑
+    console.log('🔗 [图形视图] 开始处理边数据，原始边数量:', edgesData.length);
+    
+    // 验证和修复边数据
+    const validatedEdges = validateAndFixEdges(nodesDetail.nodes, edgesData);
+    console.log('✅ [图形视图] 边数据验证完成，有效边数量:', validatedEdges.length);
+    
+    // 如果没有有效边，生成智能连接
+    const finalEdges = validatedEdges.length > 0 ? 
+      validatedEdges : 
+      generateMissingConnections(nodesDetail.nodes);
+    
+    console.log('🎯 [图形视图] 最终边数据数量:', finalEdges.length);
+    
+    // 构建ReactFlow边
+    const flowEdges: Edge[] = finalEdges.map(edge => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: 'smoothstep',
+      style: { 
+        stroke: '#1890ff', 
+        strokeWidth: 2 
+      },
+      label: edge.label,
+      labelStyle: { fontSize: '10px', fill: '#666' },
+      labelBgPadding: [4, 4],
+      labelBgBorderRadius: 4,
+      labelBgStyle: { fill: '#fff', color: '#666', fillOpacity: 0.8 }
+    }));
 
     // 为展开的节点添加子工作流容器节点
     const allNodes: Node[] = [...flowNodes];
