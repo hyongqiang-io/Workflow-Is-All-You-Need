@@ -3,18 +3,6 @@
  * 修复节点ID映射问题和连接逻辑
  */
 
-interface WorkflowNode {
-  id: string;
-  node_instance_id?: string;
-  node_id?: string;
-  name: string;
-  node_name?: string;
-  type: string;
-  node_type?: string;
-  status: string;
-  created_at?: string;
-}
-
 interface WorkflowEdge {
   id: string;
   source: string;
@@ -256,30 +244,30 @@ const layoutByConnections = (nodes: any[], edges: WorkflowEdge[]): Record<string
   // 使用拓扑排序严格按照连接关系排列
   const sortedLevels = topologicalSortWithLevels(nodes, dependents, dependencies, nodeIdMap);
   
-  // 布局参数
-  const levelSpacing = 300; // 层级间距（水平）
-  const nodeSpacing = 120;  // 同层节点间距（垂直）
-  const startX = 100;
-  const startY = 100;
+  // 布局参数 - 修复为垂直展开（沿Y轴）
+  const levelSpacing = 200; // 层级间距（垂直）
+  const nodeSpacing = 300;  // 同层节点间距（水平）
+  const startX = 200;       // 起始X坐标
+  const startY = 100;       // 起始Y坐标
   
   console.log('📊 [连接优先] 拓扑排序结果:', sortedLevels.map((level, idx) => ({
     level: idx,
     nodes: level.map(id => nodeIdMap.get(id)?.node_name || id)
   })));
   
-  // 基于连接关系的层级布局
+  // 基于连接关系的垂直层级布局（沿Y轴展开）
   const positions: Record<string, { x: number; y: number }> = {};
   
   sortedLevels.forEach((levelNodes, level) => {
-    const x = startX + level * levelSpacing;
+    const y = startY + level * levelSpacing; // Y坐标递增（垂直展开）
     
-    // 垂直居中排列同层节点
-    const totalHeight = (levelNodes.length - 1) * nodeSpacing;
-    const centerY = startY + 200;
-    const firstNodeY = centerY - totalHeight / 2;
+    // 水平居中排列同层节点
+    const totalWidth = (levelNodes.length - 1) * nodeSpacing;
+    const centerX = startX + 200;
+    const firstNodeX = centerX - totalWidth / 2;
     
     levelNodes.forEach((nodeId, index) => {
-      const y = Math.max(50, firstNodeY + index * nodeSpacing);
+      const x = Math.max(50, firstNodeX + index * nodeSpacing); // X坐标为同层内的水平排列
       positions[nodeId] = { x, y };
       
       const node = nodeIdMap.get(nodeId);
@@ -411,15 +399,15 @@ const layoutByNodeAttributes = (nodes: any[]): Record<string, { x: number; y: nu
   
   console.log('📋 [属性排序] 排序结果:', sortedNodes.map(n => n.node_name || n.name));
   
-  // 简单的水平排列
+  // 垂直排列（沿Y轴展开）
   sortedNodes.forEach((node, index) => {
     const nodeId = node.node_instance_id || node.id;
     positions[nodeId] = {
-      x: 100 + index * 250,
-      y: 200
+      x: 400, // 固定X坐标，水平居中
+      y: 100 + index * 200 // Y坐标递增，垂直展开
     };
     
-    console.log(`📍 [属性排序] 节点位置: ${node.node_name} -> (${100 + index * 250}, 200)`);
+    console.log(`📍 [属性排序] 节点位置: ${node.node_name} -> (400, ${100 + index * 200})`);
   });
   
   return positions;

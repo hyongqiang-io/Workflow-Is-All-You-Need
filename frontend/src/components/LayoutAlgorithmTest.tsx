@@ -228,14 +228,17 @@ const LayoutAlgorithmTest: React.FC = () => {
         <div style={{ marginTop: '16px', fontSize: '12px', color: '#666' }}>
           <p><strong>测试说明：</strong></p>
           <ul>
-            <li><strong>线性流程</strong>：测试基本的从左到右布局</li>
-            <li><strong>分支流程</strong>：测试分支和合并的布局</li>
+            <li><strong>线性流程</strong>：测试基本的从上到下垂直布局</li>
+            <li><strong>分支流程</strong>：测试分支和合并的垂直层级布局</li>
             <li><strong>自动生成连接</strong>：测试无边数据时的智能连接生成</li>
             <li><strong>🎯 连接优先级测试</strong>：验证连接关系优先于节点类型的关键测试</li>
             <li><strong>复杂连接测试</strong>：测试多层依赖关系的拓扑排序</li>
           </ul>
           <p style={{ marginTop: '12px', fontSize: '11px', color: '#999' }}>
             <strong>关键测试：</strong>连接优先级测试验证算法是否正确按照用户要求"优先按照连接顺序排列"
+          </p>
+          <p style={{ marginTop: '8px', fontSize: '11px', color: '#666' }}>
+            <strong>布局方向：</strong>工作流沿Y轴垂直展开（从上到下），同层节点水平排列
           </p>
         </div>
       </Card>
