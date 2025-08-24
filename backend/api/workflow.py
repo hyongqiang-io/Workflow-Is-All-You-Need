@@ -117,6 +117,50 @@ async def get_user_workflows(
         )
 
 
+@router.get("/user/{user_id}", response_model=BaseResponse)
+async def get_specific_user_workflows(
+    user_id: uuid.UUID = Path(..., description="用户ID"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    获取指定用户的工作流列表（用于任务细分功能）
+    
+    Args:
+        user_id: 用户ID
+        current_user: 当前用户
+        
+    Returns:
+        指定用户的工作流列表
+    """
+    try:
+        # 验证权限：只能获取自己的工作流列表
+        if user_id != current_user.user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="只能获取自己的工作流列表"
+            )
+        
+        workflows = await workflow_service.get_user_workflows(user_id)
+        
+        return BaseResponse(
+            success=True,
+            message="获取工作流列表成功",
+            data={
+                "workflows": [workflow.model_dump() for workflow in workflows],
+                "count": len(workflows)
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取指定用户工作流列表异常: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取工作流列表失败"
+        )
+
+
 # =============================================================================
 # 工作流导入导出API（必须在 /{workflow_base_id} 路由之前）
 # =============================================================================

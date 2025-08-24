@@ -274,6 +274,9 @@ export const workflowAPI = {
   // 获取工作流列表
   getWorkflows: () => api.get('/workflows'),
 
+  // 获取用户的工作流列表
+  getUserWorkflows: (userId: string) => api.get(`/workflows/user/${userId}`),
+
   // 获取工作流详情
   getWorkflow: (workflowId: string) => api.get(`/workflows/${workflowId}`),
 
