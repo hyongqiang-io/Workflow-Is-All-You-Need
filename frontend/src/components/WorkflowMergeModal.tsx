@@ -186,18 +186,62 @@ const WorkflowMergeModal: React.FC<Props> = ({
         mergeRequest
       );
 
-      if (response.data?.success) {
-        setExecutionResult(response.data.data);
+      console.log('🔍 [MERGE-RESPONSE-DEBUG] 合并API响应详情:', {
+        'response': response,
+        'response.data': response.data,
+        'response.data.success': response.data?.success,
+        'response.data.data': response.data?.data,
+        'response.data.message': response.data?.message,
+        'response.status': response.status,
+        'response.statusText': response.statusText
+      });
+
+      // 处理两种可能的响应结构：
+      // 1. 标准BaseResponse结构: { success: true, data: {...} }
+      // 2. 直接数据结构: { merge_result: {...}, new_workflow: {...} }
+      let isSuccess = false;
+      let responseData = null;
+      let errorMessage = '';
+
+      if (response.data?.success === true) {
+        // 标准BaseResponse结构
+        console.log('📋 [MERGE-RESPONSE-FORMAT] 检测到BaseResponse结构');
+        isSuccess = true;
+        responseData = response.data.data;
+      } else if (response.data?.merge_result && response.data?.new_workflow) {
+        // 直接数据结构，通过关键字段判断成功
+        console.log('📋 [MERGE-RESPONSE-FORMAT] 检测到直接数据结构');
+        isSuccess = true;
+        responseData = response.data;
+      } else if (response.data?.success === false) {
+        // 明确的失败响应
+        console.log('📋 [MERGE-RESPONSE-FORMAT] 检测到明确失败响应');
+        isSuccess = false;
+        errorMessage = response.data?.message || '合并执行失败';
+      } else {
+        // 未知结构，默认失败
+        console.log('📋 [MERGE-RESPONSE-FORMAT] 未知响应结构，默认失败');
+        isSuccess = false;
+        errorMessage = response.data?.message || '合并执行失败';
+      }
+
+      if (isSuccess) {
+        console.log('✅ [MERGE-RESPONSE-SUCCESS] 成功分支执行');
+        setExecutionResult(responseData);
         setCurrentStep('result');
         
         // 通知父组件
         if (onMergeExecuted) {
-          onMergeExecuted(response.data.data);
+          console.log('📢 [MERGE-RESPONSE-CALLBACK] 调用onMergeExecuted回调');
+          onMergeExecuted(responseData);
         }
 
         console.log('✅ 工作流合并执行成功');
       } else {
-        setExecutionError(response.data?.message || '合并执行失败');
+        console.error('❌ [MERGE-RESPONSE-FAILURE] 失败分支执行');
+        console.error('   - response.data:', response.data);
+        console.error('   - 错误消息:', errorMessage);
+        setExecutionError(errorMessage);
         setCurrentStep('config');
       }
 

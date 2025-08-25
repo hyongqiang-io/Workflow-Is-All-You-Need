@@ -590,7 +590,7 @@ const WorkflowTemplateConnectionGraph: React.FC<Props> = ({
               if (sourceWorkflowContainer && sourceWorkflowContainer !== targetNodeId) {
                 // 创建工作流容器间的连接
                 const workflowConnection = {
-                  id: `workflow_connection_${sourceWorkflowContainer}_${targetNodeId}`,
+                  id: `workflow_connection_${sourceWorkflowContainer}_${targetNodeId}_${sourceNodeId}`,
                   source: sourceWorkflowContainer,
                   target: targetNodeId,
                   type: 'subdivision_connection',
