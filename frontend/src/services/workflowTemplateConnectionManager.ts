@@ -80,6 +80,12 @@ export interface TemplateNode {
   task_description?: string;
   parentWorkflowId?: string;
   
+  // 新增：合并相关属性
+  isMergeSelected?: boolean;    // 是否被选中进行合并
+  isMergePath?: boolean;        // 是否在合并路径上
+  mergeLevel?: number;          // 合并层级（用于智能选择）
+  mergeCandidateId?: string;    // 关联的合并候选ID
+  
   connected_nodes?: Array<{
     node_base_id: string;
     node_name: string;

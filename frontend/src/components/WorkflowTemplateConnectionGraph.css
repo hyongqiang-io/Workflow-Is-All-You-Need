@@ -1,4 +1,4 @@
-/* 工作流模板连接图样式 */
+/* 工作流模板连接图样式 - 专注于工作流容器间的连接关系 */
 .workflow-template-connection-graph {
   width: 100%;
   height: calc(100% - 20px);
@@ -10,52 +10,509 @@
   overflow: hidden;
 }
 
-/* 内部节点特殊样式 */
-.workflow-template-node.internal-node {
-  border: 2px dashed #2196f3 !important;
-  background: linear-gradient(135deg, #f0f8ff 0%, #e6f3ff 100%) !important;
-  box-shadow: 0 2px 8px rgba(33, 150, 243, 0.2) !important;
+/* 工作流容器节点样式 - 专门用于显示工作流模板 */
+.workflow-template-node {
+  padding: 16px;
+  border-radius: 12px;
+  border: 3px solid;
+  background-color: white;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  transition: all 0.3s ease;
+  cursor: pointer;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  min-width: 300px;
+  min-height: 160px;
+  position: relative;
 }
 
-.workflow-template-node.internal-node .node-header {
-  background: rgba(33, 150, 243, 0.1);
-  padding: 6px 10px;
-  border-radius: 4px 4px 0 0;
+.workflow-template-node:hover {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  transform: translateY(-2px);
 }
 
-.node-type-icon {
-  margin-right: 6px;
-  font-size: 16px;
+.workflow-template-node.selected {
+  box-shadow: 0 0 0 4px rgba(33, 150, 243, 0.3);
 }
 
-.internal-node-badge {
-  display: inline-block;
-  background: #2196f3;
-  color: white;
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 10px;
-  margin-left: 6px;
-}
-
-.node-type-info {
-  background: rgba(33, 150, 243, 0.05);
-  padding: 6px 10px;
-  border-top: 1px solid rgba(33, 150, 243, 0.2);
-  font-size: 11px;
+/* 主工作流容器样式 */
+.workflow-template-node.parent-workflow {
+  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+  border-color: #1976d2;
   color: #1976d2;
 }
 
-.node-type-label {
-  display: block;
-  font-weight: 500;
-  margin-bottom: 2px;
+/* 子工作流容器样式 */
+.workflow-template-node.sub-workflow {
+  background: linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%);
+  border-color: #7b1fa2;
+  color: #4a148c;
 }
 
-.parent-workflow-info {
-  display: block;
-  color: #666;
+/* 工作流头部区域 */
+.workflow-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.6);
+}
+
+.workflow-icon {
+  font-size: 24px;
+  flex-shrink: 0;
+}
+
+.workflow-title-section {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workflow-name {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0;
+  color: inherit;
+  flex: 1;
+}
+
+.workflow-status-indicator {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 3px solid white;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+}
+
+.recursion-level-badge {
+  background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+  color: white;
   font-size: 10px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+}
+
+/* 工作流来源信息区域（子工作流显示） */
+.workflow-source-info {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.source-info-label {
+  font-weight: 600;
+  color: inherit;
+  opacity: 0.8;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.source-node-details {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.source-node-name {
+  font-weight: 700;
+  font-size: 13px;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.source-node-type {
+  font-size: 11px;
+  opacity: 0.7;
+  font-style: italic;
+  color: inherit;
+}
+
+/* 工作流描述 */
+.workflow-description {
+  font-size: 13px;
+  color: inherit;
+  opacity: 0.8;
+  line-height: 1.4;
+  margin-bottom: 12px;
+  max-height: 40px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* 子工作流信息区域（父工作流显示） */
+.sub-workflows-info {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 2px solid rgba(255, 255, 255, 0.6);
+}
+
+.sub-workflows-info .info-label {
+  font-weight: 600;
+  color: inherit;
+  opacity: 0.8;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.sub-workflow-count {
+  font-weight: 700;
+  font-size: 14px;
+  color: inherit;
+  margin-bottom: 8px;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 6px 12px;
+  border-radius: 16px;
+}
+
+.sub-workflow-item {
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 4px 8px;
+  border-radius: 12px;
+  margin: 3px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: inherit;
+  opacity: 0.9;
+}
+
+.more-indicator {
+  font-size: 11px;
+  font-style: italic;
+  opacity: 0.8;
+  text-align: center;
+  margin-top: 4px;
+  color: inherit;
+}
+
+/* 工作流执行进度区域（子工作流显示） */
+.workflow-progress-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 2px solid rgba(255, 255, 255, 0.6);
+}
+
+.progress-bar {
+  width: 100%;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 5px;
+  overflow: hidden;
+  margin-bottom: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.progress-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+  border-radius: 5px;
+}
+
+.progress-text {
+  font-size: 12px;
+  text-align: center;
+  font-weight: 600;
+  color: inherit;
+  opacity: 0.9;
+}
+
+/* 树状布局专用样式 */
+.workflow-template-connection-graph[data-layout="tree"] {
+  background: linear-gradient(180deg, #fafbff 0%, #f0f4ff 100%);
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+  transition: all 0.4s ease;
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node:hover {
+  transform: translateY(-4px) scale(1.02);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node.parent-workflow::before {
+  content: '🌳';
+  position: absolute;
+  top: -12px;
+  right: -12px;
+  font-size: 20px;
+  background: white;
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.15);
+  z-index: 1;
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node.sub-workflow::before {
+  content: '🍃';
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  font-size: 16px;
+  background: white;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  z-index: 1;
+}
+
+/* 工作流容器节点入场动画 */
+.workflow-template-node {
+  animation: workflowNodeAppear 0.6s ease-out;
+}
+
+@keyframes workflowNodeAppear {
+  0% {
+    transform: scale(0.8) translateY(20px);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.05) translateY(-5px);
+  }
+  100% {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+/* 加载和错误状态 */
+.workflow-template-connection-graph.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #f9f9f9;
+}
+
+.loading-spinner {
+  text-align: center;
+}
+
+.spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #1976d2;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-text {
+  color: #666;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.workflow-template-connection-graph.error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #fff5f5;
+}
+
+.error-message {
+  text-align: center;
+  padding: 32px;
+}
+
+.error-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+.error-text {
+  color: #d32f2f;
+  font-size: 16px;
+  margin-bottom: 16px;
+}
+
+.retry-button {
+  background-color: #2196f3;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.retry-button:hover {
+  background-color: #1976d2;
+}
+
+/* ReactFlow自定义样式 */
+.react-flow__node.react-flow__node-workflowTemplate {
+  border: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+.react-flow__edge-path {
+  stroke-width: 3;
+}
+
+.react-flow__edge.react-flow__edge-smoothstep {
+  stroke: #1976d2;
+}
+
+.react-flow__edge.selected {
+  stroke: #ff6b6b;
+  stroke-width: 4;
+}
+
+/* 工作流连接边标签 */
+.react-flow__edge-label {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border: 2px solid #1976d2 !important;
+  border-radius: 16px !important;
+  padding: 6px 12px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #1976d2 !important;
+  box-shadow: 0 3px 12px rgba(25, 118, 210, 0.2) !important;
+}
+
+/* 子工作流引用边的特殊样式 */
+.react-flow__edge[data-type="subdivision_connection"] .react-flow__edge-path {
+  stroke: #ff6b6b !important;
+  stroke-dasharray: 8,4 !important;
+  animation: flowingDash 2s linear infinite;
+}
+
+.react-flow__edge[data-type="subdivision_connection"] .react-flow__edge-label {
+  background: rgba(255, 107, 107, 0.1) !important;
+  border-color: #ff6b6b !important;
+  color: #ff6b6b !important;
+}
+
+@keyframes flowingDash {
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: 24;
+  }
+}
+
+/* 树状布局专用样式 */
+.workflow-template-connection-graph[data-layout="tree"] {
+  background: linear-gradient(180deg, #fafbff 0%, #f0f4ff 100%);
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+  transition: all 0.4s ease;
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node:hover {
+  transform: translateY(-4px) scale(1.02);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node.parent-workflow::before {
+  content: '🌳';
+  position: absolute;
+  top: -12px;
+  right: -12px;
+  font-size: 20px;
+  background: white;
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.15);
+  z-index: 1;
+}
+
+.workflow-template-connection-graph[data-layout="tree"] .workflow-template-node.sub-workflow::before {
+  content: '🍃';
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  font-size: 16px;
+  background: white;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  z-index: 1;
+}
+
+/* 工作流容器节点入场动画 */
+.workflow-template-node {
+  animation: workflowNodeAppear 0.6s ease-out;
+}
+
+@keyframes workflowNodeAppear {
+  0% {
+    transform: scale(0.8) translateY(20px);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.05) translateY(-5px);
+  }
+  100% {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .workflow-template-connection-graph {
+    height: 400px;
+  }
+  
+  .workflow-template-node {
+    min-width: 250px;
+    min-height: 140px;
+    padding: 12px;
+  }
+  
+  .node-title {
+    font-size: 14px;
+  }
+  
+  .info-item, .connected-node-item {
+    font-size: 11px;
+  }
 }
 
 /* 加载状态 */
@@ -1000,28 +1457,299 @@
   }
 }
 
-/* 响应式设计 */
+/* 合并控制面板样式 - 浮动在右上角 */
+.merge-control-panel {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(12px);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  padding: 16px;
+  min-width: 280px;
+  max-width: 320px;
+  border: 1px solid rgba(33, 150, 243, 0.2);
+  z-index: 100;
+  animation: slideInFromRight 0.3s ease-out;
+}
+
+@keyframes slideInFromRight {
+  0% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* 合并复选框容器样式 */
+.merge-checkbox-container {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 8px;
+  padding: 6px 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(33, 150, 243, 0.3);
+  backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+  z-index: 10;
+}
+
+.merge-checkbox-container:hover {
+  background: rgba(255, 255, 255, 1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  transform: scale(1.05);
+}
+
+.merge-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: #2196f3;
+  cursor: pointer;
+  transform: scale(1.2);
+}
+
+.merge-checkbox-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1976d2;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* 合并层级标识 */
+.merge-level-badge {
+  background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+/* 合并状态的工作流节点样式增强 */
+.workflow-template-node.merge-mode {
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+}
+
+.workflow-template-node.merge-selected {
+  border-color: #4caf50 !important;
+  background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%) !important;
+  box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.3), 0 8px 24px rgba(76, 175, 80, 0.2) !important;
+  transform: scale(1.02);
+}
+
+.workflow-template-node.merge-path {
+  border-color: #ff9800 !important;
+  background: linear-gradient(135deg, #fff3e0 0%, #ffcc02 20%) !important;
+  box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.4), 0 6px 18px rgba(255, 152, 0, 0.15) !important;
+  transform: translateY(-2px);
+}
+
+.workflow-template-node.merge-mode:not(.merge-selected):not(.merge-path) {
+  opacity: 0.7;
+  filter: grayscale(0.3);
+}
+
+.workflow-template-node.merge-mode:hover:not(.merge-selected):not(.merge-path) {
+  opacity: 0.9;
+  filter: grayscale(0.1);
+  transform: scale(1.01);
+}
+
+/* 合并模式下的边样式增强 */
+.workflow-template-connection-graph[data-merge-mode="true"] .react-flow__edge-path {
+  stroke-width: 3;
+  transition: all 0.3s ease;
+}
+
+.workflow-template-connection-graph[data-merge-mode="true"] .react-flow__edge.merge-path .react-flow__edge-path {
+  stroke: #4caf50 !important;
+  stroke-width: 4;
+  stroke-dasharray: 8,4;
+  animation: flowingMergePath 2s linear infinite;
+  filter: drop-shadow(0 2px 4px rgba(76, 175, 80, 0.3));
+}
+
+@keyframes flowingMergePath {
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: 24;
+  }
+}
+
+.workflow-template-connection-graph[data-merge-mode="true"] .react-flow__edge.merge-selected .react-flow__edge-path {
+  stroke: #2196f3 !important;
+  stroke-width: 5;
+  filter: drop-shadow(0 3px 6px rgba(33, 150, 243, 0.4));
+}
+
+/* 合并控制面板内部组件样式优化 */
+.merge-control-panel .control-group.merge-header {
+  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+  border: 1px solid rgba(33, 150, 243, 0.2);
+  margin: -16px -16px 16px -16px;
+  padding: 12px 16px;
+  border-radius: 12px 12px 0 0;
+}
+
+.merge-control-panel .control-group.merge-header h4 {
+  color: #1976d2;
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0 0 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.merge-control-panel .control-group.merge-header p {
+  color: #1976d2;
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 0;
+  opacity: 0.85;
+}
+
+.merge-control-panel .merge-status-info {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 12px 0;
+  font-size: 12px;
+  color: #495057;
+  line-height: 1.5;
+}
+
+.merge-control-panel .merge-status-info > div {
+  margin-bottom: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.merge-control-panel .merge-status-info > div:last-child {
+  margin-bottom: 0;
+  font-weight: 600;
+}
+
+.merge-control-panel .merge-preview-button {
+  width: 100%;
+  background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%);
+  color: white;
+  border: none;
+  padding: 12px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 12px 0;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 12px rgba(33, 150, 243, 0.3);
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  position: relative;
+  overflow: hidden;
+}
+
+.merge-control-panel .merge-preview-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1976d2 0%, #1565c0 100%);
+  box-shadow: 0 6px 16px rgba(33, 150, 243, 0.4);
+  transform: translateY(-2px);
+}
+
+.merge-control-panel .merge-preview-button:disabled {
+  background: linear-gradient(135deg, #e0e0e0 0%, #bdbdbd 100%);
+  color: #9e9e9e;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.merge-control-panel .merge-preview-button:not(:disabled)::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+  animation: buttonShine 2s infinite;
+}
+
+@keyframes buttonShine {
+  0% { left: -100%; }
+  50% { left: 100%; }
+  100% { left: 100%; }
+}
+
+.merge-control-panel .merge-no-candidates-warning {
+  background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+  border: 1px solid #f48fb1;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 12px 0;
+  font-size: 11px;
+  color: #c62828;
+  line-height: 1.4;
+}
+
+.merge-control-panel .merge-operation-tip {
+  background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+  border: 1px solid #ffb74d;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 12px 0 0 0;
+  font-size: 11px;
+  color: #ef6c00;
+  line-height: 1.4;
+}
+
+/* 响应式设计增强 */
+@media (max-width: 1200px) {
+  .merge-control-panel {
+    right: 10px;
+    min-width: 240px;
+    max-width: 260px;
+  }
+}
+
 @media (max-width: 768px) {
-  .workflow-template-connection-graph {
-    height: 400px;
+  .merge-control-panel {
+    position: fixed;
+    top: auto;
+    bottom: 20px;
+    right: 10px;
+    left: 10px;
+    min-width: auto;
+    max-width: none;
   }
   
-  .graph-controls,
-  .graph-stats {
-    min-width: 150px;
-    padding: 8px;
+  .merge-checkbox-container {
+    top: 4px;
+    left: 4px;
+    padding: 4px 8px;
   }
   
-  .edge-detail-content {
-    max-width: 90vw;
-    margin: 20px;
-  }
-  
-  .edge-detail-header {
-    padding: 12px 16px;
-  }
-  
-  .edge-detail-body {
-    padding: 16px;
+  .merge-checkbox-label {
+    font-size: 11px;
   }
 }
