@@ -85,8 +85,16 @@ class WorkflowImport(BaseModel):
         
         # 检查节点名称唯一性
         node_names = [node.name for node in self.nodes]
-        if len(node_names) != len(set(node_names)):
-            errors.append("节点名称必须唯一")
+        duplicate_names = []
+        seen_names = set()
+        for name in node_names:
+            if name in seen_names:
+                duplicate_names.append(name)
+            else:
+                seen_names.add(name)
+        
+        if duplicate_names:
+            errors.append(f"节点名称必须唯一，发现重复: {', '.join(set(duplicate_names))}")
         
         # 检查开始和结束节点
         start_nodes = [n for n in self.nodes if n.type == ExportNodeType.START]
@@ -103,12 +111,12 @@ class WorkflowImport(BaseModel):
             warnings.append("建议只使用一个结束节点")
         
         # 检查连接的有效性
-        node_names = [node.name for node in self.nodes]
+        unique_node_names = list(set(node_names))  # 使用去重后的名称列表
         for conn in self.connections:
             # 基本连接验证
-            if conn.from_node_name not in node_names:
+            if conn.from_node_name not in unique_node_names:
                 errors.append(f"连接中的源节点 '{conn.from_node_name}' 不存在")
-            if conn.to_node_name not in node_names:
+            if conn.to_node_name not in unique_node_names:
                 errors.append(f"连接中的目标节点 '{conn.to_node_name}' 不存在")
             
             # 检查自连接
@@ -176,6 +184,49 @@ class WorkflowImport(BaseModel):
             "errors": errors,
             "warnings": warnings
         }
+
+    def clean_import_data(self) -> 'WorkflowImport':
+        """清理导入数据，自动修复常见问题"""
+        # 1. 去除重复节点，保留第一个
+        seen_names = set()
+        cleaned_nodes = []
+        for node in self.nodes:
+            if node.name not in seen_names:
+                seen_names.add(node.name)
+                cleaned_nodes.append(node)
+        
+        # 2. 清理连接：移除自连接和无效连接
+        valid_node_names = {node.name for node in cleaned_nodes}
+        cleaned_connections = []
+        
+        for conn in self.connections:
+            # 跳过自连接
+            if conn.from_node_name == conn.to_node_name:
+                continue
+            
+            # 跳过引用不存在节点的连接
+            if (conn.from_node_name not in valid_node_names or 
+                conn.to_node_name not in valid_node_names):
+                continue
+                
+            cleaned_connections.append(conn)
+        
+        # 3. 去除重复连接
+        unique_connections = []
+        seen_connections = set()
+        for conn in cleaned_connections:
+            conn_key = (conn.from_node_name, conn.to_node_name, conn.connection_type)
+            if conn_key not in seen_connections:
+                seen_connections.add(conn_key)
+                unique_connections.append(conn)
+        
+        # 返回清理后的数据
+        return WorkflowImport(
+            name=self.name,
+            description=self.description,
+            nodes=cleaned_nodes,
+            connections=unique_connections
+        )
 
 
 class ImportPreview(BaseModel):

@@ -1,6 +1,9 @@
 """
-MySQL数据库配置管理模块 - 与PostgreSQL版本完全兼容
-MySQL Database Configuration Management Module - Fully Compatible with PostgreSQL Version
+MySQL数据库配置管理模块
+MySQL Database Configuration Management Module
+
+注意：此项目已从PostgreSQL迁移到MySQL
+Note: This project has been migrated from PostgreSQL to MySQL
 """
 
 import os

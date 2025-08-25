@@ -15,6 +15,8 @@ from backend.config.feishu_config import FeishuConfig
 from backend.utils.feishu_exceptions import create_feishu_exception, FeishuErrorCodes
 from backend.models.user import UserCreate
 from backend.api.dependencies import get_user_repository, get_auth_service
+from backend.repositories.user.user_repository import UserRepository
+from backend.services.auth_service import AuthService
 
 router = APIRouter()
 

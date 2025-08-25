@@ -16,6 +16,7 @@ from ..models.instance import (
 )
 from ..utils.helpers import now_utc
 from .workflow_context_manager import WorkflowContextManager
+from .feishu_bot_service import feishu_bot_service
 
 
 class HumanTaskService:
@@ -67,6 +68,8 @@ class HumanTaskService:
                     logger.error(f"🔧 [诊断] 诊断查询失败: {debug_e}")
             
             logger.info(f"✅ [任务查询] 获取用户 {user_id} 的任务列表完成，共 {len(tasks)} 个任务")
+            # 发送飞书机器人通知
+            await self._send_feishu_notifications(user_id, tasks)
             return tasks
             
         except Exception as e:
@@ -1264,3 +1267,34 @@ class HumanTaskService:
             logger.error(f"解析context_data失败: {e}")
             return {}
     
+
+
+    async def _send_feishu_notifications(self, user_id: uuid.UUID, tasks: List[Dict[str, Any]]):
+        """发送飞书机器人通知"""
+        try:
+            if not tasks:
+                return
+            
+            # 获取用户信息
+            user_info = await self.user_repo.get_user_by_id(user_id)
+            if not user_info:
+                logger.warning(f"用户 {user_id} 不存在，无法发送飞书通知")
+                return
+            
+            # 为每个任务发送通知
+            for task in tasks:
+                task_info = {
+                    "task_title": task.get("task_title", "未命名任务"),
+                    "workflow_name": task.get("workflow_name", "未知工作流"),
+                    "priority": task.get("priority", "普通"),
+                    "deadline": task.get("deadline"),
+                    "status": task.get("status")
+                }
+                
+                # 发送飞书通知
+                await feishu_bot_service.send_task_notification(str(user_id), task_info)
+            
+            logger.info(f"成功发送 {len(tasks)} 个任务的飞书通知给用户 {user_id}")
+            
+        except Exception as e:
+            logger.error(f"发送飞书通知失败: {e}")

@@ -10,7 +10,8 @@ import {
   ReloadOutlined,
   HistoryOutlined,
   DownloadOutlined,
-  UploadOutlined
+  UploadOutlined,
+  RobotOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { workflowAPI, executionAPI } from '../../services/api';
@@ -18,6 +19,7 @@ import { useAuthStore } from '../../stores/authStore';
 import WorkflowDesigner from '../../components/WorkflowDesigner';
 import WorkflowInstanceList from '../../components/WorkflowInstanceList';
 import WorkflowImportExport from '../../components/WorkflowImportExport';
+import AIWorkflowGenerator from '../../components/AIWorkflowGenerator';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -53,6 +55,10 @@ const WorkflowPage: React.FC = () => {
   const [importExportVisible, setImportExportVisible] = useState(false);
   const [importExportMode, setImportExportMode] = useState<'export' | 'import'>('export');
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowItem | null>(null);
+
+  // AI生成相关状态
+  const [aiGeneratorVisible, setAiGeneratorVisible] = useState(false);
+  const [aiGeneratedData, setAiGeneratedData] = useState<any>(null);
 
   useEffect(() => {
     loadWorkflows();
@@ -347,6 +353,7 @@ const WorkflowPage: React.FC = () => {
   const handleImportExportClose = () => {
     setImportExportVisible(false);
     setSelectedWorkflow(null);
+    setAiGeneratedData(null); // 清除AI生成的数据
   };
 
   const handleExportSuccess = () => {
@@ -357,6 +364,28 @@ const WorkflowPage: React.FC = () => {
   const handleImportSuccess = (workflowId: string) => {
     // 导入成功后刷新工作流列表
     loadWorkflows();
+  };
+
+  // AI生成处理函数
+  const handleAIGenerate = () => {
+    setAiGeneratorVisible(true);
+  };
+
+  const handleAIWorkflowGenerated = (workflowData: any) => {
+    // AI生成完成，可以选择性显示提示
+  };
+
+  const handleAIImportToEditor = (workflowData: any) => {
+    // 关闭AI生成器
+    setAiGeneratorVisible(false);
+    
+    // 存储AI生成的数据
+    setAiGeneratedData(workflowData);
+    
+    // 设置导入模式并打开导入界面，传入预加载数据
+    setSelectedWorkflow(null);
+    setImportExportMode('import');
+    setImportExportVisible(true);
   };
 
   const formatDate = (dateString: string) => {
@@ -536,6 +565,14 @@ const WorkflowPage: React.FC = () => {
                 创建工作流
               </Button>
               <Button 
+                type="primary"
+                ghost
+                icon={<RobotOutlined />}
+                onClick={handleAIGenerate}
+              >
+                AI生成工作流
+              </Button>
+              <Button 
                 icon={<UploadOutlined />}
                 onClick={handleImport}
               >
@@ -644,10 +681,26 @@ const WorkflowPage: React.FC = () => {
         mode={importExportMode}
         workflowId={selectedWorkflow?.baseId}
         workflowName={selectedWorkflow?.name}
+        preloadedData={aiGeneratedData} // 传递AI生成的数据
         onClose={handleImportExportClose}
         onExportSuccess={handleExportSuccess}
         onImportSuccess={handleImportSuccess}
       />
+
+      {/* AI工作流生成器模态框 */}
+      <Modal
+        title="AI工作流生成器"
+        open={aiGeneratorVisible}
+        onCancel={() => setAiGeneratorVisible(false)}
+        footer={null}
+        width={1000}
+        styles={{ body: { padding: 0 } }}
+      >
+        <AIWorkflowGenerator
+          onWorkflowGenerated={handleAIWorkflowGenerated}
+          onImportToEditor={handleAIImportToEditor}
+        />
+      </Modal>
     </div>
   );
 };

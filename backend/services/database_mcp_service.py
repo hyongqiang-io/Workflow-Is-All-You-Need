@@ -101,7 +101,7 @@ class DatabaseMCPService:
             # 智能URL映射：如果是自己的公网IP，使用本地地址
             test_url = server_url
             if "106.54.12.39" in server_url:
-                test_url = server_url.replace("106.54.12.39", "127.0.0.1")
+                test_url = server_url.replace("106.54.12.39", "autolabflow.online")
                 logger.info(f"🌐 [HEALTH-CHECK] 检测到公网IP，映射为本地地址")
                 logger.info(f"   - 原始URL: {server_url}")
                 logger.info(f"   - 映射URL: {test_url}")
@@ -280,7 +280,7 @@ class DatabaseMCPService:
             # 智能URL映射：处理公网IP访问问题
             call_url = server_url
             if "106.54.12.39" in server_url:
-                call_url = server_url.replace("106.54.12.39", "127.0.0.1")
+                call_url = server_url.replace("106.54.12.39", "autolabflow.online")
                 logger.info(f"🌐 [TOOL-CALL] 检测到公网IP，映射为本地地址")
                 logger.info(f"   - 原始URL: {server_url}")
                 logger.info(f"   - 调用URL: {call_url}")

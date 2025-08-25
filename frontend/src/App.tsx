@@ -30,6 +30,7 @@ function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/feishu-login" element={<FeishuLogin />} />
+          <Route path="/feishu-auto-login" element={<FeishuLogin autoLogin={true} />} />
           <Route path="/auth/feishu/callback" element={<FeishuCallback />} />
           <Route path="/" element={
             <ProtectedRoute>

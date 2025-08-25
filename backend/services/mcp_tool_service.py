@@ -479,7 +479,7 @@ class MCPToolService:
             # URL映射：如果是本机外部IP，转换为内部访问
             internal_url = server_url
             if "106.54.12.39" in server_url:
-                internal_url = server_url.replace("106.54.12.39", "127.0.0.1")
+                internal_url = server_url.replace("106.54.12.39", "autolabflow.online")
                 logger.info(f"   - 外部URL映射: {server_url} -> {internal_url}")
             
             # 健康检查

@@ -208,7 +208,7 @@ class FeishuBotService:
                             "content": "查看详情"
                         },
                         "type": "primary",
-                        "url": f"http://106.54.12.39/todo"  # 跳转到代办页面
+                        "url": f"https://autolabflow.online/todo"  # 跳转到代办页面
                     }
                 ]
             }
