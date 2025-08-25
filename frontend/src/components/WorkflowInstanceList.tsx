@@ -131,9 +131,6 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [selectedNodeForDetail, setSelectedNodeForDetail] = useState<any>(null);
-  
-  // 模板连接图状态
-  const [enableTemplateConnectionMergeMode, setEnableTemplateConnectionMergeMode] = useState(false);
 
   // 添加subdivision功能支持
   const {
@@ -1452,31 +1449,13 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                           <div style={{ fontSize: '14px', color: '#666' }}>
                             工作流模板连接关系图
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <label style={{ 
-                              display: 'flex', 
-                              alignItems: 'center', 
-                              gap: '6px',
-                              fontSize: '13px',
-                              color: '#555',
-                              cursor: 'pointer'
-                            }}>
-                              <input
-                                type="checkbox"
-                                checked={enableTemplateConnectionMergeMode}
-                                onChange={(e) => setEnableTemplateConnectionMergeMode(e.target.checked)}
-                                style={{ cursor: 'pointer' }}
-                              />
-                              启用合并操作模式
-                            </label>
-                          </div>
                         </div>
                         
                         {/* 模板连接图组件 */}
                         <div style={{ flex: 1 }}>
                           <WorkflowTemplateConnectionGraph
                             workflowInstanceId={selectedInstance.instance_id}
-                            enableMergeMode={enableTemplateConnectionMergeMode}  // 使用用户控制的合并模式状态
+                            enableMergeMode={true}  // 对已完成的工作流始终启用合并模式
                             onNodeClick={(node) => {
                               console.log('🔍 [WorkflowInstanceList] 模板连接图节点点击:', node);
                             }}
