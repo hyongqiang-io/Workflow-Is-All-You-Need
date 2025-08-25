@@ -529,7 +529,11 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
               parentNodeId: node.id,
               expansionLevel: 0,
               onCollapse: collapseNode,
-              onNodeClick: handleSubWorkflowNodeClick // 传递子工作流节点点击处理函数
+              onNodeClick: (task: any) => {
+                // 直接使用主工作流的Modal显示逻辑
+                setSelectedTask(task);
+                setDetailModalVisible(true);
+              }
             },
             draggable: false,
             selectable: false,
@@ -633,59 +637,21 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
     setSubdivisionTaskDescription('');
   };
 
+  // 直接使用主工作流的节点点击处理，无需格式转换
   const handleNodeClick = (event: any, node: Node) => {
-    console.log('🖱️ [TaskFlowViewer] 节点点击处理:', { event, node });
+    console.log('🖱️ [TaskFlowViewer] 节点点击:', { event, node });
     
-    // 首先尝试从taskFlow.nodes中查找（主工作流节点）
+    // 直接查找主工作流节点
     let task = taskFlow?.nodes.find(n => n.id === node.id);
     
     if (task) {
-      console.log('🔍 [TaskFlowViewer] 找到主工作流节点:', task);
       setSelectedTask(task);
       setDetailModalVisible(true);
-    } else {
-      console.log('⚠️ [TaskFlowViewer] 未在主工作流中找到节点，可能是子工作流节点');
-      // 对于子工作流节点，直接使用node.data中的task信息
-      if (node.data && node.data.task) {
-        console.log('🔍 [TaskFlowViewer] 使用节点data中的task信息:', node.data.task);
-        setSelectedTask(node.data.task);
-        setDetailModalVisible(true);
-      } else {
-        console.warn('❌ [TaskFlowViewer] 无法获取节点信息');
-      }
+    } else if (node.data) {
+      // 子工作流节点直接使用原始数据
+      setSelectedTask(node.data);
+      setDetailModalVisible(true);
     }
-  };
-
-  // 新增：处理子工作流节点点击的专用函数
-  const handleSubWorkflowNodeClick = (nodeData: any) => {
-    console.log('🖱️ [TaskFlowViewer] 子工作流节点点击:', nodeData);
-    
-    // 将子工作流节点数据转换为统一的task格式
-    const unifiedTask = {
-      id: nodeData.id || nodeData.node_instance_id,
-      name: nodeData.name || nodeData.node_name || '未命名节点',
-      description: nodeData.task_description || nodeData.description || '',
-      type: nodeData.type || nodeData.node_type || 'process',
-      status: nodeData.status || 'pending',
-      assignee: nodeData.assignee || null,
-      position: { x: 0, y: 0 }, // 子工作流节点位置信息
-      created_at: nodeData.created_at || nodeData.start_at || '',
-      started_at: nodeData.started_at || nodeData.start_at || '',
-      completed_at: nodeData.completed_at || '',
-      estimated_duration: nodeData.estimated_duration,
-      actual_duration: nodeData.execution_duration_seconds,
-      retry_count: nodeData.retry_count || 0,
-      task_count: nodeData.task_count || 0,
-      error_message: nodeData.error_message || '',
-      // 子工作流特有信息
-      workflow_instance_id: nodeData.workflow_instance_id,
-      node_instance_id: nodeData.node_instance_id,
-      isSubWorkflowNode: true
-    };
-    
-    console.log('🔄 [TaskFlowViewer] 统一化后的任务数据:', unifiedTask);
-    setSelectedTask(unifiedTask);
-    setDetailModalVisible(true);
   };
 
   const formatDuration = (seconds?: number) => {

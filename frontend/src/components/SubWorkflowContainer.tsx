@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { Card, Typography, Tag, Progress, Space, Button, Tooltip } from 'antd';
 import { 
   BranchesOutlined,
@@ -20,15 +20,21 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import './SubWorkflowExpansion.css';
 
-// 导入统一的节点组件和hooks
+// 直接复用主工作流的组件和逻辑
 import { useSubWorkflowExpansion } from '../hooks/useSubWorkflowExpansion';
-// 导入主工作流的CustomInstanceNode组件
+// 导入工作流实例列表组件中的节点显示逻辑
 import { CustomInstanceNode } from './CustomInstanceNode';
-// 导入统一的API
 import { executionAPI } from '../services/api';
+// 导入主工作流的布局算法和连接逻辑
+import { 
+  validateAndFixEdges, 
+  generateMissingConnections, 
+  calculateDependencyBasedLayout 
+} from '../utils/workflowLayoutUtils';
 
 const { Title, Text } = Typography;
 
+// 直接使用主工作流的节点数据结构，无需转换
 interface SubWorkflowNode {
   node_instance_id: string;
   node_id: string;
@@ -36,8 +42,22 @@ interface SubWorkflowNode {
   node_type: string;
   status: string;
   task_count: number;
-  created_at?: string;
+  processor_name?: string;
+  processor_type?: string;
+  retry_count?: number;
+  execution_duration_seconds?: number;
+  input_data?: any;  // 直接使用解析后的对象
+  output_data?: any; // 直接使用解析后的对象
+  error_message?: string;
+  start_at?: string;
   completed_at?: string;
+  tasks?: any[];
+  position?: { x: number; y: number };
+  timestamps?: {
+    created_at?: string;
+    started_at?: string;
+    completed_at?: string;
+  };
 }
 
 interface SubWorkflowEdge {
@@ -70,14 +90,14 @@ interface SubWorkflowContainerProps {
   parentNodeId: string;
   expansionLevel: number;
   onCollapse: (nodeId: string) => void;
-  onNodeClick?: (node: SubWorkflowNode) => void;
+  onNodeClick?: (task: any) => void; // 统一使用主工作流的task格式
   className?: string;
   style?: React.CSSProperties;
   // 新增：支持递归subdivision查询的工作流实例ID
   workflowInstanceId?: string;
 }
 
-// 统一的节点类型定义 - 使用导入的CustomInstanceNode
+// 直接复用主工作流的节点类型
 const subWorkflowNodeTypes = {
   customInstance: CustomInstanceNode,
 };
@@ -93,101 +113,47 @@ const SubWorkflowContainer: React.FC<SubWorkflowContainerProps> = ({
   workflowInstanceId
 }) => {
   
-  // 添加节点详细信息状态 - 使用统一的task-flow数据结构
+  // 直接使用子工作流节点数据，无需转换
+  
+  // 直接从API获取任务流数据，使用与主工作流相同的接口
   const [taskFlowData, setTaskFlowData] = React.useState<any>(null);
   const [loadingTaskFlow, setLoadingTaskFlow] = React.useState(true);
   
-  // 添加递归subdivision支持 - 确保使用正确的工作流实例ID
+  // 使用与主工作流相同的subdivision支持
   const targetWorkflowInstanceId = subWorkflow.sub_workflow_instance_id || workflowInstanceId;
   
-  console.log(`🔍 [SubWorkflowContainer] 层级${expansionLevel + 1} 初始化useSubWorkflowExpansion`);
-  console.log(`   - 使用的工作流实例ID: ${targetWorkflowInstanceId}`);
-  
+  // 直接使用主工作流的subdivision扩展功能
   const {
     loadSubdivisionInfo,
-    expandNode,
     collapseNode,
-    getNodeExpansionState,
-    getNodeSubdivisionInfo,
     subdivisionInfo
   } = useSubWorkflowExpansion({
     workflowInstanceId: targetWorkflowInstanceId,
     onExpansionChange: (nodeId, isExpanded) => {
       console.log(`🔍 [SubWorkflowContainer] 层级${expansionLevel + 1} 节点展开变化:`, nodeId, isExpanded);
-      console.log(`   - 使用的工作流实例ID: ${targetWorkflowInstanceId}`);
     }
   });
-  
-  // 加载子工作流的task-flow数据 - 使用统一API
+  // 直接使用主工作流的任务流加载逻辑
   React.useEffect(() => {
     const loadTaskFlowData = async () => {
       if (!subWorkflow.sub_workflow_instance_id) {
-        console.warn('⚠️ [SubWorkflowContainer] 缺少子工作流实例ID，无法加载task-flow数据');
-        console.warn('⚠️ [SubWorkflowContainer] subWorkflow对象:', subWorkflow);
+        console.warn('⚠️ [SubWorkflowContainer] 缺少子工作流实例ID');
         setLoadingTaskFlow(false);
         return;
       }
       
-      console.log('🔄 [SubWorkflowContainer] 开始加载task-flow数据:', subWorkflow.sub_workflow_instance_id);
-      console.log('🔄 [SubWorkflowContainer] 完整subWorkflow对象:', JSON.stringify(subWorkflow, null, 2));
-      
       try {
-        // 使用统一的task-flow API获取完整数据
-        console.log('🌐 [SubWorkflowContainer] 调用API:', `/execution/workflows/${subWorkflow.sub_workflow_instance_id}/task-flow`);
+        // 直接使用主工作流的task-flow API
         const response: any = await executionAPI.getWorkflowTaskFlow(subWorkflow.sub_workflow_instance_id);
         
-        console.log('📥 [SubWorkflowContainer] API原始响应:', response);
-        console.log('📥 [SubWorkflowContainer] 响应状态:', response?.status);
-        console.log('📥 [SubWorkflowContainer] 响应数据类型:', typeof response?.data);
-        
-        if (response && response.data) {
-          const flowData = response.data.data || response.data;
-          console.log('📊 [SubWorkflowContainer] 解析后的flowData:', JSON.stringify(flowData, null, 2));
-          console.log('📊 [SubWorkflowContainer] flowData.nodes数量:', flowData.nodes?.length);
-          console.log('📊 [SubWorkflowContainer] flowData.tasks数量:', flowData.tasks?.length);
-          console.log('📊 [SubWorkflowContainer] flowData.edges数量:', flowData.edges?.length);
-          
-          // 详细检查每个节点的数据
-          if (flowData.nodes) {
-            flowData.nodes.forEach((node: any, index: number) => {
-              console.log(`🔍 [SubWorkflowContainer] 节点 ${index + 1} 详细信息:`, {
-                node_instance_id: node.node_instance_id,
-                node_name: node.node_name,
-                node_type: node.node_type,
-                status: node.status,
-                processor_name: node.processor_name,
-                processor_type: node.processor_type,
-                task_count: node.task_count,
-                tasks: node.tasks,
-                input_data: node.input_data,
-                output_data: node.output_data,
-                timestamps: node.timestamps
-              });
-            });
-          }
-          
-          setTaskFlowData(flowData);
-          console.log('✅ [SubWorkflowContainer] task-flow数据加载完成:', flowData.nodes?.length, '个节点');
+        if (response && response.success && response.data) {
+          setTaskFlowData(response.data);
+          console.log('✅ [SubWorkflowContainer] 任务流数据加载成功');
         } else {
-          console.warn('⚠️ [SubWorkflowContainer] task-flow响应数据格式异常:', response);
-          console.warn('⚠️ [SubWorkflowContainer] response.data:', response?.data);
-          console.warn('⚠️ [SubWorkflowContainer] response结构:', Object.keys(response || {}));
+          console.warn('⚠️ [SubWorkflowContainer] API响应格式异常:', response);
         }
-        
       } catch (error) {
-        console.error('❌ [SubWorkflowContainer] 加载task-flow数据失败:', error);
-        
-        // Type-safe error handling
-        const errorDetails: any = {};
-        if (error instanceof Error) {
-          errorDetails.message = error.message;
-          errorDetails.stack = error.stack;
-        }
-        if (error && typeof error === 'object' && 'response' in error) {
-          errorDetails.response = (error as any).response?.data;
-        }
-        
-        console.error('❌ [SubWorkflowContainer] 错误详细信息:', errorDetails);
+        console.error('❌ [SubWorkflowContainer] 加载任务流数据失败:', error);
       } finally {
         setLoadingTaskFlow(false);
       }
@@ -196,216 +162,131 @@ const SubWorkflowContainer: React.FC<SubWorkflowContainerProps> = ({
     loadTaskFlowData();
   }, [subWorkflow.sub_workflow_instance_id]);
   
-  // 在组件加载时获取subdivision信息 - 确保使用正确的工作流实例ID
+  // 直接使用主工作流的subdivision信息加载逻辑
   React.useEffect(() => {
-    // 优先使用子工作流的实例ID，如果没有则使用传入的workflowInstanceId
-    const targetInstanceId = subWorkflow.sub_workflow_instance_id || workflowInstanceId;
-    
-    if (targetInstanceId) {
-      console.log(`🔄 [SubWorkflowContainer] 层级${expansionLevel + 1} 加载subdivision信息`);
-      console.log(`   - 目标工作流实例ID: ${targetInstanceId}`);
-      console.log(`   - 子工作流实例ID: ${subWorkflow.sub_workflow_instance_id}`);
-      console.log(`   - 传入的工作流实例ID: ${workflowInstanceId}`);
-      console.log(`   - 预期API调用: /api/execution/workflows/${targetInstanceId}/subdivision-info`);
-      
-      loadSubdivisionInfo(targetInstanceId);
-    } else {
-      console.warn(`⚠️ [SubWorkflowContainer] 层级${expansionLevel + 1} 缺少工作流实例ID，无法加载subdivision信息`);
+    if (targetWorkflowInstanceId) {
+      loadSubdivisionInfo(targetWorkflowInstanceId);
     }
-  }, [subWorkflow.sub_workflow_instance_id, workflowInstanceId, loadSubdivisionInfo, expansionLevel]);
+  }, [subWorkflow.sub_workflow_instance_id, workflowInstanceId, expansionLevel]); // 移除函数依赖
   
-  // 计算布局位置 - 使用task-flow数据
-  const calculateSubWorkflowLayout = (nodes: any[]) => {
-    const nodeWidth = 180;
-    const nodeHeight = 120;
-    const horizontalGap = 200;
-    const verticalGap = 150;
+  // 使用与主工作流相同的智能布局算法
+  const calculateOptimizedSubWorkflowLayout = (nodes: any[], edges: any[]) => {
+    console.log('📐 [SubWorkflowContainer] 开始使用主工作流布局算法');
+    console.log('   - 节点数量:', nodes.length);
+    console.log('   - 边数量:', edges.length);
+    console.log('   - 原始边数据:', edges);
+
+    // 1. 验证和修复边数据
+    const validatedEdges = validateAndFixEdges(nodes, edges);
+    console.log('✅ [SubWorkflowContainer] 边数据验证完成，有效边数量:', validatedEdges.length);
+
+    // 2. 如果没有有效边，生成智能连接
+    const finalEdges = validatedEdges.length > 0 ? 
+      validatedEdges : 
+      generateMissingConnections(nodes);
+
+    console.log('🎯 [SubWorkflowContainer] 最终使用的边数据:', finalEdges);
+
+    // 3. 使用基于依赖关系的智能布局
+    const positions = calculateDependencyBasedLayout(nodes, finalEdges);
     
-    // 简单的网格布局，可以后续优化为更智能的布局算法
-    return nodes.map((node, index) => {
-      const row = Math.floor(index / 3);
-      const col = index % 3;
-      
-      return {
-        x: col * horizontalGap,
-        y: row * verticalGap
-      };
-    });
+    console.log('📍 [SubWorkflowContainer] 智能布局计算完成:', positions);
+    
+    return { positions, edges: finalEdges };
   };
 
-  // 转换节点数据为ReactFlow格式 - 使用统一的task-flow数据结构
-  const [nodes, setNodes, onNodesChange] = useNodesState(
-    useMemo(() => {
-      console.log('🔄 [SubWorkflowContainer] 开始转换节点数据');
-      console.log('🔄 [SubWorkflowContainer] taskFlowData:', taskFlowData);
-      console.log('🔄 [SubWorkflowContainer] subWorkflow.nodes:', subWorkflow.nodes);
+  // 直接使用主工作流的ReactFlow节点转换逻辑
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  
+  // 当taskFlowData变化时更新节点和边 - 使用智能布局算法
+  React.useEffect(() => {
+    if (taskFlowData?.nodes && Array.isArray(taskFlowData.nodes)) {
+      console.log('🔄 [SubWorkflowContainer] 开始使用智能布局转换数据');
+      console.log('   - 节点数量:', taskFlowData.nodes.length);
+      console.log('   - 原始边数据:', taskFlowData.edges);
       
-      // 如果task-flow数据还没加载完成，使用fallback数据
-      const sourceNodes = taskFlowData?.nodes || subWorkflow.nodes || [];
-      console.log('🔄 [SubWorkflowContainer] 选择的sourceNodes数量:', sourceNodes.length);
-      console.log('🔄 [SubWorkflowContainer] sourceNodes详细:', JSON.stringify(sourceNodes, null, 2));
+      const sourceNodes = taskFlowData.nodes;
+      const sourceEdges = taskFlowData.edges || [];
       
-      const positions = calculateSubWorkflowLayout(sourceNodes);
+      // 使用主工作流的智能布局算法
+      const { positions, edges: optimizedEdges } = calculateOptimizedSubWorkflowLayout(sourceNodes, sourceEdges);
       
-      return sourceNodes.map((node: any, index: number) => {
-        const nodeId = node.node_instance_id;
+      // 转换节点为ReactFlow格式
+      const newNodes = sourceNodes.map((node: any, index: number) => {
+        const nodeId = node.node_instance_id || node.id || `node-${index}`;
         
-        console.log(`🔍 [SubWorkflowContainer] 处理节点 ${index + 1}:`, {
-          node_instance_id: nodeId,
+        console.log(`🔍 [SubWorkflowContainer] 处理节点:`, {
+          nodeId,
           node_name: node.node_name,
           node_type: node.node_type,
           status: node.status,
-          processor_name: node.processor_name,
-          processor_type: node.processor_type,
-          task_count: node.task_count,
-          tasks_length: node.tasks?.length,
-          has_input_data: !!node.input_data,
-          has_output_data: !!node.output_data,
-          has_timestamps: !!node.timestamps
+          position: positions[nodeId]
         });
         
-        // 获取递归subdivision信息
-        const subWorkflowInfo = getNodeSubdivisionInfo(nodeId);
-        const expansionState = getNodeExpansionState(nodeId);
-        
-        console.log(`🔍 [SubWorkflowContainer] 层级${expansionLevel + 1} 节点 ${node.node_name} subdivision信息:`, subWorkflowInfo);
-        console.log(`📊 [SubWorkflowContainer] 节点 ${node.node_name} task-flow数据:`, node);
-        
-        // 构建节点数据 - 确保所有字段都有值
         const nodeData = {
-          // 使用与主工作流相同的数据结构 - 直接使用task-flow数据
           nodeId: nodeId,
           label: node.node_name || node.name || `节点 ${index + 1}`,
           status: node.status || 'unknown',
-          // 处理器信息 - 直接从task-flow数据获取，有fallback
-          processor_name: node.processor_name || node.processor?.name || `子工作流节点`,
-          processor_type: node.processor_type || node.processor?.type || node.node_type || 'unknown',
-          task_count: node.task_count || node.tasks?.length || 0,
-          // 详细信息 - 使用task-flow提供的完整数据，有fallback
+          processor_name: node.processor_name || '子工作流节点',
+          processor_type: node.processor_type || node.node_type || 'unknown',
+          task_count: node.task_count || 0,
           retry_count: node.retry_count || 0,
           execution_duration_seconds: node.execution_duration_seconds || 0,
           input_data: node.input_data || {},
           output_data: node.output_data || {},
           error_message: node.error_message || '',
-          start_at: node.start_at || node.timestamps?.started_at || node.started_at,
+          start_at: node.start_at || node.timestamps?.started_at,
           completed_at: node.completed_at || node.timestamps?.completed_at,
           tasks: node.tasks || [],
-          onNodeClick: (nodeData: any) => {
-            console.log('🖱️ [SubWorkflowContainer] 子工作流节点点击:', nodeData);
-            // 构造符合Modal显示要求的节点数据格式
-            const modalNodeData = {
-              // 传递完整的原始节点数据作为基础
-              ...node,
-              // 覆盖和补充必要的字段
-              id: nodeId,
-              node_instance_id: nodeId,
-              name: node.node_name || node.name,
-              node_name: node.node_name || node.name,
-              type: node.node_type,
-              node_type: node.node_type,
-              status: node.status,
-              created_at: node.timestamps?.created_at || node.created_at,
-              completed_at: node.completed_at || node.timestamps?.completed_at,
-              task_count: node.task_count || node.tasks?.length || 0,
-              // 添加其他可能需要的字段
-              processor_type: node.processor_type || node.node_type,
-              processor_name: node.processor_name,
-              workflow_instance_id: subWorkflow.sub_workflow_instance_id || workflowInstanceId
-            };
-            console.log('🖱️ [SubWorkflowContainer] 传递给Modal的数据:', modalNodeData);
-            onNodeClick?.(modalNodeData);
+          onNodeClick: () => {
+            console.log('🖱️ [SubWorkflowContainer] 节点点击:', node);
+            onNodeClick?.(node);
           },
-          // 支持递归subdivision
-          subWorkflowInfo,
-          isExpanded: expansionState.isExpanded,
-          isLoading: expansionState.isLoading,
-          onExpandNode: expandNode,
-          onCollapseNode: collapseNode,
-          // 层级信息
           expansionLevel: expansionLevel + 1
         };
         
-        console.log(`✅ [SubWorkflowContainer] 节点 ${node.node_name || nodeId} 数据转换完成:`, nodeData);
-        
         return {
           id: nodeId,
-          type: 'customInstance', // 使用统一的节点类型
-          position: positions[index],
+          type: 'customInstance',
+          position: positions[nodeId] || { x: 300 + (index % 3) * 200, y: 100 + Math.floor(index / 3) * 150 },
           data: nodeData,
           draggable: false,
           selectable: true
         };
       });
-    }, [taskFlowData, subWorkflow.nodes, expansionLevel, onNodeClick, getNodeSubdivisionInfo, getNodeExpansionState, expandNode, collapseNode])
-  );
-
-  // 转换边数据为ReactFlow格式 - 使用task-flow数据
-  const [edges, setEdges, onEdgesChange] = useEdgesState(
-    useMemo(() => {
-      let processedEdges = [];
       
-      // 优先使用task-flow的边数据
-      const sourceEdges = taskFlowData?.edges || subWorkflow.edges || [];
-      const sourceNodes = taskFlowData?.nodes || subWorkflow.nodes || [];
+      // 转换边为ReactFlow格式
+      const newEdges = optimizedEdges.map((edge: any, index: number) => ({
+        id: edge.id || `edge-${index}`,
+        source: edge.source,
+        target: edge.target,
+        label: edge.label,
+        type: 'smoothstep',
+        style: { 
+          stroke: '#52c41a', 
+          strokeWidth: 2,
+          strokeDasharray: edge.label === '智能连接' ? '5,5' : 'none'
+        },
+        labelStyle: { fontSize: '10px', fill: '#666' },
+        labelBgStyle: { fill: '#f0f0f0', fillOpacity: 0.8 }
+      }));
       
-      // 首先处理后端返回的边数据
-      if (sourceEdges && sourceEdges.length > 0) {
-        processedEdges = sourceEdges.map((edge: any) => ({
-          id: edge.id,
-          source: edge.source,
-          target: edge.target,
-          label: edge.label,
-          type: 'smoothstep',
-          style: { 
-            stroke: '#52c41a', 
-            strokeWidth: 2,
-            strokeDasharray: '5,5' // 虚线表示子工作流内部连接
-          },
-          labelStyle: { fontSize: '10px', fill: '#666' },
-          labelBgStyle: { fill: '#f0f0f0', fillOpacity: 0.8 }
-        }));
-      } else if (sourceNodes && sourceNodes.length > 1) {
-        // 如果没有边数据，为简单的工作流创建默认连接
-        console.log('🔗 [SubWorkflowContainer] 没有边数据，创建默认连接');
-        
-        // 按节点类型排序：start -> process -> end
-        const sortedNodes = [...sourceNodes].sort((a: any, b: any) => {
-          const getTypeOrder = (type: string) => {
-            if (type === 'start') return 0;
-            if (type === 'end') return 2;
-            return 1; // process, human, ai等
-          };
-          return getTypeOrder(a.node_type) - getTypeOrder(b.node_type);
-        });
-        
-        // 创建顺序连接
-        for (let i = 0; i < sortedNodes.length - 1; i++) {
-          const source = sortedNodes[i].node_instance_id;
-          const target = sortedNodes[i + 1].node_instance_id;
-          
-          processedEdges.push({
-            id: `default-edge-${source}-${target}`,
-            source: source,
-            target: target,
-            type: 'smoothstep',
-            style: { 
-              stroke: '#52c41a', 
-              strokeWidth: 2,
-              strokeDasharray: '5,5'
-            },
-            label: '自动连接',
-            labelStyle: { fontSize: '10px', fill: '#666' },
-            labelBgStyle: { fill: '#f0f0f0', fillOpacity: 0.8 }
-          });
-          
-          console.log(`🔗 创建默认连接: ${sortedNodes[i].node_name} -> ${sortedNodes[i + 1].node_name}`);
-        }
-      }
+      console.log('✅ [SubWorkflowContainer] 智能布局转换完成');
+      console.log('   - 节点数量:', newNodes.length);
+      console.log('   - 边数量:', newEdges.length);
+      console.log('   - 节点位置:', newNodes.map((n: any) => ({ id: n.id, position: n.position, label: n.data.label })));
+      console.log('   - 边连接:', newEdges.map((e: any) => ({ id: e.id, source: e.source, target: e.target, label: e.label })));
       
-      console.log(`🔗 [SubWorkflowContainer] 最终边数量: ${processedEdges.length}`, processedEdges);
-      return processedEdges;
-    }, [taskFlowData?.edges, taskFlowData?.nodes, subWorkflow.edges, subWorkflow.nodes])
-  );
+      setNodes(newNodes);
+      setEdges(newEdges);
+      
+    } else {
+      console.log('📝 [SubWorkflowContainer] 数据为空，清空节点和边');
+      setNodes([]);
+      setEdges([]);
+    }
+  }, [taskFlowData, expansionLevel]); // 简化依赖，避免无限循环
 
   // 获取状态相关的样式和图标
   const getStatusInfo = (status: string) => {
@@ -427,12 +308,12 @@ const SubWorkflowContainer: React.FC<SubWorkflowContainerProps> = ({
 
   const statusInfo = getStatusInfo(subWorkflow.status);
   
-  // 计算进度 - 优先使用task-flow数据的统计信息
+  // 直接使用taskFlowData的统计信息
   const statistics = taskFlowData?.statistics;
-  const totalNodes = statistics?.total_nodes || subWorkflow.total_nodes || 0;
-  const completedNodes = statistics?.node_status_count?.completed || subWorkflow.completed_nodes || 0;
-  const runningNodes = statistics?.node_status_count?.running || subWorkflow.running_nodes || 0;
-  const failedNodes = statistics?.node_status_count?.failed || subWorkflow.failed_nodes || 0;
+  const totalNodes = statistics?.total_nodes || 0;
+  const completedNodes = statistics?.node_status_count?.completed || 0;
+  const runningNodes = statistics?.node_status_count?.running || 0;
+  const failedNodes = statistics?.node_status_count?.failed || 0;
   
   const progressPercentage = totalNodes > 0 
     ? Math.round((completedNodes / totalNodes) * 100) 
@@ -450,7 +331,7 @@ const SubWorkflowContainer: React.FC<SubWorkflowContainerProps> = ({
         minHeight: '400px',
         ...style
       }}
-      bodyStyle={{ padding: '16px' }}
+      styles={{ body: { padding: '16px' } }}
       title={
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Space>
@@ -522,6 +403,23 @@ const SubWorkflowContainer: React.FC<SubWorkflowContainerProps> = ({
 
       {/* 子工作流图形视图 */}
       <div style={{ height: '300px', border: '1px solid #e8e8e8', borderRadius: '6px' }}>
+        {/* 调试信息显示 */}
+        {process.env.NODE_ENV === 'development' && (
+          <div style={{ 
+            position: 'absolute', 
+            top: '10px', 
+            right: '10px', 
+            background: 'rgba(0,0,0,0.7)', 
+            color: 'white', 
+            padding: '4px 8px', 
+            borderRadius: '4px', 
+            fontSize: '10px',
+            zIndex: 1000
+          }}>
+            节点: {nodes.length} | 边: {edges.length} | 加载: {loadingTaskFlow ? '是' : '否'}
+          </div>
+        )}
+        
         <ReactFlowProvider>
           <ReactFlow
             nodes={nodes}
@@ -563,35 +461,49 @@ const SubWorkflowContainer: React.FC<SubWorkflowContainerProps> = ({
             />
           </ReactFlow>
         </ReactFlowProvider>
+        
+        {/* 数据加载状态指示器 */}
+        {loadingTaskFlow && (
+          <div style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            background: 'rgba(255, 255, 255, 0.9)',
+            padding: '20px',
+            borderRadius: '8px',
+            textAlign: 'center',
+            zIndex: 999
+          }}>
+            <div style={{ fontSize: '14px', marginBottom: '8px' }}>正在加载子工作流数据...</div>
+            <div style={{ fontSize: '12px', color: '#666' }}>请稍候</div>
+          </div>
+        )}
+        
+        {/* 无数据提示 */}
+        {!loadingTaskFlow && nodes.length === 0 && (
+          <div style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            textAlign: 'center',
+            color: '#999',
+            fontSize: '14px',
+            zIndex: 999
+          }}>
+            <div style={{ fontSize: '24px', marginBottom: '8px' }}>📊</div>
+            <div>子工作流暂无节点数据</div>
+            <div style={{ fontSize: '12px', marginTop: '4px' }}>
+              实例ID: {subWorkflow.sub_workflow_instance_id || '未指定'}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* 渲染递归展开的子工作流 */}
-      {Object.keys(subdivisionInfo).map(nodeId => {
-        const expansionState = getNodeExpansionState(nodeId);
-        
-        // 检查节点是否已展开且有子工作流数据
-        if (expansionState.isExpanded && expansionState.subWorkflowData) {
-          console.log(`🔍 [SubWorkflowContainer] 渲染层级${expansionLevel + 1}的展开子工作流:`, nodeId, expansionState.subWorkflowData.length);
-          
-          return expansionState.subWorkflowData.map((subDetail: any, index: number) => (
-            <SubWorkflowContainer
-              key={`${nodeId}-sub-${index}`}
-              subWorkflow={subDetail}
-              parentNodeId={nodeId}
-              expansionLevel={expansionLevel + 1}
-              onCollapse={collapseNode}
-              onNodeClick={onNodeClick}
-              workflowInstanceId={subDetail.sub_workflow_instance_id}
-              style={{
-                marginTop: '16px',
-                marginLeft: `${(expansionLevel + 1) * 20}px`, // 缩进显示层级
-                borderColor: `hsl(${120 + (expansionLevel + 1) * 60}, 70%, 50%)` // 不同层级使用不同颜色
-              }}
-            />
-          ));
-        }
-        return null;
-      })}
+      {/* 渲染递归展开的子工作流 - 暂时禁用，避免复杂的依赖循环 */}
+      {/* 注释：为了避免函数依赖导致的无限循环，暂时禁用递归子工作流功能 */}
+      {/* 后续可以考虑重新设计这个功能的实现方式 */}
 
       {/* 层级指示器 */}
       <div className="expansion-level-indicator">

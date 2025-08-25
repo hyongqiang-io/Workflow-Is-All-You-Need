@@ -203,7 +203,7 @@ const applyIntelligentLayout = (nodes: any[], edges: any[], algorithm: string) =
     case 'file_system':
       return applyFileSystemLayout(layoutedNodes, edges, nodeSpacing, levelSpacing);
     default:
-      return applyHierarchicalLayout(layoutedNodes, edges, nodeSpacing, levelSpacing);
+      return applyTreeLayout(layoutedNodes, edges, nodeSpacing, levelSpacing);
   }
 };
 

@@ -80,14 +80,11 @@ const SubWorkflowNodeAdapter = ({ data }: { data: any }) => {
 
   const handleCollapse = (nodeId: string) => {
     console.log('🔍 [SubWorkflowNodeAdapter] 收起子工作流:', nodeId);
-    // 这里可以添加收起逻辑，如果需要的话
   };
 
-  // 处理子工作流内节点的双击事件 - 使用与主工作流节点相同的逻辑
+  // 直接使用主工作流的节点显示逻辑
   const handleSubWorkflowNodeClick = (node: any) => {
     console.log('🖱️ [SubWorkflowNodeAdapter] 子工作流节点被点击:', node);
-    
-    // 调用外部传入的回调函数来设置节点详情
     if (data.onSubWorkflowNodeClick) {
       data.onSubWorkflowNodeClick(node);
     }
@@ -100,7 +97,7 @@ const SubWorkflowNodeAdapter = ({ data }: { data: any }) => {
       expansionLevel={data.expansionLevel || 0}
       onCollapse={handleCollapse}
       onNodeClick={handleSubWorkflowNodeClick}
-      workflowInstanceId={data.subWorkflowInstanceId} // 传递工作流实例ID支持递归subdivision
+      workflowInstanceId={data.subWorkflowInstanceId}
     />
   );
 };
@@ -208,7 +205,8 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
         type: 'customInstance',
         position: position,
         data: {
-          nodeId: nodeId, // 添加节点ID
+          // 直接使用主工作流的数据结构
+          nodeId: nodeId,
           label: node.node_name || `节点 ${index + 1}`,
           status: node.status,
           processor_name: node.processor_name,
@@ -223,7 +221,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
           completed_at: node.completed_at,
           tasks: node.tasks || [],
           onNodeClick: setSelectedNodeForDetail,
-          // 添加subdivision相关数据
+          // subdivision支持
           subWorkflowInfo,
           isExpanded: expansionState.isExpanded,
           isLoading: expansionState.isLoading,
@@ -308,7 +306,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
               startedAt: subWorkflow.started_at,
               completedAt: subWorkflow.completed_at,
               
-              // 添加节点详情回调，使用主工作流相同的Modal显示逻辑
+              // 添加节点详情回调，直接使用主工作流的Modal显示逻辑
               onSubWorkflowNodeClick: setSelectedNodeForDetail
             }
           };
@@ -1550,7 +1548,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                 <strong>处理器:</strong> {selectedNodeForDetail.processor_name} ({selectedNodeForDetail.processor_type})
               </div>
             )}
-            {selectedNodeForDetail.task_count && (
+            {selectedNodeForDetail.task_count !== undefined && selectedNodeForDetail.task_count !== null && (
               <div style={{ marginBottom: 16 }}>
                 <strong>任务数量:</strong> {selectedNodeForDetail.task_count}
               </div>
