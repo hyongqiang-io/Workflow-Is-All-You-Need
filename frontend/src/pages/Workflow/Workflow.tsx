@@ -39,8 +39,6 @@ interface WorkflowItem {
   creatorId: string;
   createdAt: string;
   updatedAt: string;
-  nodeCount: number;
-  executionCount: number;
 }
 
 const WorkflowPage: React.FC = () => {
@@ -58,18 +56,15 @@ const WorkflowPage: React.FC = () => {
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowItem | null>(null);
 
   // AI生成相关状态
-<<<<<<< HEAD
   const [aiGenerateVisible, setAiGenerateVisible] = useState(false);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiForm] = Form.useForm();
+  const [aiGeneratorVisible, setAiGeneratorVisible] = useState(false);
+  const [aiGeneratedData, setAiGeneratedData] = useState<any>(null);
 
   // 任务细分预览相关状态
   const [subdivisionPreviewVisible, setSubdivisionPreviewVisible] = useState(false);
   const [subdivisionPreviewWorkflow, setSubdivisionPreviewWorkflow] = useState<WorkflowItem | null>(null);
-=======
-  const [aiGeneratorVisible, setAiGeneratorVisible] = useState(false);
-  const [aiGeneratedData, setAiGeneratedData] = useState<any>(null);
->>>>>>> origin/8/13/json
 
   useEffect(() => {
     loadWorkflows();
@@ -112,8 +107,6 @@ const WorkflowPage: React.FC = () => {
         creatorId: workflow.creator_id || '',
         createdAt: workflow.created_at || workflow.createdAt || '',
         updatedAt: workflow.updated_at || workflow.updatedAt || '',
-        nodeCount: workflow.node_count || workflow.nodeCount || 0,
-        executionCount: workflow.execution_count || workflow.executionCount || 0,
       }));
       
       setWorkflows(processedWorkflows);
@@ -123,36 +116,6 @@ const WorkflowPage: React.FC = () => {
       setWorkflows([]);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'draft':
-        return 'default';
-      case 'active':
-        return 'processing';
-      case 'completed':
-        return 'success';
-      case 'paused':
-        return 'warning';
-      default:
-        return 'default';
-    }
-  };
-
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'draft':
-        return '草稿';
-      case 'active':
-        return '运行中';
-      case 'completed':
-        return '已完成';
-      case 'paused':
-        return '已暂停';
-      default:
-        return '未知';
     }
   };
 
@@ -199,9 +162,7 @@ const WorkflowPage: React.FC = () => {
           createdBy: '当前用户',
           creatorId: workflowData.creator_id || user.user_id,
           createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          nodeCount: 0,
-          executionCount: 0,
+          updatedAt: new Date().toISOString()
         });
         setDesignerVisible(true);
       }
@@ -427,19 +388,18 @@ const WorkflowPage: React.FC = () => {
       console.log('节点数量:', nodes.length);
       console.log('连线数量:', edges.length);
       
-      // 更新工作流基本信息（节点数量等统计信息）
+      // 更新工作流基本信息
       const workflowUpdateData = {
         name: currentWorkflow.name,
         description: currentWorkflow.description,
-        status: currentWorkflow.status,
-        node_count: nodes.length
+        status: currentWorkflow.status
       };
       
       await workflowAPI.updateWorkflow(currentWorkflow.baseId, workflowUpdateData);
       
       message.success('工作流保存成功');
       
-      // 重新加载工作流列表以更新统计信息
+      // 重新加载工作流列表
       await loadWorkflows();
       
       console.log('工作流保存完成');
@@ -488,7 +448,6 @@ const WorkflowPage: React.FC = () => {
     loadWorkflows();
   };
 
-<<<<<<< HEAD
   const handleViewSubdivisions = (workflow: WorkflowItem) => {
     setSubdivisionPreviewWorkflow(workflow);
     setSubdivisionPreviewVisible(true);
@@ -522,9 +481,10 @@ const WorkflowPage: React.FC = () => {
       console.error('采纳子工作流失败:', error);
       message.error(error.message || '采纳子工作流失败');
     }
-=======
+  };
+
   // AI生成处理函数
-  const handleAIGenerate = () => {
+  const handleAIGenerateNew = () => {
     setAiGeneratorVisible(true);
   };
 
@@ -543,7 +503,6 @@ const WorkflowPage: React.FC = () => {
     setSelectedWorkflow(null);
     setImportExportMode('import');
     setImportExportVisible(true);
->>>>>>> origin/8/13/json
   };
 
   const formatDate = (dateString: string) => {
@@ -573,35 +532,6 @@ const WorkflowPage: React.FC = () => {
             版本 v{record.version}
           </div>
         </div>
-      )
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 100,
-      render: (status: string) => (
-        <Tag color={getStatusColor(status)}>
-          {getStatusText(status)}
-        </Tag>
-      )
-    },
-    {
-      title: '节点数',
-      dataIndex: 'nodeCount',
-      key: 'nodeCount',
-      width: 80,
-      render: (count: number) => (
-        <Text strong>{count}</Text>
-      )
-    },
-    {
-      title: '执行次数',
-      dataIndex: 'executionCount',
-      key: 'executionCount',
-      width: 100,
-      render: (count: number) => (
-        <Text type="secondary">{count}</Text>
       )
     },
     {
@@ -731,25 +661,12 @@ const WorkflowPage: React.FC = () => {
                 创建工作流
               </Button>
               <Button 
-<<<<<<< HEAD
-                type="default" 
-                icon={<RobotOutlined />}
-                onClick={handleAIGenerate}
-                style={{ 
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
-                  borderColor: '#667eea',
-                  color: 'white'
-                }}
-              >
-                🤖 AI生成
-=======
                 type="primary"
                 ghost
                 icon={<RobotOutlined />}
-                onClick={handleAIGenerate}
+                onClick={handleAIGenerateNew}
               >
                 AI生成工作流
->>>>>>> origin/8/13/json
               </Button>
               <Button 
                 icon={<UploadOutlined />}
@@ -936,7 +853,6 @@ const WorkflowPage: React.FC = () => {
         onImportSuccess={handleImportSuccess}
       />
 
-<<<<<<< HEAD
       {/* 工作流细分预览模态框 */}
       <Modal
         title={`工作流细分预览 - ${subdivisionPreviewWorkflow?.name || ''}`}
@@ -952,7 +868,8 @@ const WorkflowPage: React.FC = () => {
             onAdoptSubdivision={handleAdoptSubdivision}
           />
         )}
-=======
+      </Modal>
+
       {/* AI工作流生成器模态框 */}
       <Modal
         title="AI工作流生成器"
@@ -966,7 +883,6 @@ const WorkflowPage: React.FC = () => {
           onWorkflowGenerated={handleAIWorkflowGenerated}
           onImportToEditor={handleAIImportToEditor}
         />
->>>>>>> origin/8/13/json
       </Modal>
     </div>
   );
