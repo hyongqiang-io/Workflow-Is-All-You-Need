@@ -147,8 +147,8 @@ class WorkflowTemplateConnectionService:
         JOIN task_instance ti ON ts.original_task_id = ti.task_instance_id
         JOIN node_instance ni ON ti.node_instance_id = ni.node_instance_id
         JOIN node n ON ni.node_id = n.node_id
-        JOIN workflow pw ON n.workflow_base_id = pw.workflow_base_id AND pw.is_current_version = TRUE
-        JOIN workflow sw ON ts.sub_workflow_base_id = sw.workflow_base_id AND sw.is_current_version = TRUE
+        LEFT JOIN workflow pw ON n.workflow_base_id = pw.workflow_base_id AND pw.is_current_version = TRUE
+        LEFT JOIN workflow sw ON ts.sub_workflow_base_id = sw.workflow_base_id AND sw.is_current_version = TRUE
         LEFT JOIN workflow_instance swi ON ts.sub_workflow_instance_id = swi.workflow_instance_id
         WHERE ti.workflow_instance_id = $1 
         AND ts.is_deleted = FALSE
@@ -158,6 +158,18 @@ class WorkflowTemplateConnectionService:
         """
         
         subdivisions = await self.db.fetch_all(subdivisions_query, workflow_instance_id)
+        
+        logger.info(f"📊 [DEBUG] 查询subdivision结果: 工作流实例 {workflow_instance_id}")
+        logger.info(f"📊 [DEBUG] 找到 {len(subdivisions)} 个subdivision记录")
+        
+        for i, sub in enumerate(subdivisions):
+            logger.info(f"📊 [DEBUG] Subdivision {i+1}:")
+            logger.info(f"    - subdivision_id: {sub['subdivision_id']}")
+            logger.info(f"    - subdivision_name: {sub['subdivision_name']}")
+            logger.info(f"    - sub_workflow_base_id: {sub['sub_workflow_base_id']}")
+            logger.info(f"    - sub_workflow_instance_id: {sub['sub_workflow_instance_id']}")
+            logger.info(f"    - original_node_name: {sub['original_node_name']}")
+            logger.info(f"    - sub_workflow_name: {sub['sub_workflow_name']}")
         
         # 转换当前层级的连接为标准格式
         current_connections = []
@@ -174,7 +186,7 @@ class WorkflowTemplateConnectionService:
                 # 父工作流信息
                 "parent_workflow": {
                     "workflow_base_id": str(subdivision["parent_workflow_base_id"]),
-                    "workflow_name": subdivision["parent_workflow_name"],
+                    "workflow_name": subdivision["parent_workflow_name"] or f"工作流_{subdivision['parent_workflow_base_id'][:8]}",
                     "workflow_description": subdivision["parent_workflow_description"] or "",
                     "workflow_instance_id": str(subdivision["parent_workflow_instance_id"]),
                     "connected_node": {
@@ -189,10 +201,10 @@ class WorkflowTemplateConnectionService:
                 # 子工作流信息
                 "sub_workflow": {
                     "workflow_base_id": str(subdivision["sub_workflow_base_id"]),
-                    "workflow_name": subdivision["sub_workflow_name"],
+                    "workflow_name": subdivision["sub_workflow_name"] or f"工作流_{subdivision['sub_workflow_base_id'][:8]}",
                     "workflow_description": subdivision["sub_workflow_description"] or "",
                     "instance_id": str(subdivision["sub_workflow_instance_id"]) if subdivision["sub_workflow_instance_id"] else None,
-                    "status": subdivision["sub_workflow_status"],
+                    "status": subdivision["sub_workflow_status"] or "unknown",
                     "started_at": subdivision["sub_workflow_started_at"].isoformat() if subdivision["sub_workflow_started_at"] else None,
                     "completed_at": subdivision["sub_workflow_completed_at"].isoformat() if subdivision["sub_workflow_completed_at"] else None,
                     "total_nodes": subdivision["sub_workflow_total_nodes"] or 0,
@@ -728,8 +740,13 @@ class WorkflowTemplateConnectionService:
                 unique_workflow_ids.add(parent_id)
                 unique_workflow_ids.add(sub_id)
             
+            logger.info(f"📊 [DEBUG] 收集到的唯一工作流ID数量: {len(unique_workflow_ids)}")
+            logger.info(f"📊 [DEBUG] 工作流ID列表: {list(unique_workflow_ids)}")
+            logger.info(f"📊 [DEBUG] 模板连接关系数量: {len(base_connections['template_connections'])}")
+            
             # 获取每个工作流的详细内部结构
             for workflow_base_id in unique_workflow_ids:
+                logger.info(f"🔍 [DEBUG] 获取工作流 {workflow_base_id} 的内部结构...")
                 detailed_workflows[workflow_base_id] = await self._get_workflow_internal_structure(
                     uuid.UUID(workflow_base_id)
                 )
@@ -1018,6 +1035,11 @@ class WorkflowTemplateConnectionService:
             # 为每个工作流添加节点
             for workflow_id, workflow_data in detailed_workflows.items():
                 workflow_pos = workflow_positions.get(workflow_id, {"x": 0, "y": 0})
+                
+                logger.info(f"🏗️ [DEBUG] 创建工作流容器节点: {workflow_id}")
+                logger.info(f"    - 位置: x={workflow_pos['x']}, y={workflow_pos['y']}")
+                logger.info(f"    - 节点数: {workflow_data.get('node_count', 0)}")
+                logger.info(f"    - 连接数: {workflow_data.get('connection_count', 0)}")
                 
                 # 添加工作流容器节点
                 workflow_node = {

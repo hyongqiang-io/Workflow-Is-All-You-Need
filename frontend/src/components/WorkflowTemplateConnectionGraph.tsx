@@ -241,10 +241,16 @@ const STABLE_EDGE_TYPES = Object.freeze({});
 // 树状布局算法 - 唯一合理的工作流布局
 const applyTreeLayout = (nodes: any[], edges: any[]) => {
   console.log('🌳 应用树状布局');
+  console.log('🌳 [LAYOUT-DEBUG] 布局参数调整:');
   
   const layoutedNodes = [...nodes];
-  const nodeSpacing = 300;
-  const levelSpacing = 200;
+  const nodeSpacing = 450;    // 增加到450px，避免工作流容器重叠
+  const levelSpacing = 350;   // 增加到350px，增加层级间距
+  
+  console.log('🌳 [LAYOUT-DEBUG] nodeSpacing:', nodeSpacing);
+  console.log('🌳 [LAYOUT-DEBUG] levelSpacing:', levelSpacing);
+  console.log('🌳 [LAYOUT-DEBUG] 输入节点数:', nodes.length);
+  console.log('🌳 [LAYOUT-DEBUG] 输入边数:', edges.length);
   
   return applyTreeLayoutImpl(layoutedNodes, edges, nodeSpacing, levelSpacing);
 };
@@ -542,6 +548,39 @@ const WorkflowTemplateConnectionGraph: React.FC<Props> = ({
           console.log('   - 节点数量:', actualData.detailed_connection_graph.nodes.length);
           console.log('   - 边数量:', actualData.detailed_connection_graph.edges.length);
           
+          // 🔍 调试所有节点信息
+          console.log('📊 [DEBUG] 所有返回的节点信息:');
+          actualData.detailed_connection_graph.nodes.forEach((node: any, index: number) => {
+            console.log(`   节点${index + 1}: ${node.label || node.name} (ID: ${node.id})`);
+            console.log(`     - type: ${node.type}`);
+            console.log(`     - data.workflow_base_id: ${node.data?.workflow_base_id}`);
+            console.log(`     - data.parent_workflow_id: ${node.data?.parent_workflow_id}`);
+            console.log(`     - data.node_type: ${node.data?.node_type}`);
+            console.log(`     - 完整data:`, node.data);
+          });
+          
+          // 🔍 检查是否有其他类型的工作流相关节点
+          const allWorkflowRelatedNodes = actualData.detailed_connection_graph.nodes.filter((node: any) => {
+            return node.type === 'workflow_container' || 
+                   node.data?.workflow_base_id || 
+                   node.label?.includes('工作流') || 
+                   node.name?.includes('工作流');
+          });
+          
+          console.log('📊 [DEBUG] 所有工作流相关节点数量:', allWorkflowRelatedNodes.length);
+          
+          // 🔍 详细分析工作流容器
+          console.log('🏗️ [DEBUG] 工作流容器详细信息:');
+          allWorkflowRelatedNodes.forEach((node: any, index: number) => {
+            if (node.type === 'workflow_container') {
+              console.log(`  容器${index + 1}: ${node.label} (${node.id})`);
+              console.log(`    - workflow_base_id: ${node.data?.workflow_base_id}`);
+              console.log(`    - 节点数: ${node.data?.node_count}`);
+              console.log(`    - 连接数: ${node.data?.connection_count}`);
+              console.log(`    - 位置: x=${node.position?.x}, y=${node.position?.y}`);
+            }
+          });
+          
           // 🎯 只保留工作流容器节点，过滤掉内部节点
           const workflowContainerNodes = actualData.detailed_connection_graph.nodes.filter((node: any) => {
             const isWorkflowContainer = node.type === 'workflow_container';
@@ -794,6 +833,17 @@ const WorkflowTemplateConnectionGraph: React.FC<Props> = ({
           console.log(`📊 设置React Flow数据:`);
           console.log(`   - 节点数: ${flowNodes.length}`);
           console.log(`   - 边数: ${flowEdges.length}`);
+          
+          // 🔍 详细分析最终渲染的节点
+          console.log('🎯 [FINAL-RENDER] 最终渲染的工作流容器:');
+          flowNodes.forEach((node: any, index: number) => {
+            console.log(`  渲染节点${index + 1}: ${node.data?.label} (${node.id})`);
+            console.log(`    - 类型: ${node.type}`);
+            console.log(`    - 位置: x=${node.position?.x}, y=${node.position?.y}`);
+            console.log(`    - workflow_base_id: ${node.data?.workflow_base_id}`);
+            console.log(`    - 是否可见: ${node.hidden !== true}`);
+            console.log(`    - 样式:`, node.style);
+          });
           
           setNodes(flowNodes);
           setEdges(flowEdges);

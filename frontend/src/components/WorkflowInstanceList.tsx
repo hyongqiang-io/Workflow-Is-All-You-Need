@@ -351,30 +351,6 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
     }
   }, [selectedInstance, nodesDetail]);
 
-  // 测试Modal功能
-  const testModal = () => {
-    console.log('🧪 测试Modal功能');
-    
-    try {
-      const modal = Modal.info({
-        title: '测试Modal',
-        content: '这是一个测试Modal，用于验证Modal组件是否正常工作',
-        onOk() {
-          console.log('✅ 测试Modal确认');
-        },
-      });
-      
-      console.log('📋 测试Modal返回值:', modal);
-      
-      if (!modal) {
-        console.error('❌ 测试Modal返回undefined');
-        alert('Modal组件可能存在问题');
-      }
-    } catch (error) {
-      console.error('❌ 测试Modal异常:', error);
-      alert('Modal组件异常: ' + error);
-    }
-  };
 
   // 强化去重函数
   const deduplicateInstances = (instancesData: any[]) => {
@@ -877,15 +853,6 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span>工作流执行实例</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Button 
-                size="small" 
-                type="primary" 
-                ghost 
-                onClick={testModal}
-                style={{ fontSize: '12px' }}
-              >
-                测试Modal
-              </Button>
               {instances.filter(i => i.status === 'running').length > 0 && (
                 <Badge 
                   count={instances.filter(i => i.status === 'running').length} 
