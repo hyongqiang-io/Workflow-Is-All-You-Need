@@ -6,7 +6,6 @@ import {
   EyeOutlined, 
   EditOutlined, 
   DeleteOutlined,
-  BranchesOutlined,
   ReloadOutlined,
   HistoryOutlined,
   DownloadOutlined,
@@ -14,12 +13,11 @@ import {
   RobotOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { workflowAPI, executionAPI, aiWorkflowAPI, taskSubdivisionApi } from '../../services/api';
+import { workflowAPI, executionAPI, aiWorkflowAPI } from '../../services/api';
 import { useAuthStore } from '../../stores/authStore';
 import WorkflowDesigner from '../../components/WorkflowDesigner';
 import WorkflowInstanceList from '../../components/WorkflowInstanceList';
 import WorkflowImportExport from '../../components/WorkflowImportExport';
-import WorkflowSubdivisionPreview from '../../components/WorkflowSubdivisionPreview';
 import AIWorkflowGenerator from '../../components/AIWorkflowGenerator';
 
 const { TextArea } = Input;
@@ -61,10 +59,6 @@ const WorkflowPage: React.FC = () => {
   const [aiForm] = Form.useForm();
   const [aiGeneratorVisible, setAiGeneratorVisible] = useState(false);
   const [aiGeneratedData, setAiGeneratedData] = useState<any>(null);
-
-  // 任务细分预览相关状态
-  const [subdivisionPreviewVisible, setSubdivisionPreviewVisible] = useState(false);
-  const [subdivisionPreviewWorkflow, setSubdivisionPreviewWorkflow] = useState<WorkflowItem | null>(null);
 
   useEffect(() => {
     loadWorkflows();
@@ -448,41 +442,6 @@ const WorkflowPage: React.FC = () => {
     loadWorkflows();
   };
 
-  const handleViewSubdivisions = (workflow: WorkflowItem) => {
-    setSubdivisionPreviewWorkflow(workflow);
-    setSubdivisionPreviewVisible(true);
-  };
-
-  const handleSubdivisionPreviewClose = () => {
-    setSubdivisionPreviewVisible(false);
-    setSubdivisionPreviewWorkflow(null);
-  };
-
-  const handleAdoptSubdivision = async (subdivisionId: string) => {
-    try {
-      if (!subdivisionPreviewWorkflow) {
-        message.error('工作流信息缺失');
-        return;
-      }
-
-      // 这里需要用户选择目标节点，暂时使用模拟数据
-      // 在实际实现中，应该弹出节点选择对话框
-      const adoptionData = {
-        subdivision_id: subdivisionId,
-        target_node_id: 'dummy-node-id', // 应该让用户选择目标节点
-        adoption_name: `采纳的细分_${Date.now()}`
-      };
-
-      await taskSubdivisionApi.adoptSubdivision(subdivisionPreviewWorkflow.baseId, adoptionData);
-      message.success('子工作流采纳成功！');
-      setSubdivisionPreviewVisible(false);
-      loadWorkflows(); // 重新加载工作流列表
-    } catch (error: any) {
-      console.error('采纳子工作流失败:', error);
-      message.error(error.message || '采纳子工作流失败');
-    }
-  };
-
   // AI生成处理函数
   const handleAIGenerateNew = () => {
     setAiGeneratorVisible(true);
@@ -589,14 +548,6 @@ const WorkflowPage: React.FC = () => {
           <Button 
             type="link" 
             size="small" 
-            icon={<BranchesOutlined />}
-            onClick={() => handleViewSubdivisions(record)}
-          >
-            细分预览
-          </Button>
-          <Button 
-            type="link" 
-            size="small" 
             icon={<EditOutlined />}
             onClick={() => handleEdit(record)}
           >
@@ -629,7 +580,7 @@ const WorkflowPage: React.FC = () => {
       {/* 页面标题 */}
       <div style={{ marginBottom: '24px' }}>
         <Title level={2} style={{ marginBottom: '8px' }}>
-          <BranchesOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
+          <RobotOutlined style={{ marginRight: '8px', color: '#1890ff' }} />
           工作流管理
         </Title>
         <Text type="secondary">创建、管理和执行工作流</Text>
@@ -852,23 +803,6 @@ const WorkflowPage: React.FC = () => {
         onExportSuccess={handleExportSuccess}
         onImportSuccess={handleImportSuccess}
       />
-
-      {/* 工作流细分预览模态框 */}
-      <Modal
-        title={`工作流细分预览 - ${subdivisionPreviewWorkflow?.name || ''}`}
-        open={subdivisionPreviewVisible}
-        onCancel={handleSubdivisionPreviewClose}
-        width={1000}
-        footer={null}
-        destroyOnClose
-      >
-        {subdivisionPreviewWorkflow && (
-          <WorkflowSubdivisionPreview
-            workflowBaseId={subdivisionPreviewWorkflow.baseId}
-            onAdoptSubdivision={handleAdoptSubdivision}
-          />
-        )}
-      </Modal>
 
       {/* AI工作流生成器模态框 */}
       <Modal
