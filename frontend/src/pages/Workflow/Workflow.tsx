@@ -260,7 +260,7 @@ const WorkflowPage: React.FC = () => {
     }
   };
 
-  // AI工作流生成功能
+  // AI工作流生成功能（传统模态框版本，保留以备后用）
   const handleAIGenerate = () => {
     setAiGenerateVisible(true);
     aiForm.resetFields();
