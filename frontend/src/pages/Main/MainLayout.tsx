@@ -10,7 +10,8 @@ import {
   LogoutOutlined,
   SettingOutlined,
   DashboardOutlined,
-  BellOutlined
+  BellOutlined,
+  RobotOutlined
 } from '@ant-design/icons';
 
 const { Header, Sider, Content } = Layout;

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Modal, 
   Button, 
@@ -38,12 +38,14 @@ interface WorkflowImportExportProps {
   onExportSuccess?: () => void;
   
   // 导入相关
-  onImportSuccess?: (workflowId: string) => void;
+  onImportSuccess?: (result: any) => void;
+  preloadedData?: any; // AI生成的预加载数据
+  hideExportSection?: boolean; // 隐藏导出部分
   
-  // 界面控制
-  visible: boolean;
-  mode: 'export' | 'import';
-  onClose: () => void;
+  // 界面控制 - 更新为可选，支持独立使用
+  visible?: boolean;
+  mode?: 'export' | 'import';
+  onClose?: () => void;
 }
 
 const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
@@ -51,6 +53,8 @@ const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
   workflowName,
   onExportSuccess,
   onImportSuccess,
+  preloadedData, // 添加这个参数
+  hideExportSection,
   visible,
   mode,
   onClose
@@ -62,6 +66,35 @@ const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
   // 新增状态：冲突处理方式和修改后的名称
   const [conflictResolution, setConflictResolution] = useState<'overwrite' | 'rename'>('rename');
   const [customWorkflowName, setCustomWorkflowName] = useState('');
+
+  // 处理预加载数据
+  useEffect(() => {
+    if (preloadedData) {
+      setPreviewData({
+        name: preloadedData.name || preloadedData.workflow_name,
+        description: preloadedData.description,
+        nodes: preloadedData.nodes || [],
+        connections: preloadedData.connections || [],
+        requires_confirmation: false, // AI生成的数据通常不需要确认
+        preview: {
+          workflow_info: {
+            name: preloadedData.name || preloadedData.workflow_name,
+            description: preloadedData.description,
+            export_version: preloadedData.export_version || '2.0'
+          },
+          nodes_count: (preloadedData.nodes || []).length,
+          connections_count: (preloadedData.connections || []).length,
+          validation_result: {
+            valid: true,
+            errors: [],
+            warnings: []
+          }
+        }
+      });
+      // 设置默认名称
+      setCustomWorkflowName(preloadedData.name || preloadedData.workflow_name || 'AI生成工作流');
+    }
+  }, [preloadedData]);
 
   // ============================================================================
   // 导出功能
@@ -100,7 +133,9 @@ const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
           onExportSuccess();
         }
         
-        onClose();
+        if (onClose) {
+          onClose();
+        }
       } else {
         message.error(response.message || '导出失败');
       }
@@ -170,8 +205,14 @@ const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
   };
 
   const handleImport = async () => {
-    if (!importFile || !previewData) {
+    // 如果有预加载数据，直接使用；否则需要文件
+    if (!preloadedData && (!importFile || !previewData)) {
       message.error('请先选择要导入的文件');
+      return;
+    }
+
+    if (!previewData) {
+      message.error('数据预览失败，请重新选择文件');
       return;
     }
 
@@ -187,20 +228,27 @@ const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
           return;
         }
         shouldOverwrite = true;
-        finalImportData = JSON.parse(await importFile.text());
+        finalImportData = preloadedData || JSON.parse(await importFile!.text());
       } else if (conflictResolution === 'rename') {
         if (!customWorkflowName.trim()) {
           message.warning('请输入新的工作流名称');
           return;
         }
         // 创建修改名称后的导入数据
-        finalImportData = JSON.parse(await importFile.text());
+        finalImportData = preloadedData || JSON.parse(await importFile!.text());
         finalImportData.name = customWorkflowName.trim();
         shouldOverwrite = false;
       }
     } else {
       // 没有冲突，直接导入
-      finalImportData = JSON.parse(await importFile.text());
+      if (preloadedData) {
+        finalImportData = {
+          ...preloadedData,
+          name: customWorkflowName.trim() || preloadedData.name || preloadedData.workflow_name
+        };
+      } else {
+        finalImportData = JSON.parse(await importFile!.text());
+      }
       shouldOverwrite = false;
     }
 
@@ -209,12 +257,12 @@ const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
       console.log('🔄 开始导入工作流:', finalImportData.name);
       
       let response: any;
-      if (hasConflicts && conflictResolution === 'rename') {
-        // 使用修改名称后的数据导入
+      if (preloadedData || (hasConflicts && conflictResolution === 'rename')) {
+        // 对于预加载数据或重命名情况，直接使用数据导入
         response = await workflowAPI.importWorkflow(finalImportData, shouldOverwrite);
       } else {
         // 使用原始文件导入
-        response = await workflowAPI.importWorkflowFromFile(importFile, shouldOverwrite);
+        response = await workflowAPI.importWorkflowFromFile(importFile!, shouldOverwrite);
       }
       
       if (response.success) {
@@ -255,7 +303,9 @@ const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
           onImportSuccess(import_result.workflow_id);
         }
         
-        onClose();
+        if (onClose) {
+          onClose();
+        }
         
         // 重置状态
         setImportFile(null);
@@ -264,7 +314,20 @@ const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
         setConflictResolution('rename');
         setCustomWorkflowName('');
       } else {
-        message.error(response.message || '导入失败');
+        // 显示详细的验证错误信息
+        let errorMessage = response.message || '导入失败';
+        if (response.data?.errors && response.data.errors.length > 0) {
+          errorMessage += '\n详细错误:\n' + response.data.errors.join('\n');
+        }
+        if (response.data?.warnings && response.data.warnings.length > 0) {
+          errorMessage += '\n警告信息:\n' + response.data.warnings.join('\n');
+        }
+        
+        message.error({
+          content: errorMessage,
+          duration: 8, // 延长显示时间以便阅读详细信息
+          style: { whiteSpace: 'pre-line' } // 支持换行显示
+        });
       }
     } catch (error: any) {
       console.error('导入失败:', error);
@@ -386,7 +449,7 @@ const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
                 description={
                   <List
                     size="small"
-                    dataSource={previewData.preview.validation_result.errors}
+                    dataSource={previewData.preview.validation_result.errors || []}
                     renderItem={(error: string) => <List.Item>{error}</List.Item>}
                   />
                 }
@@ -413,7 +476,7 @@ const WorkflowImportExport: React.FC<WorkflowImportExportProps> = ({
           </Card>
 
           {/* 冲突检查 */}
-          {previewData.preview.conflicts.length > 0 && (
+          {previewData.preview.conflicts && previewData.preview.conflicts.length > 0 && (
             <Card title="冲突检查" style={{ marginBottom: 16 }}>
               <Alert
                 message="发现冲突"

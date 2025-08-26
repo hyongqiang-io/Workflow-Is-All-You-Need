@@ -255,11 +255,37 @@ class WorkflowImportExportService:
             # 验证数据
             validation_result = import_data.validate_import_data()
             if not validation_result["valid"]:
-                return ImportResult(
-                    success=False,
-                    message="导入数据验证失败",
-                    errors=validation_result["errors"]
-                )
+                logger.warning(f"工作流导入数据验证失败，尝试自动清理: {validation_result}")
+                
+                # 尝试自动清理数据
+                try:
+                    cleaned_data = import_data.clean_import_data()
+                    cleaned_validation = cleaned_data.validate_import_data()
+                    
+                    if cleaned_validation["valid"]:
+                        logger.info("数据清理成功，使用清理后的数据继续导入")
+                        import_data = cleaned_data
+                        # 添加清理警告信息
+                        if "warnings" not in cleaned_validation:
+                            cleaned_validation["warnings"] = []
+                        cleaned_validation["warnings"].append("已自动清理导入数据：移除重复节点、自连接等问题")
+                    else:
+                        # 清理后仍然无效
+                        logger.error(f"数据清理后仍验证失败: {cleaned_validation}")
+                        return ImportResult(
+                            success=False,
+                            message=f"导入数据验证失败: {'; '.join(cleaned_validation['errors'])}",
+                            errors=cleaned_validation["errors"],
+                            warnings=cleaned_validation.get("warnings", [])
+                        )
+                except Exception as clean_error:
+                    logger.error(f"数据清理失败: {clean_error}")
+                    return ImportResult(
+                        success=False,
+                        message=f"导入数据验证失败: {'; '.join(validation_result['errors'])}",
+                        errors=validation_result["errors"],
+                        warnings=validation_result.get("warnings", [])
+                    )
             
             # 检查名称冲突
             if not overwrite:

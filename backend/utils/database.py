@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from loguru import logger
 from contextlib import asynccontextmanager
 
-from ..config import get_settings
+from ..config.settings import get_settings
 
 
 class DatabaseManager:

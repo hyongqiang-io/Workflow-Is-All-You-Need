@@ -20,6 +20,7 @@ import WorkflowDesigner from '../../components/WorkflowDesigner';
 import WorkflowInstanceList from '../../components/WorkflowInstanceList';
 import WorkflowImportExport from '../../components/WorkflowImportExport';
 import WorkflowSubdivisionPreview from '../../components/WorkflowSubdivisionPreview';
+import AIWorkflowGenerator from '../../components/AIWorkflowGenerator';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -57,6 +58,7 @@ const WorkflowPage: React.FC = () => {
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowItem | null>(null);
 
   // AI生成相关状态
+<<<<<<< HEAD
   const [aiGenerateVisible, setAiGenerateVisible] = useState(false);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiForm] = Form.useForm();
@@ -64,6 +66,10 @@ const WorkflowPage: React.FC = () => {
   // 任务细分预览相关状态
   const [subdivisionPreviewVisible, setSubdivisionPreviewVisible] = useState(false);
   const [subdivisionPreviewWorkflow, setSubdivisionPreviewWorkflow] = useState<WorkflowItem | null>(null);
+=======
+  const [aiGeneratorVisible, setAiGeneratorVisible] = useState(false);
+  const [aiGeneratedData, setAiGeneratedData] = useState<any>(null);
+>>>>>>> origin/8/13/json
 
   useEffect(() => {
     loadWorkflows();
@@ -469,6 +475,7 @@ const WorkflowPage: React.FC = () => {
   const handleImportExportClose = () => {
     setImportExportVisible(false);
     setSelectedWorkflow(null);
+    setAiGeneratedData(null); // 清除AI生成的数据
   };
 
   const handleExportSuccess = () => {
@@ -481,6 +488,7 @@ const WorkflowPage: React.FC = () => {
     loadWorkflows();
   };
 
+<<<<<<< HEAD
   const handleViewSubdivisions = (workflow: WorkflowItem) => {
     setSubdivisionPreviewWorkflow(workflow);
     setSubdivisionPreviewVisible(true);
@@ -514,6 +522,28 @@ const WorkflowPage: React.FC = () => {
       console.error('采纳子工作流失败:', error);
       message.error(error.message || '采纳子工作流失败');
     }
+=======
+  // AI生成处理函数
+  const handleAIGenerate = () => {
+    setAiGeneratorVisible(true);
+  };
+
+  const handleAIWorkflowGenerated = (workflowData: any) => {
+    // AI生成完成，可以选择性显示提示
+  };
+
+  const handleAIImportToEditor = (workflowData: any) => {
+    // 关闭AI生成器
+    setAiGeneratorVisible(false);
+    
+    // 存储AI生成的数据
+    setAiGeneratedData(workflowData);
+    
+    // 设置导入模式并打开导入界面，传入预加载数据
+    setSelectedWorkflow(null);
+    setImportExportMode('import');
+    setImportExportVisible(true);
+>>>>>>> origin/8/13/json
   };
 
   const formatDate = (dateString: string) => {
@@ -701,6 +731,7 @@ const WorkflowPage: React.FC = () => {
                 创建工作流
               </Button>
               <Button 
+<<<<<<< HEAD
                 type="default" 
                 icon={<RobotOutlined />}
                 onClick={handleAIGenerate}
@@ -711,6 +742,14 @@ const WorkflowPage: React.FC = () => {
                 }}
               >
                 🤖 AI生成
+=======
+                type="primary"
+                ghost
+                icon={<RobotOutlined />}
+                onClick={handleAIGenerate}
+              >
+                AI生成工作流
+>>>>>>> origin/8/13/json
               </Button>
               <Button 
                 icon={<UploadOutlined />}
@@ -891,11 +930,13 @@ const WorkflowPage: React.FC = () => {
         mode={importExportMode}
         workflowId={selectedWorkflow?.baseId}
         workflowName={selectedWorkflow?.name}
+        preloadedData={aiGeneratedData} // 传递AI生成的数据
         onClose={handleImportExportClose}
         onExportSuccess={handleExportSuccess}
         onImportSuccess={handleImportSuccess}
       />
 
+<<<<<<< HEAD
       {/* 工作流细分预览模态框 */}
       <Modal
         title={`工作流细分预览 - ${subdivisionPreviewWorkflow?.name || ''}`}
@@ -911,6 +952,21 @@ const WorkflowPage: React.FC = () => {
             onAdoptSubdivision={handleAdoptSubdivision}
           />
         )}
+=======
+      {/* AI工作流生成器模态框 */}
+      <Modal
+        title="AI工作流生成器"
+        open={aiGeneratorVisible}
+        onCancel={() => setAiGeneratorVisible(false)}
+        footer={null}
+        width={1000}
+        styles={{ body: { padding: 0 } }}
+      >
+        <AIWorkflowGenerator
+          onWorkflowGenerated={handleAIWorkflowGenerated}
+          onImportToEditor={handleAIImportToEditor}
+        />
+>>>>>>> origin/8/13/json
       </Modal>
     </div>
   );
