@@ -80,7 +80,7 @@ interface UnifiedNodeData {
 
 interface CustomInstanceNodeProps {
   data: UnifiedNodeData;
-  selected?: boolean;
+  selected: boolean;
 }
 
 /**

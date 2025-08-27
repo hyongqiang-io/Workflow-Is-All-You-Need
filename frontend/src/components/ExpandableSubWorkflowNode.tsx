@@ -47,7 +47,7 @@ interface ExpandableSubWorkflowNodeProps {
     onCollapseNode?: (nodeId: string) => void;
     onNodeClick?: (task: TaskNodeData) => void;
   };
-  selected?: boolean;
+  selected: boolean;
 }
 
 const ExpandableSubWorkflowNode: React.FC<ExpandableSubWorkflowNodeProps> = ({ 

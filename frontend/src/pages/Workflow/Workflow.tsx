@@ -3,7 +3,6 @@ import { Card, Button, Table, Tag, Modal, Form, Input, Select, Space, message, R
 import { 
   PlusOutlined, 
   PlayCircleOutlined, 
-  EyeOutlined, 
   EditOutlined, 
   DeleteOutlined,
   ReloadOutlined,
@@ -239,10 +238,6 @@ const WorkflowPage: React.FC = () => {
     }
   };
 
-  const handleView = (workflow: WorkflowItem) => {
-    setCurrentWorkflow(workflow);
-    setDesignerVisible(true);
-  };
 
   const handleEdit = (workflow: WorkflowItem) => {
     setCurrentWorkflow(workflow);
@@ -494,15 +489,6 @@ const WorkflowPage: React.FC = () => {
       )
     },
     {
-      title: '创建人',
-      dataIndex: 'createdBy',
-      key: 'createdBy',
-      width: 100,
-      render: (text: string) => (
-        <Text>{text}</Text>
-      )
-    },
-    {
       title: '创建时间',
       dataIndex: 'createdAt',
       key: 'createdAt',
@@ -536,14 +522,6 @@ const WorkflowPage: React.FC = () => {
             onClick={() => handleViewInstances(record)}
           >
             执行记录
-          </Button>
-          <Button 
-            type="link" 
-            size="small" 
-            icon={<EyeOutlined />}
-            onClick={() => handleView(record)}
-          >
-            查看
           </Button>
           <Button 
             type="link" 
