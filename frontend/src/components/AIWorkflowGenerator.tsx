@@ -41,7 +41,7 @@ const AIWorkflowGenerator: React.FC<AIWorkflowGeneratorProps> = ({
       console.log('发送AI生成请求:', requestData);
       console.log('Token存在:', !!token);
       
-      const response = await fetch('http://localhost:8001/api/ai-workflows/generate', {
+      const response = await fetch('/api/ai-workflows/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -975,9 +975,9 @@ const Todo: React.FC = () => {
                     <Tag color={getStatusColor(item.status)} style={{ marginLeft: '8px' }}>
                       {getStatusText(item.status)}
                     </Tag>
-                    <Tag color={getPriorityColor(item.priority)}>
+                    {/* <Tag color={getPriorityColor(item.priority)}>
                       {getPriorityText(item.priority)}优先级
-                    </Tag>
+                    </Tag> */}
                   </div>
                 }
                 description={
@@ -997,7 +997,7 @@ const Todo: React.FC = () => {
                     )}
                     <div style={{ marginTop: '8px', fontSize: '12px', color: '#666' }}>
                       <Space>
-                        <span>任务ID: {item.task_instance_id}</span>
+                        {/* <span>任务ID: {item.task_instance_id}</span> */}
                         <span>创建时间: {item.created_at}</span>
                         {item.started_at && <span>开始时间: {item.started_at}</span>}
                         {item.completed_at && <span>完成时间: {item.completed_at}</span>}
@@ -1042,12 +1042,12 @@ const Todo: React.FC = () => {
                     {getStatusText(currentTask.status)}
                   </Tag>
                 </div>
-                <div>
+                {/* <div>
                   <Text strong>优先级: </Text>
                   <Tag color={getPriorityColor(currentTask.priority)}>
                     {getPriorityText(currentTask.priority)}
                   </Tag>
-                </div>
+                </div> */}
                 <div>
                   <Text strong>任务类型: </Text>
                   <Text>{currentTask.task_type}</Text>
@@ -1070,7 +1070,7 @@ const Todo: React.FC = () => {
             {(currentTask.context_data || currentTask.input_data) && (
               <Card size="small" title="执行上下文" style={{ marginBottom: '16px' }}>
                 {/* 简化的调试信息 */}
-                <div style={{ background: '#f6f6f6', padding: '8px', marginBottom: '12px', fontSize: '12px', borderRadius: '4px' }}>
+                {/* <div style={{ background: '#f6f6f6', padding: '8px', marginBottom: '12px', fontSize: '12px', borderRadius: '4px' }}>
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
                     <div><Text strong>任务标识:</Text> {currentTask.task_instance_id}</div>
                     <div><Text strong>节点标识:</Text> {currentTask.node_instance_id}</div>
@@ -1083,7 +1083,7 @@ const Todo: React.FC = () => {
                       </div>
                     )}
                   </Space>
-                </div>
+                </div> */}
                 <Collapse size="small">
                   {/* 新的context_data字段 */}
                   {currentTask.context_data && (
@@ -1188,10 +1188,10 @@ const Todo: React.FC = () => {
                               
                               {upstreamNode.output_data && Object.keys(upstreamNode.output_data).length > 0 ? (
                                 <div>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                                  {/* <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                                     <Text strong style={{ color: '#52c41a' }}>🎯 处理器执行结果:</Text>
                                     <Tag color="cyan">可用于下游任务</Tag>
-                                  </div>
+                                  </div> */}
                                   <div style={{ marginTop: '8px' }}>
                                     {(() => {
                                       try {
@@ -1264,7 +1264,7 @@ const Todo: React.FC = () => {
                         </Panel>
                       )}
                       
-                      {currentTask.context_data.current_node && (
+                      {/* {currentTask.context_data.current_node && (
                         <Panel 
                           header={
                             <div>
@@ -1320,7 +1320,7 @@ const Todo: React.FC = () => {
                             </Space>
                           </Card>
                         </Panel>
-                      )}
+                      )} */}
                     </>
                   )}
                   
@@ -1329,7 +1329,7 @@ const Todo: React.FC = () => {
                     <Panel 
                       header={
                         <div>
-                          <Text strong>上游处理器执行结果 (兼容格式)</Text>
+                          <Text strong>上游处理器执行结果</Text>
                           <Tag color="blue" style={{ marginLeft: '8px' }}>
                             {Object.keys(currentTask.context_data.immediate_upstream_results).length} 个处理器节点
                           </Tag>
@@ -1353,7 +1353,7 @@ const Todo: React.FC = () => {
                             </div>
                           }
                         >
-                          {/* 显示处理器执行信息 */}
+                          {/* 显示处理器执行信息
                           <div style={{ marginBottom: '12px', padding: '8px', background: '#f9f9f9', borderRadius: '4px', fontSize: '12px' }}>
                             <Text strong style={{ color: '#666' }}>节点执行信息：</Text>
                             <div style={{ marginTop: '4px' }}>
@@ -1363,15 +1363,15 @@ const Todo: React.FC = () => {
                                 <div>🆔 节点实例: {nodeData.node_instance_id}</div>
                               )}
                             </div>
-                          </div>
+                          </div> */}
                           
                           {/* 显示输出结果 */}
                           {nodeData.output_data && Object.keys(nodeData.output_data).length > 0 ? (
                             <div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                              {/* <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                                 <Text strong style={{ color: '#52c41a' }}>🎯 处理器执行结果:</Text>
                                 <Tag color="cyan">可用于下游任务</Tag>
-                              </div>
+                              </div> */}
                               <div style={{ marginTop: '8px' }}>
                                 {(() => {
                                   const outputData = nodeData.output_data;
