@@ -1,0 +1,14 @@
+# 工作流后端服务 Cron 定时任务配置
+# 编辑命令: crontab -e
+
+# 每5分钟检查一次服务健康状况
+*/5 * * * * /home/ubuntu/Workflow-Is-All-You-Need/health-check.sh >/dev/null 2>&1
+
+# 每天凌晨2点备份代码
+0 2 * * * /home/ubuntu/Workflow-Is-All-You-Need/deploy-backend.sh backup >/dev/null 2>&1
+
+# 每周日凌晨3点重启服务（可选，用于清理内存）
+0 3 * * 0 /home/ubuntu/Workflow-Is-All-You-Need/deploy-backend.sh restart >/dev/null 2>&1
+
+# 每天检查日志文件大小，避免过大
+0 1 * * * find /var/log/workflow -name "*.log" -size +100M -exec truncate -s 50M {} \;

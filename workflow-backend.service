@@ -1,0 +1,39 @@
+[Unit]
+Description=Workflow Backend Service
+Documentation=https://fastapi.tiangolo.com/
+After=network.target mysql.service postgresql.service
+Wants=mysql.service postgresql.service
+
+[Service]
+Type=exec
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/Workflow-Is-All-You-Need
+Environment=PATH=/usr/bin:/usr/local/bin
+EnvironmentFile=/home/ubuntu/Workflow-Is-All-You-Need/.env
+ExecStart=/usr/bin/python3 main.py
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+# 安全配置
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/Workflow-Is-All-You-Need
+ReadWritePaths=/var/log/workflow
+ReadWritePaths=/tmp
+
+# 性能和资源限制
+LimitNOFILE=65536
+LimitNPROC=32768
+
+# 日志配置
+StandardOutput=append:/var/log/workflow/backend.log
+StandardError=append:/var/log/workflow/backend-error.log
+SyslogIdentifier=workflow-backend
+
+[Install]
+WantedBy=multi-user.target
