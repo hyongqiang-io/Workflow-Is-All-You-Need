@@ -199,77 +199,56 @@ const Todo: React.FC = () => {
     return false;
   };
 
-  // 检查任务是否已进行拆解（有子工作流）
+  // 检查任务是否已进行拆解（有子工作流）- 基于真实数据的检测
   const hasSubWorkflow = (task: any) => {
-    // 检查任务的上下文数据或输出数据中是否包含细分工作流信息
-    // 可以通过多种方式检测：
-    // 1. context_data中包含subdivision相关信息
-    // 2. output_data中包含子工作流实例ID
-    // 3. result_summary中提到细分工作流
+    // 检查context_data中是否有subdivision信息（最可靠的方式）
     const contextData = task.context_data;
-    const outputData = task.output_data;
-    const resultSummary = task.result_summary || '';
-    
-    // 检查上下文数据中的细分信息
-    if (contextData && typeof contextData === 'object') {
-      if (contextData.subdivision_id || contextData.sub_workflow_instance_id) {
-        return true;
-      }
-    }
-    
-    // 检查上下文数据字符串格式
-    if (typeof contextData === 'string') {
-      try {
-        const parsedContext = JSON.parse(contextData);
-        if (parsedContext.subdivision_id || parsedContext.sub_workflow_instance_id) {
+    if (contextData) {
+      // 处理对象格式
+      if (typeof contextData === 'object') {
+        // 只有当任务真正被拆解并产生了子工作流实例时，才显示按钮
+        if (contextData.subdivision_id && contextData.sub_workflow_instance_id) {
           return true;
         }
-      } catch (e) {
-        // 解析失败，继续其他检查
       }
-    }
-    
-    // 检查输出数据中的子工作流信息
-    if (outputData && typeof outputData === 'string') {
-      if (outputData.includes('子工作流') || outputData.includes('细分工作流') || 
-          outputData.includes('sub_workflow') || outputData.includes('subdivision')) {
-        return true;
+      
+      // 处理字符串格式
+      if (typeof contextData === 'string') {
+        try {
+          const parsedContext = JSON.parse(contextData);
+          // 必须同时有subdivision_id和sub_workflow_instance_id才认为有可查看的子工作流
+          if (parsedContext.subdivision_id && parsedContext.sub_workflow_instance_id) {
+            return true;
+          }
+        } catch (e) {
+          // JSON解析失败，返回false
+        }
       }
-    }
-    
-    // 检查结果摘要
-    if (resultSummary.includes('细分') || resultSummary.includes('子工作流') || 
-        resultSummary.includes('拆解')) {
-      return true;
     }
     
     return false;
   };
 
-  // 从任务数据中提取子工作流ID
+  // 从任务数据中提取子工作流实例ID
   const extractSubWorkflowId = (task: any): string | null => {
     const contextData = task.context_data;
     
-    // 尝试从上下文数据中提取
+    // 尝试从上下文数据中提取工作流实例ID
     if (contextData && typeof contextData === 'object') {
-      return contextData.sub_workflow_instance_id || contextData.subdivision_id || null;
+      // 优先返回工作流实例ID，这是我们需要的
+      return contextData.sub_workflow_instance_id || null;
     }
     
     // 尝试从字符串格式的上下文数据中提取
     if (typeof contextData === 'string') {
       try {
         const parsedContext = JSON.parse(contextData);
-        return parsedContext.sub_workflow_instance_id || parsedContext.subdivision_id || null;
+        return parsedContext.sub_workflow_instance_id || null;
       } catch (e) {
-        // 如果无法解析JSON，尝试正则表达式提取
+        // 如果无法解析JSON，尝试正则表达式提取工作流实例ID
         const workflowIdMatch = contextData.match(/sub_workflow_instance_id["\s]*:["\s]*([a-f0-9-]+)/i);
         if (workflowIdMatch) {
           return workflowIdMatch[1];
-        }
-        
-        const subdivisionIdMatch = contextData.match(/subdivision_id["\s]*:["\s]*([a-f0-9-]+)/i);
-        if (subdivisionIdMatch) {
-          return subdivisionIdMatch[1];
         }
       }
     }
@@ -821,44 +800,22 @@ const Todo: React.FC = () => {
     }
   };
 
-  // 处理查看子工作流进度
-  const handleViewSubWorkflowProgress = async (task: any) => {
+  // 处理查看子工作流进度 - 基于修复后的检测逻辑
+  const handleViewSubWorkflowProgress = (task: any) => {
     console.log('🔍 查看子工作流进度', task.task_title);
     
-    try {
-      // 首先尝试从任务上下文数据中提取子工作流ID
-      let subWorkflowId = extractSubWorkflowId(task);
-      
-      // 如果无法从任务数据中提取，尝试通过API获取
-      if (!subWorkflowId) {
-        console.log('📡 尝试通过API获取子工作流信息...');
-        try {
-          const response = await taskSubdivisionApi.getTaskSubWorkflowInfo(task.task_instance_id);
-          console.log('API响应:', response);
-          
-          // 处理不同的响应格式
-          const responseData = response?.data || response;
-          if (responseData && responseData.success && responseData.data) {
-            subWorkflowId = responseData.data.sub_workflow_instance_id || responseData.data.workflow_instance_id;
-            console.log('✅ 通过API获取到子工作流ID:', subWorkflowId);
-          }
-        } catch (apiError) {
-          console.warn('⚠️ API获取子工作流信息失败:', apiError);
-        }
-      }
-      
-      if (subWorkflowId) {
-        console.log('📊 找到子工作流ID:', subWorkflowId);
-        setCurrentSubWorkflowId(subWorkflowId);
-        setCurrentTask(task);
-        setSubWorkflowViewerVisible(true);
-      } else {
-        console.warn('⚠️ 未找到子工作流ID');
-        message.warning('无法找到子工作流信息，请确认此任务已完成拆解操作');
-      }
-    } catch (error) {
-      console.error('❌ 查看子工作流进度失败:', error);
-      message.error('获取子工作流信息失败，请稍后重试');
+    // 由于hasSubWorkflow已经验证了任务有sub_workflow_instance_id，直接提取即可
+    const subWorkflowId = extractSubWorkflowId(task);
+    
+    if (subWorkflowId) {
+      console.log('📊 使用子工作流ID:', subWorkflowId);
+      setCurrentSubWorkflowId(subWorkflowId);
+      setCurrentTask(task);
+      setSubWorkflowViewerVisible(true);
+    } else {
+      // 理论上不应该到这里，因为hasSubWorkflow已经验证过了
+      console.error('❌ 按钮显示逻辑与实际数据不一致');
+      message.error('无法找到子工作流信息，数据状态异常');
     }
   };
 
