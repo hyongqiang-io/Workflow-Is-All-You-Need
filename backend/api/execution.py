@@ -264,12 +264,12 @@ async def get_workflow_status(
                 ELSE JSON_ARRAY()
             END as node_instances
         FROM workflow_instance wi
-        LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
-        LEFT JOIN "user" u ON wi.executor_id = u.user_id
-        LEFT JOIN node_instance ni ON wi.workflow_instance_id = ni.workflow_instance_id AND ni.is_deleted = FALSE
+        LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = 1
+        LEFT JOIN user u ON wi.executor_id = u.user_id
+        LEFT JOIN node_instance ni ON wi.workflow_instance_id = ni.workflow_instance_id AND ni.is_deleted = 0
         LEFT JOIN node n ON ni.node_id = n.node_id
-        WHERE wi.workflow_instance_id = $1
-        AND wi.is_deleted = FALSE
+        WHERE wi.workflow_instance_id = %s
+        AND wi.is_deleted = 0
         GROUP BY wi.workflow_instance_id, w.name, u.username
         """
         
@@ -402,10 +402,19 @@ async def get_workflow_instances(
         
         workflow_instance_repo = WorkflowInstanceRepository()
         
-        # 查询工作流实例及其统计信息 (PostgreSQL版本)
+        # 查询工作流实例及其统计信息 (MySQL版本)
         query = """
         SELECT 
-            wi.*,
+            wi.workflow_instance_id,
+            wi.workflow_instance_name,
+            wi.status,
+            wi.executor_id,
+            wi.created_at,
+            wi.updated_at,
+            wi.input_data,
+            wi.output_data,
+            wi.error_message,
+            wi.workflow_base_id,
             w.name as workflow_name,
             u.username as executor_username,
             -- 统计节点实例信息
@@ -413,20 +422,21 @@ async def get_workflow_instances(
             COUNT(CASE WHEN ni.status = 'completed' THEN 1 END) as completed_nodes,
             COUNT(CASE WHEN ni.status = 'running' THEN 1 END) as running_nodes,
             COUNT(CASE WHEN ni.status = 'failed' THEN 1 END) as failed_nodes,
-            -- 获取当前运行的节点名称 (PostgreSQL版本)
-            STRING_AGG(
-                CASE WHEN ni.status = 'running' THEN n.name END, ', '
+            -- 获取当前运行的节点名称 (MySQL版本)
+            GROUP_CONCAT(
+                CASE WHEN ni.status = 'running' THEN n.name END
+                SEPARATOR ', '
             ) as current_running_nodes
         FROM workflow_instance wi
-        LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
-        LEFT JOIN "user" u ON wi.executor_id = u.user_id
-        LEFT JOIN node_instance ni ON wi.workflow_instance_id = ni.workflow_instance_id AND ni.is_deleted = FALSE
+        LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = 1
+        LEFT JOIN user u ON wi.executor_id = u.user_id
+        LEFT JOIN node_instance ni ON wi.workflow_instance_id = ni.workflow_instance_id AND ni.is_deleted = 0
         LEFT JOIN node n ON ni.node_id = n.node_id
-        WHERE wi.workflow_base_id = $1
-        AND wi.is_deleted = FALSE
-        GROUP BY wi.workflow_instance_id, wi.workflow_instance_name, wi.status, wi.executor_id, wi.created_at, wi.updated_at, wi.input_data, wi.output_data, wi.error_message, w.name, u.username
+        WHERE wi.workflow_base_id = %s
+        AND wi.is_deleted = 0
+        GROUP BY wi.workflow_instance_id, wi.workflow_instance_name, wi.status, wi.executor_id, wi.created_at, wi.updated_at, wi.input_data, wi.output_data, wi.error_message, wi.workflow_base_id, w.name, u.username
         ORDER BY wi.created_at DESC
-        LIMIT $2
+        LIMIT %s
         """
         
         instances = await workflow_instance_repo.db.fetch_all(query, workflow_base_id, limit)
@@ -524,9 +534,9 @@ async def get_workflow_task_flow(
             w.name as workflow_name,
             u.username as executor_username
         FROM workflow_instance wi
-        LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
-        LEFT JOIN "user" u ON wi.executor_id = u.user_id
-        WHERE wi.workflow_instance_id = $1 AND wi.is_deleted = FALSE
+        LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = 1
+        LEFT JOIN user u ON wi.executor_id = u.user_id
+        WHERE wi.workflow_instance_id = %s AND wi.is_deleted = 0
         """
         
         workflow_instance = await workflow_repo.db.fetch_one(workflow_instance_query, workflow_id)
@@ -560,7 +570,7 @@ async def get_workflow_task_flow(
         LEFT JOIN node_processor np ON n.node_id = np.node_id
         LEFT JOIN processor p ON np.processor_id = p.processor_id
         WHERE ni.workflow_instance_id = $1
-        AND ni.is_deleted = FALSE
+        AND ni.is_deleted = 0
         ORDER BY 
             CASE 
                 WHEN ni.started_at IS NOT NULL THEN ni.started_at 
@@ -597,10 +607,10 @@ async def get_workflow_task_flow(
             END as is_overdue
         FROM task_instance ti
         LEFT JOIN processor p ON ti.processor_id = p.processor_id
-        LEFT JOIN "user" u ON ti.assigned_user_id = u.user_id
+        LEFT JOIN user u ON ti.assigned_user_id = u.user_id
         LEFT JOIN agent a ON ti.assigned_agent_id = a.agent_id
-        WHERE ti.workflow_instance_id = $1
-        AND ti.is_deleted = FALSE
+        WHERE ti.workflow_instance_id = %s
+        AND ti.is_deleted = 0
         ORDER BY ti.created_at
         """
         
@@ -619,7 +629,7 @@ async def get_workflow_task_flow(
         FROM node_connection nc
         JOIN node n1 ON nc.from_node_id = n1.node_id
         JOIN node n2 ON nc.to_node_id = n2.node_id
-        WHERE nc.workflow_id = $1
+        WHERE nc.workflow_id = %s
         ORDER BY nc.created_at
         """
         
@@ -947,9 +957,9 @@ async def debug_get_all_tasks(
             a.agent_name as assigned_agent_name
         FROM task_instance ti
         LEFT JOIN workflow_instance wi ON ti.workflow_instance_id = wi.workflow_instance_id
-        LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
+        LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = 1
         LEFT JOIN processor p ON ti.processor_id = p.processor_id
-        LEFT JOIN "user" u ON ti.assigned_user_id = u.user_id
+        LEFT JOIN user u ON ti.assigned_user_id = u.user_id
         LEFT JOIN agent a ON ti.assigned_agent_id = a.agent_id
         WHERE ti.is_deleted = FALSE
         ORDER BY ti.created_at DESC
@@ -2183,7 +2193,7 @@ async def get_workflow_nodes_detail(
         LEFT JOIN node_processor np ON n.node_id = np.node_id
         LEFT JOIN processor p ON np.processor_id = p.processor_id
         WHERE ni.workflow_instance_id = $1
-        AND ni.is_deleted = FALSE
+        AND ni.is_deleted = 0
         ORDER BY ni.created_at ASC
         """
         
@@ -2216,10 +2226,10 @@ async def get_workflow_nodes_detail(
             a.agent_name as assigned_agent_name
         FROM task_instance ti
         LEFT JOIN processor p ON ti.processor_id = p.processor_id
-        LEFT JOIN "user" u ON ti.assigned_user_id = u.user_id
+        LEFT JOIN user u ON ti.assigned_user_id = u.user_id
         LEFT JOIN agent a ON ti.assigned_agent_id = a.agent_id
-        WHERE ti.workflow_instance_id = $1
-        AND ti.is_deleted = FALSE
+        WHERE ti.workflow_instance_id = %s
+        AND ti.is_deleted = 0
         ORDER BY ti.created_at ASC
         """
         
@@ -2626,7 +2636,7 @@ async def get_workflow_subdivision_info(
         LEFT JOIN task_subdivision ts ON ti.task_instance_id = ts.original_task_id 
             AND ts.is_deleted = FALSE
         WHERE ti.workflow_instance_id = %s 
-            AND ti.is_deleted = FALSE
+            AND ti.is_deleted = 0
         GROUP BY ti.task_instance_id, ti.node_instance_id, ti.task_title
         """
         
@@ -2723,11 +2733,11 @@ async def get_node_subdivision_detail(
             wi.completed_at as sub_workflow_completed_at
         FROM task_subdivision ts
         JOIN task_instance ti ON ts.original_task_id = ti.task_instance_id
-        LEFT JOIN workflow w ON ts.sub_workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
+        LEFT JOIN workflow w ON ts.sub_workflow_base_id = w.workflow_base_id AND w.is_current_version = 1
         LEFT JOIN workflow_instance wi ON ts.sub_workflow_instance_id = wi.workflow_instance_id
         WHERE ti.node_instance_id = %s 
             AND ts.is_deleted = FALSE 
-            AND ti.is_deleted = FALSE
+            AND ti.is_deleted = 0
         ORDER BY ts.subdivision_created_at DESC
         """
         
@@ -2759,8 +2769,8 @@ async def get_node_subdivision_detail(
                     COUNT(ti.task_instance_id) as task_count
                 FROM node_instance ni
                 LEFT JOIN node n ON ni.node_id = n.node_id
-                LEFT JOIN task_instance ti ON ni.node_instance_id = ti.node_instance_id AND ti.is_deleted = FALSE
-                WHERE ni.workflow_instance_id = %s AND ni.is_deleted = FALSE
+                LEFT JOIN task_instance ti ON ni.node_instance_id = ti.node_instance_id AND ti.is_deleted = 0
+                WHERE ni.workflow_instance_id = %s AND ni.is_deleted = 0
                 GROUP BY ni.node_instance_id, n.name, n.type, n.position_x, n.position_y
                 ORDER BY ni.created_at
                 """
