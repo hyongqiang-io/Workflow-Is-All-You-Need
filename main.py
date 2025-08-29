@@ -426,12 +426,17 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+    import os
     
-    logger.trace("启动服务器...")
+    # 根据环境配置端口：开发模式8002，生产模式8001
+    port = int(os.environ.get('PORT', 8002))  # 默认8002用于开发
+    environment = os.environ.get('ENVIRONMENT', 'development')
+    
+    logger.trace(f"启动服务器... (环境: {environment}, 端口: {port})")
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8001,  # 修改为8001端口
+        port=port,
         reload=False,  # 禁用自动重载以防止服务自动关闭
         log_level="info"
     )

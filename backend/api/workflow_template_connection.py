@@ -63,6 +63,52 @@ async def get_workflow_template_connections(
         )
 
 
+@router.get("/workflow-instances/{workflow_instance_id}/detailed-template-connections")
+async def get_detailed_workflow_template_connections(
+    workflow_instance_id: uuid.UUID,
+    max_depth: int = Query(10, description="最大递归深度，防止无限递归", ge=1, le=20),
+    current_user = Depends(get_current_user_context)
+):
+    """
+    获取工作流实例的优化版详细模板连接图数据
+    
+    利用parent_subdivision_id优化的版本：
+    - 使用WITH RECURSIVE一次性获取所有层级
+    - 避免递归数据库调用，性能提升显著
+    - 批量计算统计信息
+    - 提供更丰富的层级信息和合并候选数据
+    
+    Args:
+        workflow_instance_id: 工作流实例ID
+        max_depth: 最大递归深度
+        current_user: 当前用户
+        
+    Returns:
+        优化后的详细工作流模板连接图数据
+    """
+    try:
+        logger.info(f"🚀 [优化版API] 获取详细模板连接图: {workflow_instance_id} by user {current_user.user_id}")
+        
+        # TODO: 添加权限验证 - 检查用户是否有权限访问该工作流实例
+        
+        # 使用优化后的方法获取详细连接数据
+        detailed_connection_data = await template_connection_service.get_detailed_workflow_connections(
+            workflow_instance_id, max_depth
+        )
+        
+        return success_response(
+            data=detailed_connection_data,
+            message=f"成功获取优化版详细模板连接图，找到 {detailed_connection_data['statistics']['total_subdivisions']} 个连接关系，最大深度 {detailed_connection_data.get('performance_info', {}).get('max_depth_reached', 0)}"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ 获取优化版详细模板连接图失败: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取优化版详细模板连接图失败: {str(e)}"
+        )
+
+
 @router.get("/workflow-templates/{workflow_base_id}/connection-summary")
 async def get_workflow_template_connection_summary(
     workflow_base_id: uuid.UUID,

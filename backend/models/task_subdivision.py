@@ -45,6 +45,9 @@ class TaskSubdivision(TaskSubdivisionBase, BaseEntity):
     sub_workflow_instance_id: Optional[uuid.UUID] = Field(None, description="子工作流实例ID")
     status: TaskSubdivisionStatus = Field(TaskSubdivisionStatus.CREATED, description="细分状态")
     
+    # 链式细分支持
+    parent_subdivision_id: Optional[uuid.UUID] = Field(None, description="父级细分ID，支持嵌套细分")
+    
     # 上下文传递
     parent_task_description: str = Field(..., description="父任务描述")
     context_passed: str = Field(default="", description="传递给子工作流的上下文")
@@ -61,6 +64,9 @@ class TaskSubdivisionCreate(TaskSubdivisionBase, CreateRequest):
     sub_workflow_base_id: Optional[uuid.UUID] = Field(None, description="已创建的子工作流基础ID")
     sub_workflow_data: Dict[str, Any] = Field(..., description="子工作流定义数据")
     context_to_pass: str = Field(default="", description="需要传递的上下文")
+    
+    # 链式细分支持
+    parent_subdivision_id: Optional[uuid.UUID] = Field(None, description="父级细分ID，用于嵌套细分")
 
 
 class TaskSubdivisionUpdate(UpdateRequest):
@@ -144,6 +150,9 @@ class TaskSubdivisionRequest(BaseModel):
     # 新增任务上下文传递字段
     task_context: Optional[Dict[str, Any]] = Field(None, description="任务上下文信息")
     sub_workflow_base_id: Optional[uuid.UUID] = Field(None, description="已创建的子工作流基础ID")
+    
+    # 链式细分支持
+    parent_subdivision_id: Optional[uuid.UUID] = Field(None, description="父级细分ID，用于创建嵌套细分")
 
 
 class SubdivisionPreviewResponse(BaseModel):

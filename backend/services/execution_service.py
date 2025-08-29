@@ -2889,44 +2889,139 @@ class ExecutionEngine:
             return False
     
     async def _check_downstream_nodes_for_task_creation(self, workflow_instance_id: uuid.UUID):
-        """检查下游节点是否可以创建任务"""
+        """检查下游节点是否可以创建任务 - 增强并发处理版本"""
+        max_retries = 3
+        retry_delay = 0.5
+        
+        for attempt in range(max_retries):
+            try:
+                logger.trace(f"🔄 检查下游节点任务创建机会 (尝试 {attempt + 1}/{max_retries})")
+                
+                # 🔧 强制刷新工作流上下文状态（防止状态延迟）
+                await self._refresh_workflow_context_state(workflow_instance_id)
+                
+                # 查询工作流中所有等待状态的节点
+                waiting_nodes_query = '''
+                SELECT ni.node_instance_id, ni.node_id, n.name, n.type
+                FROM node_instance ni
+                JOIN node n ON ni.node_id = n.node_id
+                WHERE ni.workflow_instance_id = %s 
+                  AND ni.status = 'pending'
+                  AND ni.is_deleted = FALSE
+                '''
+                
+                waiting_nodes = await self.workflow_instance_repo.db.fetch_all(
+                    waiting_nodes_query, workflow_instance_id
+                )
+                
+                logger.trace(f"  找到 {len(waiting_nodes)} 个等待中的节点")
+                
+                created_any_task = False
+                
+                # 为每个等待节点检查是否可以创建任务
+                for node in waiting_nodes:
+                    node_instance_id = node['node_instance_id']
+                    node_name = node['name']
+                    
+                    logger.trace(f"  检查节点: {node_name} ({node_instance_id})")
+                    
+                    # 🔧 检查节点是否已经有任务（防止重复创建）
+                    existing_tasks = await self.task_instance_repo.db.fetch_all(
+                        "SELECT task_instance_id FROM task_instance WHERE node_instance_id = %s AND is_deleted = FALSE",
+                        node_instance_id
+                    )
+                    
+                    if existing_tasks:
+                        logger.trace(f"    节点 {node_name} 已有 {len(existing_tasks)} 个任务，跳过")
+                        continue
+                    
+                    # 尝试创建任务
+                    try:
+                        created = await self._create_tasks_when_ready(workflow_instance_id, node_instance_id)
+                        if created:
+                            logger.info(f"  ✅ 为节点 {node_name} 创建了任务")
+                            created_any_task = True
+                        else:
+                            logger.trace(f"  ⏳ 节点 {node_name} 依赖未满足或不符合创建条件")
+                    except Exception as e:
+                        logger.warning(f"  ❌ 为节点 {node_name} 创建任务失败: {e}")
+                        continue
+                
+                # 如果成功创建了任务或没有等待节点，则退出重试
+                if created_any_task or len(waiting_nodes) == 0:
+                    if created_any_task:
+                        logger.info(f"✅ 下游节点检查完成，创建了新任务")
+                    return
+                
+                # 如果没有创建任何任务且还有等待节点，可能需要重试
+                if attempt < max_retries - 1:
+                    logger.debug(f"  ⏱️ 没有创建任务，{retry_delay}秒后重试...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 1.5  # 指数退避
+                
+            except Exception as e:
+                logger.error(f"检查下游节点失败 (尝试 {attempt + 1}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 1.5
+                else:
+                    import traceback
+                    logger.error(f"下游节点检查最终失败: {traceback.format_exc()}")
+        
+        logger.trace(f"🏁 下游节点检查完成")
+    
+    async def _refresh_workflow_context_state(self, workflow_instance_id: uuid.UUID):
+        """刷新工作流上下文状态（防止状态延迟问题）"""
         try:
-            logger.trace(f"🔄 检查下游节点任务创建机会")
+            from .workflow_execution_context import get_context_manager
+            context_manager = get_context_manager()
+            workflow_context = await context_manager.get_context(workflow_instance_id)
             
-            # 查询工作流中所有等待状态的节点
-            waiting_nodes_query = '''
-            SELECT ni.node_instance_id, ni.node_id, n.name, n.type
+            if not workflow_context:
+                logger.debug(f"   📋 工作流上下文不存在，跳过刷新")
+                return
+            
+            # 🔧 从数据库重新同步节点状态
+            nodes_query = """
+            SELECT ni.node_instance_id, ni.status, n.node_id
             FROM node_instance ni
             JOIN node n ON ni.node_id = n.node_id
-            WHERE ni.workflow_instance_id = $1 
-              AND ni.status = 'pending'
-              AND ni.is_deleted = FALSE
-            '''
+            WHERE ni.workflow_instance_id = %s
+            AND ni.is_deleted = FALSE
+            """
             
-            waiting_nodes = await self.workflow_instance_repo.db.fetch_all(
-                waiting_nodes_query, workflow_instance_id
-            )
+            nodes = await self.workflow_instance_repo.db.fetch_all(nodes_query, workflow_instance_id)
             
-            logger.trace(f"  找到 {len(waiting_nodes)} 个等待中的节点")
-            
-            # 为每个等待节点检查是否可以创建任务
-            for node in waiting_nodes:
+            updated_count = 0
+            for node in nodes:
                 node_instance_id = node['node_instance_id']
-                node_name = node['name']
+                db_status = node['status']
                 
-                logger.trace(f"  检查节点: {node_name} ({node_instance_id})")
+                # 将数据库状态转换为上下文状态
+                context_status = {
+                    'pending': 'PENDING',
+                    'running': 'EXECUTING', 
+                    'completed': 'COMPLETED',
+                    'failed': 'FAILED'
+                }.get(db_status, 'UNKNOWN')
                 
-                # 尝试创建任务
-                created = await self._create_tasks_when_ready(workflow_instance_id, node_instance_id)
-                if created:
-                    logger.trace(f"    ✅ 节点 {node_name} 任务创建成功")
-                else:
-                    logger.trace(f"    ⏳ 节点 {node_name} 条件未满足")
+                current_status = workflow_context.node_states.get(node_instance_id)
+                
+                if current_status != context_status:
+                    workflow_context.node_states[node_instance_id] = context_status
+                    updated_count += 1
+                    
+                    # 更新完成节点集合
+                    if context_status == 'COMPLETED':
+                        workflow_context.execution_context['completed_nodes'].add(node_instance_id)
+                    elif context_status in ['PENDING', 'EXECUTING']:
+                        workflow_context.execution_context['completed_nodes'].discard(node_instance_id)
+            
+            if updated_count > 0:
+                logger.debug(f"   🔄 刷新了 {updated_count} 个节点的上下文状态")
             
         except Exception as e:
-            logger.error(f"❌ 检查下游节点失败: {e}")
-            import traceback
-            logger.error(f"错误堆栈: {traceback.format_exc()}")
+            logger.warning(f"刷新工作流上下文状态失败: {e}")
     
     async def _execute_end_node(self, workflow_instance_id: uuid.UUID, node_instance_id: uuid.UUID):
         """执行END节点（修复版：严格依赖检查）"""
@@ -4428,42 +4523,78 @@ class ExecutionEngine:
                                             updated_task: Dict[str, Any],
                                             output_data: str,
                                             task_type: str):
-        """统一处理任务完成 - 避免重复调用 mark_node_completed"""
+        """统一处理任务完成 - 修复并发竞态条件"""
+        # 🔧 关键修复：使用分布式锁防止并发竞态条件
+        lock_key = f"task_completion_{task['workflow_instance_id']}"
+        
         try:
-            logger.info(f"🔄 [统一任务完成] 处理{task_type}任务完成: {task['task_instance_id']}")
+            logger.info(f"🔄 [统一任务完成-并发修复] 处理{task_type}任务完成: {task['task_instance_id']}")
+            logger.info(f"   获取工作流级别锁: {lock_key}")
             
-            # 获取节点信息
-            node_query = """
-            SELECT n.node_id 
-            FROM node_instance ni
-            JOIN node n ON ni.node_id = n.node_id
-            WHERE ni.node_instance_id = $1
-            """
-            node_info = await self.task_instance_repo.db.fetch_one(node_query, task['node_instance_id'])
+            # 🔧 使用异步锁确保同一工作流的任务完成处理是串行的
+            if not hasattr(self, '_completion_locks'):
+                self._completion_locks = {}
             
-            if not node_info:
-                logger.error(f"❌ 无法找到节点信息: {task['node_instance_id']}")
-                return
+            if lock_key not in self._completion_locks:
+                self._completion_locks[lock_key] = asyncio.Lock()
             
-            # 构造输出数据
-            completion_output = {
-                "message": f"{task_type}任务完成",
-                "task_type": task_type,
-                "output_data": output_data,
-                "completed_at": updated_task.get('completed_at').isoformat() if updated_task.get('completed_at') else None,
-                "task_id": str(task['task_instance_id'])
-            }
-            
-            # 只在这里调用一次 mark_node_completed - 避免重复
-            await self.context_manager.mark_node_completed(
-                workflow_instance_id=task['workflow_instance_id'],
-                node_id=node_info['node_id'],
-                node_instance_id=task['node_instance_id'],
-                output_data=completion_output
-            )
-            
-            logger.info(f"✅ [统一任务完成] {task_type}任务完成处理成功")
-            
+            async with self._completion_locks[lock_key]:
+                logger.debug(f"   🔒 已获取工作流锁，开始原子操作")
+                
+                # 获取节点信息  
+                node_query = """
+                SELECT n.node_id 
+                FROM node_instance ni
+                JOIN node n ON ni.node_id = n.node_id
+                WHERE ni.node_instance_id = %s
+                """
+                node_info = await self.task_instance_repo.db.fetch_one(node_query, task['node_instance_id'])
+                
+                if not node_info:
+                    logger.error(f"❌ 无法找到节点信息: {task['node_instance_id']}")
+                    return
+                
+                # 🔧 状态一致性检查：确保任务和节点状态同步
+                fresh_task = await self.task_instance_repo.get_task_by_id(task['task_instance_id'])
+                if fresh_task and fresh_task.get('status') != 'completed':
+                    logger.warning(f"⚠️  任务状态不一致，重新检查: {fresh_task.get('status')}")
+                    return
+                
+                # 🔧 检查节点是否已经被标记为完成（防止重复处理）
+                from .workflow_execution_context import get_context_manager
+                context_manager = get_context_manager()
+                workflow_context = await context_manager.get_context(task['workflow_instance_id'])
+                
+                if workflow_context:
+                    node_status = workflow_context.get_node_state(task['node_instance_id'])
+                    if node_status == 'COMPLETED':
+                        logger.warning(f"⚠️  节点 {task['node_instance_id']} 已经完成，跳过重复处理")
+                        return
+                
+                # 构造输出数据
+                completion_output = {
+                    "message": f"{task_type}任务完成",
+                    "task_type": task_type,
+                    "output_data": output_data,
+                    "completed_at": updated_task.get('completed_at').isoformat() if updated_task.get('completed_at') else None,
+                    "task_id": str(task['task_instance_id'])
+                }
+                
+                # 🔧 原子操作：标记节点完成并触发下游检查
+                logger.debug(f"   🎯 开始节点完成标记和下游触发")
+                await self.context_manager.mark_node_completed(
+                    workflow_instance_id=task['workflow_instance_id'],
+                    node_id=node_info['node_id'],
+                    node_instance_id=task['node_instance_id'],
+                    output_data=completion_output
+                )
+                
+                # 🔧 额外的下游检查确保：强制检查是否有遗漏的下游节点
+                logger.debug(f"   🔍 执行额外的下游节点检查")
+                await self._check_downstream_nodes_for_task_creation(task['workflow_instance_id'])
+                
+                logger.info(f"✅ [统一任务完成-并发修复] {task_type}任务完成处理成功")
+                
         except Exception as e:
             logger.error(f"💥 [统一任务完成] 处理失败: {e}")
             import traceback

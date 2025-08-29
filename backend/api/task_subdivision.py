@@ -56,7 +56,8 @@ async def create_task_subdivision(
             subdivision_description=request.subdivision_description,
             sub_workflow_base_id=request.sub_workflow_base_id,
             sub_workflow_data=request.sub_workflow_data,
-            context_to_pass=request.task_context.get('task_context_data', '') if request.task_context else ""
+            context_to_pass=request.task_context.get('task_context_data', '') if request.task_context else "",
+            parent_subdivision_id=request.parent_subdivision_id  # 链式细分支持
         )
         
         # 创建细分
@@ -559,4 +560,132 @@ async def get_my_subdivisions(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="获取细分列表失败"
+        )
+
+
+@router.get("/subdivisions/{subdivision_id}/hierarchy", response_model=BaseResponse)
+async def get_subdivision_hierarchy(
+    subdivision_id: uuid.UUID = Path(..., description="细分ID"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    获取细分的完整层级结构
+    
+    Args:
+        subdivision_id: 细分ID（可以是根节点或任意节点）
+        current_user: 当前用户
+        
+    Returns:
+        细分的层级树结构
+    """
+    try:
+        logger.info(f"🌳 用户 {current_user.username} 请求细分层级结构: {subdivision_id}")
+        
+        # 获取层级结构
+        hierarchy = await subdivision_service.subdivision_repo.get_subdivision_hierarchy(subdivision_id)
+        
+        if not hierarchy:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="细分不存在或已被删除"
+            )
+        
+        # 构建树形结构
+        tree_structure = []
+        depth_map = {}
+        
+        for item in hierarchy:
+            depth = item['depth']
+            node_data = {
+                "subdivision_id": str(item['subdivision_id']),
+                "subdivision_name": item['subdivision_name'],
+                "parent_subdivision_id": str(item['parent_subdivision_id']) if item['parent_subdivision_id'] else None,
+                "depth": depth,
+                "original_task_title": item.get('original_task_title'),
+                "subdivider_name": item.get('subdivider_name'),
+                "status": item['status'],
+                "created_at": item['subdivision_created_at'].isoformat() if item['subdivision_created_at'] else None
+            }
+            
+            if depth not in depth_map:
+                depth_map[depth] = []
+            depth_map[depth].append(node_data)
+            tree_structure.append(node_data)
+        
+        logger.info(f"✅ 找到 {len(tree_structure)} 个层级节点，最大深度: {max(depth_map.keys()) if depth_map else 0}")
+        
+        return BaseResponse(
+            success=True,
+            message="获取细分层级结构成功",
+            data={
+                "hierarchy": tree_structure,
+                "depth_map": depth_map,
+                "total_nodes": len(tree_structure),
+                "max_depth": max(depth_map.keys()) if depth_map else 0
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取细分层级结构异常: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取细分层级结构失败"
+        )
+
+
+@router.get("/subdivisions/{subdivision_id}/children", response_model=BaseResponse)  
+async def get_subdivision_children(
+    subdivision_id: uuid.UUID = Path(..., description="父级细分ID"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    获取指定细分的直接子级
+    
+    Args:
+        subdivision_id: 父级细分ID
+        current_user: 当前用户
+        
+    Returns:
+        直接子级细分列表
+    """
+    try:
+        logger.info(f"👶 用户 {current_user.username} 请求子级细分: {subdivision_id}")
+        
+        children = await subdivision_service.subdivision_repo.get_subdivision_children(subdivision_id)
+        
+        # 格式化响应数据
+        children_data = []
+        for child in children:
+            child_data = {
+                "subdivision_id": str(child['subdivision_id']),
+                "subdivision_name": child['subdivision_name'],
+                "subdivision_description": child.get('subdivision_description', ''),
+                "original_task_title": child.get('original_task_title'),
+                "subdivider_name": child.get('subdivider_name'),
+                "sub_workflow_name": child.get('sub_workflow_name'),
+                "status": child['status'],
+                "created_at": child['subdivision_created_at'].isoformat() if child['subdivision_created_at'] else None,
+                "has_sub_workflow": bool(child.get('sub_workflow_base_id'))
+            }
+            children_data.append(child_data)
+        
+        logger.info(f"✅ 找到 {len(children_data)} 个子级细分")
+        
+        return BaseResponse(
+            success=True,
+            message="获取子级细分成功",
+            data={
+                "children": children_data,
+                "count": len(children_data),
+                "parent_subdivision_id": str(subdivision_id)
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"获取子级细分异常: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取子级细分失败"
         )

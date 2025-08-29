@@ -209,7 +209,14 @@
       "Bash(nslookup:*)",
       "Bash(/home/ubuntu/anaconda3/envs/workflow/bin/python test_node_mapping_api.py)",
       "Bash(journalctl:*)",
-      "Bash(systemctl list-units:*)"
+      "Bash(systemctl list-units:*)",
+      "Bash(systemctl:*)",
+      "Bash(/home/ubuntu/anaconda3/envs/workflow/bin/python test_optimized_connection_service.py)",
+      "Bash(/home/ubuntu/anaconda3/envs/workflow/bin/python test_subdivision_service_simple.py)",
+      "Bash(/home/ubuntu/anaconda3/envs/workflow/bin/python analyze_concurrency_issues.py)",
+      "Bash(ENVIRONMENT=development PORT=8002 /home/ubuntu/anaconda3/envs/workflow/bin/python main.py)",
+      "Bash(ENVIRONMENT=production python3 main.py)",
+      "Bash(REACT_APP_API_URL=http://localhost:8002 npm start)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits"

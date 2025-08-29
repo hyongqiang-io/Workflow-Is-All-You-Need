@@ -402,7 +402,7 @@ async def get_workflow_instances(
         
         workflow_instance_repo = WorkflowInstanceRepository()
         
-        # 查询工作流实例及其统计信息
+        # 查询工作流实例及其统计信息 (PostgreSQL版本)
         query = """
         SELECT 
             wi.*,
@@ -413,10 +413,9 @@ async def get_workflow_instances(
             COUNT(CASE WHEN ni.status = 'completed' THEN 1 END) as completed_nodes,
             COUNT(CASE WHEN ni.status = 'running' THEN 1 END) as running_nodes,
             COUNT(CASE WHEN ni.status = 'failed' THEN 1 END) as failed_nodes,
-            -- 获取当前运行的节点名称 (MySQL版本)
-            GROUP_CONCAT(
-                CASE WHEN ni.status = 'running' THEN n.name END
-                SEPARATOR ', '
+            -- 获取当前运行的节点名称 (PostgreSQL版本)
+            STRING_AGG(
+                CASE WHEN ni.status = 'running' THEN n.name END, ', '
             ) as current_running_nodes
         FROM workflow_instance wi
         LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
@@ -425,7 +424,7 @@ async def get_workflow_instances(
         LEFT JOIN node n ON ni.node_id = n.node_id
         WHERE wi.workflow_base_id = $1
         AND wi.is_deleted = FALSE
-        GROUP BY wi.workflow_instance_id, w.name, u.username
+        GROUP BY wi.workflow_instance_id, wi.workflow_instance_name, wi.status, wi.executor_id, wi.created_at, wi.updated_at, wi.input_data, wi.output_data, wi.error_message, w.name, u.username
         ORDER BY wi.created_at DESC
         LIMIT $2
         """
@@ -442,14 +441,21 @@ async def get_workflow_instances(
                     return default
                 if isinstance(value, int):
                     return value
+                if isinstance(value, (list, tuple)):
+                    # 如果是列表/元组，可能是MySQL返回的格式，取第一个元素
+                    return len([x for x in value if x]) if value else default
                 if isinstance(value, str):
-                    if value == '[]' or value == '':
+                    if value == '[]' or value == '' or value == 'None':
                         return default
                     try:
                         return int(value)
                     except ValueError:
                         return default
-                return default
+                # 处理其他类型
+                try:
+                    return int(value) if value is not None else default
+                except (ValueError, TypeError):
+                    return default
                 
             total_nodes = safe_int(instance.get("total_nodes"))
             completed_nodes = safe_int(instance.get("completed_nodes"))

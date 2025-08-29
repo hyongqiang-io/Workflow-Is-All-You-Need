@@ -63,7 +63,23 @@ class TaskSubdivisionService:
             if str(original_task.get('assigned_user_id')) != str(subdivision_data.subdivider_id):
                 raise ValidationError("只能细分分配给自己的任务")
             
-            # 2. 处理工作流模板 - 这是关键改进
+            # 2. 验证父级细分（如果提供）- 链式细分支持
+            if subdivision_data.parent_subdivision_id:
+                parent_subdivision = await self.subdivision_repo.get_subdivision_by_id(subdivision_data.parent_subdivision_id)
+                if not parent_subdivision:
+                    raise ValidationError("父级细分不存在")
+                
+                # 检查权限：只能在自己创建的细分下创建子级
+                if str(parent_subdivision.get('subdivider_id')) != str(subdivision_data.subdivider_id):
+                    raise ValidationError("只能在自己创建的细分下创建子级细分")
+                
+                # 防止循环引用：不能将细分设为自己的父级
+                if str(parent_subdivision.get('subdivision_id')) == str(subdivision_data.original_task_id):
+                    raise ValidationError("不能创建循环引用的细分")
+                
+                logger.info(f"✅ 父级细分验证通过: {parent_subdivision.get('subdivision_name')}")
+            
+            # 3. 处理工作流模板 - 这是关键改进
             template_id = await self._get_or_create_workflow_template(
                 subdivision_data.sub_workflow_base_id,
                 subdivision_data.sub_workflow_data,
@@ -373,7 +389,7 @@ class TaskSubdivisionService:
                                   subdivision_id: uuid.UUID,
                                   results: dict,
                                   executor_id: uuid.UUID):
-        """保存结果到原始任务"""
+        """保存结果到原始任务并触发工作流继续执行"""
         try:
             from ..models.instance import TaskInstanceUpdate
             
@@ -389,19 +405,45 @@ class TaskSubdivisionService:
                     'failed_tasks': results.get('failed_tasks', 0)
                 },
                 'completion_time': now_utc().isoformat(),
-                'auto_submitted': False  # 需要用户手动确认
+                'auto_submitted': False  # 自动提交subdivision结果
             }
             
+            # 🔧 关键修复：标记原始任务为已完成并触发工作流继续执行
             task_update = TaskInstanceUpdate(
+                # status=TaskInstanceStatus.COMPLETED,  # 标记任务为已完成
                 output_data=json.dumps(result_data, ensure_ascii=False, indent=2),
-                instructions="细分工作流已完成，结果可供查看和提交。"
+                instructions="细分工作流已完成，结果已自动提交。",
+                # completed_at=now_utc()  # 设置完成时间
             )
             
             await self.task_repo.update_task(task_id, task_update)
-            logger.info(f"✅ 细分结果已保存到任务: {task_id}")
+            logger.info(f"✅ 细分结果已保存到任务并标记为完成: {task_id}")
+            
+            # 🔧 关键修复：获取任务的节点实例信息并触发工作流继续执行
+            # task_info = await self.task_repo.get_task_by_id(task_id)
+            # if task_info:
+            #     node_instance_id = task_info['node_instance_id']
+            #     workflow_instance_id = task_info['workflow_instance_id']
+                
+            #     # 更新节点实例状态为已完成
+            #     from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            #     node_repo = NodeInstanceRepository()
+            #     await node_repo.update_node_status(node_instance_id, 'completed')
+            #     logger.info(f"✅ 节点实例状态已更新为完成: {node_instance_id}")
+                
+            #     # 🔧 关键修复：触发执行引擎检查下游节点，这是之前缺失的步骤！
+            #     from ..services.execution_service import execution_engine
+            #     await execution_engine._check_downstream_nodes_for_task_creation(workflow_instance_id)
+                
+            #     # 检查工作流完成状态
+            #     await execution_engine._check_workflow_completion(workflow_instance_id)
+                
+            #     logger.info(f"🎯 subdivision完成后已触发下游节点检查和工作流继续执行")
             
         except Exception as e:
             logger.error(f"保存结果到任务失败: {e}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
     
     # ============ 保持兼容性的方法 ============
     

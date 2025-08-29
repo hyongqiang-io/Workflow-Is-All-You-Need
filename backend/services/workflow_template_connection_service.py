@@ -19,6 +19,370 @@ class WorkflowTemplateConnectionService:
     def __init__(self):
         self.db = BaseRepository("workflow_template_connection").db
     
+    async def get_detailed_workflow_connections(self, workflow_instance_id: uuid.UUID, max_depth: int = 10) -> Dict[str, Any]:
+        """
+        优化版本：利用parent_subdivision_id一次性获取详细的工作流连接图数据
+        
+        性能改进：
+        1. 使用WITH RECURSIVE一次性获取所有层级
+        2. 避免递归数据库调用 
+        3. 批量计算统计信息
+        4. 内存中构建层级关系
+        
+        Args:
+            workflow_instance_id: 工作流实例ID
+            max_depth: 最大递归深度
+            
+        Returns:
+            优化后的连接图数据结构
+        """
+        try:
+            logger.info(f"🚀 [优化版] 获取工作流详细连接关系: {workflow_instance_id} (最大深度: {max_depth})")
+            
+            # 1. 使用单个WITH RECURSIVE查询获取所有subdivision层级
+            all_subdivisions = await self._get_all_subdivisions_with_hierarchy(workflow_instance_id, max_depth)
+            
+            if not all_subdivisions:
+                logger.info(f"📋 未找到工作流实例的细分关系: {workflow_instance_id}")
+                return self._empty_connection_result(workflow_instance_id)
+            
+            logger.info(f"📊 一次性获取到 {len(all_subdivisions)} 个subdivision记录")
+            
+            # 2. 批量获取工作流统计信息
+            workflow_stats = await self._batch_get_workflow_statistics(all_subdivisions)
+            
+            # 3. 在内存中构建完整的连接数据结构
+            detailed_connections = self._build_detailed_connections(all_subdivisions, workflow_stats)
+            
+            # 4. 构建合并候选数据
+            merge_candidates = await self._build_merge_candidates(all_subdivisions, workflow_stats)
+            
+            # 5. 构建详细的连接图
+            detailed_connection_graph = self._build_optimized_connection_graph(detailed_connections)
+            
+            # 6. 构建统计信息
+            statistics = self._calculate_detailed_statistics(detailed_connections, all_subdivisions)
+            
+            result = {
+                "workflow_instance_id": str(workflow_instance_id),
+                "template_connections": detailed_connections,
+                "detailed_workflows": self._extract_detailed_workflows(all_subdivisions, workflow_stats),
+                "merge_candidates": merge_candidates,
+                "detailed_connection_graph": detailed_connection_graph,
+                "statistics": statistics,
+                "performance_info": {
+                    "total_subdivisions": len(all_subdivisions),
+                    "optimization_used": "parent_subdivision_id_hierarchy",
+                    "query_optimization": "single_recursive_query",
+                    "max_depth_reached": max(s.get('depth', 0) for s in all_subdivisions) if all_subdivisions else 0
+                }
+            }
+            
+            logger.info(f"✅ [优化版] 连接图数据构建完成: {statistics}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ [优化版] 获取详细工作流连接关系失败: {e}")
+            raise
+    
+    async def _get_all_subdivisions_with_hierarchy(self, workflow_instance_id: uuid.UUID, max_depth: int) -> List[Dict[str, Any]]:
+        """
+        使用WITH RECURSIVE一次性获取所有subdivision层级数据
+        
+        这是关键优化：避免递归数据库调用，利用parent_subdivision_id构建完整层级
+        """
+        try:
+            # 核心优化：利用parent_subdivision_id的WITH RECURSIVE查询
+            hierarchy_query = """
+            WITH RECURSIVE subdivision_hierarchy AS (
+                -- 基础情况：查找指定工作流实例的直接subdivision（根级）
+                SELECT 
+                    ts.subdivision_id,
+                    ts.original_task_id,
+                    ts.sub_workflow_base_id,
+                    ts.sub_workflow_instance_id,
+                    ts.subdivision_name,
+                    ts.subdivision_description,
+                    ts.subdivision_created_at,
+                    ts.parent_subdivision_id,
+                    
+                    -- 层级信息
+                    0 as depth,
+                    CAST(CONCAT(ts.subdivision_id) AS CHAR(1000)) as hierarchy_path,
+                    
+                    -- 原始任务信息
+                    ti.task_title,
+                    ti.task_description,
+                    ti.node_instance_id,
+                    ti.workflow_instance_id as parent_workflow_instance_id,
+                    
+                    -- 节点信息  
+                    ni.node_id as original_node_id,
+                    n.node_base_id as original_node_base_id,
+                    n.name as original_node_name,
+                    n.type as original_node_type,
+                    n.workflow_base_id as parent_workflow_base_id,
+                    
+                    -- 工作流信息（批量JOIN，避免后续查询）
+                    pw.name as parent_workflow_name,
+                    pw.description as parent_workflow_description,
+                    sw.name as sub_workflow_name,
+                    sw.description as sub_workflow_description,
+                    
+                    -- 子工作流实例状态
+                    swi.status as sub_workflow_status,
+                    swi.started_at as sub_workflow_started_at,
+                    swi.completed_at as sub_workflow_completed_at
+                    
+                FROM task_subdivision ts
+                JOIN task_instance ti ON ts.original_task_id = ti.task_instance_id
+                JOIN node_instance ni ON ti.node_instance_id = ni.node_instance_id
+                JOIN node n ON ni.node_id = n.node_id
+                LEFT JOIN workflow pw ON n.workflow_base_id = pw.workflow_base_id AND pw.is_current_version = TRUE
+                LEFT JOIN workflow sw ON ts.sub_workflow_base_id = sw.workflow_base_id AND sw.is_current_version = TRUE
+                LEFT JOIN workflow_instance swi ON ts.sub_workflow_instance_id = swi.workflow_instance_id
+                WHERE ti.workflow_instance_id = %s 
+                AND ts.is_deleted = FALSE
+                AND ti.is_deleted = FALSE
+                AND ni.is_deleted = FALSE
+                
+                UNION ALL
+                
+                -- 递归情况：基于parent_subdivision_id查找子级subdivision
+                SELECT 
+                    ts_child.subdivision_id,
+                    ts_child.original_task_id,
+                    ts_child.sub_workflow_base_id,
+                    ts_child.sub_workflow_instance_id,
+                    ts_child.subdivision_name,
+                    ts_child.subdivision_description,
+                    ts_child.subdivision_created_at,
+                    ts_child.parent_subdivision_id,
+                    
+                    -- 层级信息递增
+                    sh.depth + 1,
+                    CONCAT(sh.hierarchy_path, ',', ts_child.subdivision_id),
+                    
+                    -- 子级任务信息
+                    ti_child.task_title,
+                    ti_child.task_description,
+                    ti_child.node_instance_id,
+                    ti_child.workflow_instance_id as parent_workflow_instance_id,
+                    
+                    -- 子级节点信息
+                    ni_child.node_id as original_node_id,
+                    n_child.node_base_id as original_node_base_id,
+                    n_child.name as original_node_name,
+                    n_child.type as original_node_type,
+                    n_child.workflow_base_id as parent_workflow_base_id,
+                    
+                    -- 子级工作流信息
+                    pw_child.name as parent_workflow_name,
+                    pw_child.description as parent_workflow_description,
+                    sw_child.name as sub_workflow_name,
+                    sw_child.description as sub_workflow_description,
+                    
+                    -- 子级工作流实例状态
+                    swi_child.status as sub_workflow_status,
+                    swi_child.started_at as sub_workflow_started_at,
+                    swi_child.completed_at as sub_workflow_completed_at
+                    
+                FROM subdivision_hierarchy sh
+                JOIN task_subdivision ts_child ON sh.subdivision_id = ts_child.parent_subdivision_id
+                JOIN task_instance ti_child ON ts_child.original_task_id = ti_child.task_instance_id
+                JOIN node_instance ni_child ON ti_child.node_instance_id = ni_child.node_instance_id  
+                JOIN node n_child ON ni_child.node_id = n_child.node_id
+                LEFT JOIN workflow pw_child ON n_child.workflow_base_id = pw_child.workflow_base_id AND pw_child.is_current_version = TRUE
+                LEFT JOIN workflow sw_child ON ts_child.sub_workflow_base_id = sw_child.workflow_base_id AND sw_child.is_current_version = TRUE
+                LEFT JOIN workflow_instance swi_child ON ts_child.sub_workflow_instance_id = swi_child.workflow_instance_id
+                WHERE ts_child.is_deleted = FALSE
+                AND ti_child.is_deleted = FALSE
+                AND ni_child.is_deleted = FALSE
+                AND sh.depth < %s  -- 限制最大深度
+            )
+            SELECT * FROM subdivision_hierarchy
+            ORDER BY depth, subdivision_created_at
+            """
+            
+            all_subdivisions = await self.db.fetch_all(hierarchy_query, workflow_instance_id, max_depth)
+            
+            # 转换为字典格式
+            subdivisions_list = [dict(row) for row in all_subdivisions]
+            
+            logger.info(f"🚀 WITH RECURSIVE查询完成: 找到 {len(subdivisions_list)} 个subdivision记录")
+            if subdivisions_list:
+                depths = [s['depth'] for s in subdivisions_list]
+                logger.info(f"📏 深度分布: 最小{min(depths)}, 最大{max(depths)}, 总层级{max(depths)+1}")
+                
+            return subdivisions_list
+            
+        except Exception as e:
+            logger.error(f"❌ 获取subdivision层级数据失败: {e}")
+            raise
+    
+    async def _batch_get_workflow_statistics(self, subdivisions: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """批量获取工作流统计信息，避免单独查询每个工作流"""
+        try:
+            if not subdivisions:
+                return {}
+            
+            # 提取所有需要统计的工作流ID
+            workflow_base_ids = set()
+            workflow_instance_ids = set()
+            
+            for sub in subdivisions:
+                if sub['sub_workflow_base_id']:
+                    workflow_base_ids.add(sub['sub_workflow_base_id'])
+                if sub['sub_workflow_instance_id']:
+                    workflow_instance_ids.add(sub['sub_workflow_instance_id'])
+            
+            # 批量查询节点统计
+            node_stats_query = """
+            SELECT 
+                n.workflow_base_id,
+                COUNT(*) as total_nodes
+            FROM node n
+            WHERE n.workflow_base_id = ANY($1)
+            AND n.is_current_version = TRUE 
+            AND n.is_deleted = FALSE
+            GROUP BY n.workflow_base_id
+            """
+            
+            node_stats = await self.db.fetch_all(node_stats_query, list(workflow_base_ids))
+            node_stats_map = {str(row['workflow_base_id']): row['total_nodes'] for row in node_stats}
+            
+            # 批量查询已完成节点统计
+            completed_stats_query = """
+            SELECT 
+                n.workflow_base_id,
+                ni.workflow_instance_id,
+                COUNT(*) as completed_nodes
+            FROM node_instance ni
+            JOIN node n ON ni.node_id = n.node_id
+            WHERE n.workflow_base_id = ANY($1)
+            AND ni.workflow_instance_id = ANY($2)
+            AND ni.status = 'completed'
+            AND ni.is_deleted = FALSE
+            GROUP BY n.workflow_base_id, ni.workflow_instance_id
+            """
+            
+            completed_stats = await self.db.fetch_all(completed_stats_query, list(workflow_base_ids), list(workflow_instance_ids))
+            completed_stats_map = {}
+            for row in completed_stats:
+                key = f"{row['workflow_base_id']}_{row['workflow_instance_id']}"
+                completed_stats_map[key] = row['completed_nodes']
+            
+            # 构建完整的统计信息映射
+            stats_map = {}
+            for workflow_base_id in workflow_base_ids:
+                workflow_base_id_str = str(workflow_base_id)
+                stats_map[workflow_base_id_str] = {
+                    'total_nodes': node_stats_map.get(workflow_base_id_str, 0),
+                    'completed_by_instance': {}
+                }
+                
+                # 为每个实例添加已完成节点数
+                for workflow_instance_id in workflow_instance_ids:
+                    key = f"{workflow_base_id}_{workflow_instance_id}"
+                    if key in completed_stats_map:
+                        stats_map[workflow_base_id_str]['completed_by_instance'][str(workflow_instance_id)] = completed_stats_map[key]
+            
+            logger.info(f"📊 批量统计完成: {len(workflow_base_ids)} 个工作流模板, {len(workflow_instance_ids)} 个实例")
+            return stats_map
+            
+        except Exception as e:
+            logger.error(f"❌ 批量获取工作流统计信息失败: {e}")
+            return {}
+    
+    def _empty_connection_result(self, workflow_instance_id: uuid.UUID) -> Dict[str, Any]:
+        """返回空的连接结果"""
+        return {
+            "workflow_instance_id": str(workflow_instance_id),
+            "template_connections": [],
+            "detailed_workflows": {},
+            "merge_candidates": [],
+            "detailed_connection_graph": {
+                "nodes": [],
+                "edges": []
+            },
+            "statistics": {
+                "total_subdivisions": 0,
+                "completed_sub_workflows": 0,
+                "unique_workflows": 0,
+                "max_depth": 0
+            },
+            "performance_info": {
+                "optimization_used": "parent_subdivision_id_hierarchy",
+                "total_subdivisions": 0
+            }
+        }
+    
+    def _build_detailed_connections(self, all_subdivisions: List[Dict[str, Any]], workflow_stats: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """在内存中构建详细的连接数据结构"""
+        try:
+            detailed_connections = []
+            
+            for subdivision in all_subdivisions:
+                # 获取统计信息
+                sub_workflow_base_id = str(subdivision['sub_workflow_base_id'])
+                sub_workflow_instance_id = str(subdivision['sub_workflow_instance_id']) if subdivision['sub_workflow_instance_id'] else None
+                
+                stats = workflow_stats.get(sub_workflow_base_id, {})
+                total_nodes = stats.get('total_nodes', 0)
+                completed_nodes = 0
+                
+                if sub_workflow_instance_id and 'completed_by_instance' in stats:
+                    completed_nodes = stats['completed_by_instance'].get(sub_workflow_instance_id, 0)
+                
+                connection = {
+                    "subdivision_id": str(subdivision["subdivision_id"]),
+                    "subdivision_name": subdivision["subdivision_name"],
+                    "subdivision_description": subdivision["subdivision_description"] or "",
+                    "created_at": subdivision["subdivision_created_at"].isoformat() if subdivision["subdivision_created_at"] else None,
+                    "depth": subdivision["depth"],  # 直接使用WITH RECURSIVE计算的深度
+                    "parent_subdivision_id": str(subdivision["parent_subdivision_id"]) if subdivision["parent_subdivision_id"] else None,
+                    "hierarchy_path": subdivision["hierarchy_path"],  # 层级路径
+                    
+                    # 父工作流信息
+                    "parent_workflow": {
+                        "workflow_base_id": str(subdivision["parent_workflow_base_id"]),
+                        "workflow_name": subdivision["parent_workflow_name"] or f"工作流_{str(subdivision['parent_workflow_base_id'])[:8]}",
+                        "workflow_description": subdivision["parent_workflow_description"] or "",
+                        "workflow_instance_id": str(subdivision["parent_workflow_instance_id"]),
+                        "connected_node": {
+                            "node_base_id": str(subdivision["original_node_base_id"]),
+                            "node_name": subdivision["original_node_name"],
+                            "node_type": subdivision["original_node_type"],
+                            "task_title": subdivision["task_title"],
+                            "task_description": subdivision["task_description"] or ""
+                        }
+                    },
+                    
+                    # 子工作流信息（包含统计数据）
+                    "sub_workflow": {
+                        "workflow_base_id": sub_workflow_base_id,
+                        "workflow_name": subdivision["sub_workflow_name"] or f"工作流_{sub_workflow_base_id[:8]}",
+                        "workflow_description": subdivision["sub_workflow_description"] or "",
+                        "instance_id": sub_workflow_instance_id,
+                        "status": subdivision["sub_workflow_status"] or "unknown",
+                        "started_at": subdivision["sub_workflow_started_at"].isoformat() if subdivision["sub_workflow_started_at"] else None,
+                        "completed_at": subdivision["sub_workflow_completed_at"].isoformat() if subdivision["sub_workflow_completed_at"] else None,
+                        "total_nodes": total_nodes,
+                        "completed_nodes": completed_nodes
+                    }
+                }
+                
+                detailed_connections.append(connection)
+            
+            logger.info(f"📋 构建详细连接数据完成: {len(detailed_connections)} 个连接")
+            return detailed_connections
+            
+        except Exception as e:
+            logger.error(f"❌ 构建详细连接数据失败: {e}")
+            return []
+    
+    # 保持原有方法向后兼容
     async def get_workflow_template_connections(self, workflow_instance_id: uuid.UUID, max_depth: int = 10) -> Dict[str, Any]:
         """
         获取执行实例完成后的工作流模板连接图数据（支持递归展开）
@@ -1272,3 +1636,303 @@ class WorkflowTemplateConnectionService:
             positions.append(pos)
         
         return positions
+    
+    async def _build_merge_candidates(self, all_subdivisions: List[Dict[str, Any]], workflow_stats: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """构建合并候选数据"""
+        try:
+            merge_candidates = []
+            
+            for subdivision in all_subdivisions:
+                sub_workflow_base_id = str(subdivision['sub_workflow_base_id'])
+                stats = workflow_stats.get(sub_workflow_base_id, {})
+                
+                # 只有已完成的subdivision才能作为合并候选
+                if subdivision['sub_workflow_status'] != 'completed':
+                    continue
+                
+                # 计算兼容性分数
+                compatibility_score = self._calculate_compatibility_score(subdivision, stats)
+                
+                merge_candidate = {
+                    "subdivision_id": str(subdivision["subdivision_id"]),
+                    "subdivision_name": subdivision["subdivision_name"],
+                    "parent_subdivision_id": str(subdivision["parent_subdivision_id"]) if subdivision["parent_subdivision_id"] else None,
+                    "depth": subdivision.get("depth", 0),
+                    "replaceable_node": {
+                        "node_base_id": str(subdivision["original_node_base_id"]),
+                        "node_name": subdivision["original_node_name"],
+                        "node_type": subdivision["original_node_type"]
+                    },
+                    "sub_workflow": {
+                        "workflow_base_id": sub_workflow_base_id,
+                        "workflow_name": subdivision["sub_workflow_name"],
+                        "total_nodes": stats.get('total_nodes', 0),
+                        "completed_nodes": stats.get('completed_by_instance', {}).get(str(subdivision['sub_workflow_instance_id']), 0)
+                    },
+                    "compatibility": {
+                        "score": compatibility_score,
+                        "is_recommended": compatibility_score > 0.7,
+                        "complexity": "simple" if stats.get('total_nodes', 0) <= 5 else "complex"
+                    }
+                }
+                
+                merge_candidates.append(merge_candidate)
+            
+            logger.info(f"🔗 构建合并候选数据完成: {len(merge_candidates)} 个候选")
+            return merge_candidates
+            
+        except Exception as e:
+            logger.error(f"❌ 构建合并候选数据失败: {e}")
+            return []
+    
+    def _build_optimized_connection_graph(self, detailed_connections: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """构建详细的连接图数据结构"""
+        try:
+            nodes = []
+            edges = []
+            
+            # 构建节点位置映射
+            node_positions = self._calculate_hierarchical_positions(detailed_connections)
+            
+            # 创建工作流节点
+            workflow_nodes = {}
+            for connection in detailed_connections:
+                parent_workflow = connection["parent_workflow"]
+                sub_workflow = connection["sub_workflow"]
+                
+                # 父工作流节点
+                parent_id = parent_workflow["workflow_base_id"]
+                if parent_id not in workflow_nodes:
+                    position = node_positions.get(parent_id, {"x": 0, "y": 0})
+                    workflow_nodes[parent_id] = {
+                        "id": parent_id,
+                        "type": "workflowTemplate",
+                        "position": position,
+                        "data": {
+                            "label": parent_workflow["workflow_name"],
+                            "description": parent_workflow["workflow_description"],
+                            "workflow_base_id": parent_id,
+                            "is_parent": True,
+                            "depth": connection.get("depth", 0) - 1 if connection.get("depth", 0) > 0 else 0
+                        }
+                    }
+                
+                # 子工作流节点
+                sub_id = sub_workflow["workflow_base_id"]
+                if sub_id not in workflow_nodes:
+                    position = node_positions.get(sub_id, {"x": 200, "y": 200})
+                    workflow_nodes[sub_id] = {
+                        "id": sub_id,
+                        "type": "workflowTemplate",
+                        "position": position,
+                        "data": {
+                            "label": sub_workflow["workflow_name"],
+                            "description": sub_workflow["workflow_description"],
+                            "workflow_base_id": sub_id,
+                            "status": sub_workflow["status"],
+                            "total_nodes": sub_workflow["total_nodes"],
+                            "completed_nodes": sub_workflow["completed_nodes"],
+                            "is_parent": False,
+                            "depth": connection.get("depth", 0),
+                            "parent_workflow_id": parent_id
+                        }
+                    }
+            
+            # 转换为节点列表
+            nodes = list(workflow_nodes.values())
+            
+            # 创建连接边
+            for connection in detailed_connections:
+                parent_id = connection["parent_workflow"]["workflow_base_id"]
+                sub_id = connection["sub_workflow"]["workflow_base_id"]
+                
+                edge = {
+                    "id": f"edge_{connection['subdivision_id']}",
+                    "source": parent_id,
+                    "target": sub_id,
+                    "type": "smoothstep",
+                    "animated": connection["sub_workflow"]["status"] == "running",
+                    "label": connection["subdivision_name"],
+                    "data": {
+                        "subdivision_id": connection["subdivision_id"],
+                        "connected_node_name": connection["parent_workflow"]["connected_node"]["node_name"],
+                        "task_title": connection["parent_workflow"]["connected_node"]["task_title"]
+                    }
+                }
+                edges.append(edge)
+            
+            logger.info(f"🎨 构建详细连接图完成: {len(nodes)} 个节点, {len(edges)} 条边")
+            
+            return {
+                "nodes": nodes,
+                "edges": edges,
+                "layout": {
+                    "algorithm": "hierarchical",
+                    "direction": "TB",
+                    "node_spacing": 200,
+                    "level_spacing": 150
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ 构建详细连接图失败: {e}")
+            return {"nodes": [], "edges": [], "layout": {}}
+    
+    def _extract_detailed_workflows(self, all_subdivisions: List[Dict[str, Any]], workflow_stats: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """提取详细的工作流信息"""
+        try:
+            detailed_workflows = {}
+            
+            # 收集所有唯一的工作流ID
+            workflow_ids = set()
+            for subdivision in all_subdivisions:
+                workflow_ids.add(str(subdivision['parent_workflow_base_id']))
+                workflow_ids.add(str(subdivision['sub_workflow_base_id']))
+            
+            # 构建详细工作流数据
+            for workflow_id in workflow_ids:
+                stats = workflow_stats.get(workflow_id, {})
+                
+                # 从subdivisions中查找工作流信息
+                workflow_info = None
+                for subdivision in all_subdivisions:
+                    if str(subdivision['sub_workflow_base_id']) == workflow_id:
+                        workflow_info = {
+                            "workflow_base_id": workflow_id,
+                            "name": subdivision["sub_workflow_name"],
+                            "description": subdivision["sub_workflow_description"],
+                            "total_nodes": stats.get('total_nodes', 0)
+                        }
+                        break
+                    elif str(subdivision['parent_workflow_base_id']) == workflow_id:
+                        workflow_info = {
+                            "workflow_base_id": workflow_id,
+                            "name": subdivision["parent_workflow_name"],
+                            "description": subdivision["parent_workflow_description"],
+                            "total_nodes": stats.get('total_nodes', 0)
+                        }
+                        break
+                
+                if workflow_info:
+                    detailed_workflows[workflow_id] = workflow_info
+            
+            logger.info(f"📊 提取详细工作流完成: {len(detailed_workflows)} 个工作流")
+            return detailed_workflows
+            
+        except Exception as e:
+            logger.error(f"❌ 提取详细工作流失败: {e}")
+            return {}
+    
+    def _calculate_detailed_statistics(self, detailed_connections: List[Dict[str, Any]], all_subdivisions: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """计算详细统计信息"""
+        try:
+            if not detailed_connections:
+                return {
+                    "total_subdivisions": 0,
+                    "completed_sub_workflows": 0,
+                    "unique_workflows": 0,
+                    "max_depth": 0,
+                    "hierarchy_stats": {}
+                }
+            
+            # 基本统计
+            total_subdivisions = len(detailed_connections)
+            completed_sub_workflows = len([c for c in detailed_connections if c["sub_workflow"]["status"] == "completed"])
+            
+            # 唯一工作流统计
+            parent_workflows = set(c["parent_workflow"]["workflow_base_id"] for c in detailed_connections)
+            sub_workflows = set(c["sub_workflow"]["workflow_base_id"] for c in detailed_connections)
+            unique_workflows = len(parent_workflows | sub_workflows)
+            
+            # 深度统计
+            depths = [c.get("depth", 0) for c in detailed_connections]
+            max_depth = max(depths) if depths else 0
+            
+            # 层级统计
+            hierarchy_stats = {}
+            for depth in range(max_depth + 1):
+                count = len([c for c in detailed_connections if c.get("depth", 0) == depth])
+                hierarchy_stats[f"level_{depth}"] = count
+            
+            statistics = {
+                "total_subdivisions": total_subdivisions,
+                "completed_sub_workflows": completed_sub_workflows,
+                "unique_workflows": unique_workflows,
+                "max_depth": max_depth,
+                "hierarchy_stats": hierarchy_stats,
+                "completion_rate": completed_sub_workflows / total_subdivisions if total_subdivisions > 0 else 0,
+                "average_nodes_per_workflow": sum(c["sub_workflow"]["total_nodes"] for c in detailed_connections) / total_subdivisions if total_subdivisions > 0 else 0
+            }
+            
+            logger.info(f"📊 详细统计计算完成: {statistics}")
+            return statistics
+            
+        except Exception as e:
+            logger.error(f"❌ 计算详细统计失败: {e}")
+            return {"total_subdivisions": 0, "completed_sub_workflows": 0, "unique_workflows": 0, "max_depth": 0}
+    
+    def _calculate_compatibility_score(self, subdivision: Dict[str, Any], stats: Dict[str, Any]) -> float:
+        """计算subdivision的兼容性分数"""
+        try:
+            score = 1.0
+            
+            # 基于节点类型的评分
+            node_type = subdivision.get("original_node_type", "")
+            if node_type != "processor":
+                score *= 0.5
+            
+            # 基于复杂度的评分
+            total_nodes = stats.get('total_nodes', 0)
+            if total_nodes > 10:
+                score *= 0.7
+            elif total_nodes > 5:
+                score *= 0.9
+            
+            # 基于完成状态的评分
+            if subdivision.get("sub_workflow_status") == "completed":
+                score *= 1.0
+            else:
+                score *= 0.3
+            
+            return min(score, 1.0)
+            
+        except Exception as e:
+            logger.error(f"❌ 计算兼容性分数失败: {e}")
+            return 0.0
+    
+    def _calculate_hierarchical_positions(self, detailed_connections: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+        """计算层级布局位置"""
+        try:
+            positions = {}
+            
+            # 按深度分组
+            depth_groups = {}
+            for connection in detailed_connections:
+                depth = connection.get("depth", 0)
+                if depth not in depth_groups:
+                    depth_groups[depth] = []
+                
+                parent_id = connection["parent_workflow"]["workflow_base_id"]
+                sub_id = connection["sub_workflow"]["workflow_base_id"]
+                
+                depth_groups[depth].extend([parent_id, sub_id])
+            
+            # 为每个深度分配位置
+            y_offset = 0
+            for depth in sorted(depth_groups.keys()):
+                nodes_at_depth = list(set(depth_groups[depth]))  # 去重
+                
+                for i, node_id in enumerate(nodes_at_depth):
+                    if node_id not in positions:
+                        positions[node_id] = {
+                            "x": i * 300,
+                            "y": y_offset
+                        }
+                
+                y_offset += 200
+            
+            return positions
+            
+        except Exception as e:
+            logger.error(f"❌ 计算层级位置失败: {e}")
+            return {}

@@ -44,6 +44,7 @@ class TaskSubdivisionRepository(BaseRepository[TaskSubdivision]):
                 "status": TaskSubdivisionStatus.CREATED.value,
                 "parent_task_description": "",  # 将在后续更新
                 "context_passed": subdivision_data.context_to_pass,
+                "parent_subdivision_id": subdivision_data.parent_subdivision_id,  # 链式细分支持
                 "subdivision_created_at": now_utc(),
                 "created_at": now_utc(),
                 "updated_at": now_utc(),
@@ -284,6 +285,64 @@ class TaskSubdivisionRepository(BaseRepository[TaskSubdivision]):
             
         except Exception as e:
             logger.error(f"删除任务细分失败: {e}")
+            raise
+
+    async def get_subdivision_hierarchy(self, root_subdivision_id: uuid.UUID) -> List[Dict[str, Any]]:
+        """获取细分的完整层级结构"""
+        try:
+            query = """
+            WITH RECURSIVE subdivision_tree AS (
+                -- 基础情况：指定的根节点
+                SELECT ts.*, 0 as depth, ARRAY[ts.subdivision_id] as path
+                FROM task_subdivision ts
+                WHERE ts.subdivision_id = $1 AND ts.is_deleted = FALSE
+                
+                UNION ALL
+                
+                -- 递归情况：子级细分
+                SELECT ts.*, st.depth + 1, st.path || ts.subdivision_id
+                FROM task_subdivision ts
+                JOIN subdivision_tree st ON ts.parent_subdivision_id = st.subdivision_id
+                WHERE ts.is_deleted = FALSE
+            )
+            SELECT st.*, 
+                   ti.task_title as original_task_title,
+                   u.username as subdivider_name
+            FROM subdivision_tree st
+            LEFT JOIN task_instance ti ON st.original_task_id = ti.task_instance_id
+            LEFT JOIN "user" u ON st.subdivider_id = u.user_id
+            ORDER BY depth, subdivision_created_at
+            """
+            
+            results = await self.db.fetch_all(query, root_subdivision_id)
+            return [dict(result) for result in results]
+            
+        except Exception as e:
+            logger.error(f"获取细分层级结构失败: {e}")
+            raise
+
+    async def get_subdivision_children(self, parent_subdivision_id: uuid.UUID) -> List[Dict[str, Any]]:
+        """获取指定细分的直接子级"""
+        try:
+            query = """
+            SELECT ts.*, 
+                   ti.task_title as original_task_title,
+                   u.username as subdivider_name,
+                   w.name as sub_workflow_name
+            FROM task_subdivision ts
+            LEFT JOIN task_instance ti ON ts.original_task_id = ti.task_instance_id
+            LEFT JOIN "user" u ON ts.subdivider_id = u.user_id
+            LEFT JOIN workflow w ON ts.sub_workflow_base_id = w.workflow_base_id 
+                AND w.is_current_version = TRUE
+            WHERE ts.parent_subdivision_id = $1 AND ts.is_deleted = FALSE
+            ORDER BY ts.subdivision_created_at ASC
+            """
+            
+            results = await self.db.fetch_all(query, parent_subdivision_id)
+            return [dict(result) for result in results]
+            
+        except Exception as e:
+            logger.error(f"获取子级细分失败: {e}")
             raise
 
 
