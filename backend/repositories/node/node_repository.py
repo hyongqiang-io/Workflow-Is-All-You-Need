@@ -478,10 +478,10 @@ class NodeConnectionRepository:
         try:
             # 获取当前版本的节点ID
             node_query = """
-                SELECT node_id FROM "node" 
+                SELECT node_id FROM node 
                 WHERE node_base_id = %s AND workflow_base_id = %s
-                AND is_current_version = true 
-                AND is_deleted = false
+                AND is_current_version = 1 
+                AND is_deleted = 0
             """
             from_node = await self.db.fetch_one(node_query, from_node_base_id, workflow_base_id)
             to_node = await self.db.fetch_one(node_query, to_node_base_id, workflow_base_id)
@@ -492,7 +492,7 @@ class NodeConnectionRepository:
             # 获取工作流ID
             workflow_query = """
                 SELECT workflow_id FROM workflow 
-                WHERE workflow_base_id = %s AND is_current_version = TRUE
+                WHERE workflow_base_id = %s AND is_current_version = 1
             """
             workflow = await self.db.fetch_one(workflow_query, workflow_base_id)
             if not workflow:
@@ -530,10 +530,10 @@ class NodeConnectionRepository:
                 JOIN node tn ON tn.node_id = nc.to_node_id
                 WHERE fn.workflow_base_id = %s 
                   AND tn.workflow_base_id = %s
-                  AND fn.is_current_version = TRUE
-                  AND tn.is_current_version = TRUE
-                  AND fn.is_deleted = FALSE
-                  AND tn.is_deleted = FALSE
+                  AND fn.is_current_version = 1
+                  AND tn.is_current_version = 1
+                  AND fn.is_deleted = 0
+                  AND tn.is_deleted = 0
                 ORDER BY nc.created_at ASC
             """
             results = await self.db.fetch_all(query, workflow_base_id, workflow_base_id)
@@ -553,7 +553,7 @@ class NodeConnectionRepository:
                 JOIN node tn ON tn.node_id = nc.to_node_id
                 JOIN workflow w ON w.workflow_id = nc.workflow_id
                 WHERE fn.node_base_id = %s AND w.workflow_base_id = %s 
-                      AND w.is_current_version = TRUE
+                      AND w.is_current_version = 1
                 ORDER BY nc.created_at ASC
             """
             results = await self.db.fetch_all(query, node_base_id, workflow_base_id)
@@ -573,7 +573,7 @@ class NodeConnectionRepository:
                 JOIN node tn ON tn.node_id = nc.to_node_id
                 JOIN workflow w ON w.workflow_id = nc.workflow_id
                 WHERE tn.node_base_id = %s AND w.workflow_base_id = %s 
-                      AND w.is_current_version = TRUE
+                      AND w.is_current_version = 1
                 ORDER BY nc.created_at ASC
             """
             results = await self.db.fetch_all(query, node_base_id, workflow_base_id)
