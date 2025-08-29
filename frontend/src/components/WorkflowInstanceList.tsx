@@ -1422,6 +1422,8 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                         <div style={{ flex: 1 }}>
                           <WorkflowTemplateConnectionGraph
                             workflowInstanceId={selectedInstance.instance_id}
+                            visible={true}
+                            onClose={() => {}}
                             onNodeClick={(node) => {
                               console.log('🔍 [WorkflowInstanceList] 模板连接图节点点击:', node);
                             }}

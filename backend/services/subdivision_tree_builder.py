@@ -28,6 +28,7 @@ class SubdivisionNode:
     node_name: str
     task_title: str
     created_at: str
+    root_workflow_instance_id: Optional[str] = None  # 添加根工作流ID
     depth: int = 0
     children: List['SubdivisionNode'] = None
     
@@ -74,10 +75,10 @@ class SubdivisionTree:
     
     def build_from_subdivisions(self, subdivisions: List[Dict[str, Any]]) -> 'SubdivisionTree':
         """
-        从subdivision数据构建树
+        从subdivision数据构建树，支持跨工作流实例的嵌套关系
         
         Args:
-            subdivisions: 从数据库查询的subdivision列表
+            subdivisions: 从数据库查询的subdivision列表（包括递归的）
             
         Returns:
             构建好的树
@@ -85,6 +86,9 @@ class SubdivisionTree:
         logger.info(f"🌳 构建subdivision树: {len(subdivisions)} 个节点")
         
         # 第一遍：创建所有节点
+        subdivision_to_workflow = {}  # subdivision_id -> workflow_instance_id 映射
+        workflow_to_subdivision = {}  # workflow_instance_id -> subdivision_id 映射
+        
         for sub in subdivisions:
             node = SubdivisionNode(
                 subdivision_id=str(sub['subdivision_id']),
@@ -95,16 +99,65 @@ class SubdivisionTree:
                 status=sub['sub_workflow_status'] or 'unknown',
                 node_name=sub['original_node_name'],
                 task_title=sub['task_title'],
-                created_at=sub['subdivision_created_at'].isoformat() if hasattr(sub['subdivision_created_at'], 'isoformat') else str(sub['subdivision_created_at'])
+                created_at=sub['subdivision_created_at'].isoformat() if hasattr(sub['subdivision_created_at'], 'isoformat') else str(sub['subdivision_created_at']),
+                root_workflow_instance_id=str(sub['root_workflow_instance_id']) if sub.get('root_workflow_instance_id') else None,
+                depth=sub.get('depth', 0)
             )
+            
             self.nodes[node.subdivision_id] = node
+            
+            # 建立subdivision到工作流实例的映射关系
+            if node.workflow_instance_id:
+                subdivision_to_workflow[node.subdivision_id] = node.workflow_instance_id
+                workflow_to_subdivision[node.workflow_instance_id] = node.subdivision_id
         
-        # 第二遍：构建父子关系
-        for node in self.nodes.values():
+        logger.info(f"🔗 映射关系: {len(subdivision_to_workflow)} 个subdivision->workflow")
+        
+        # 第二遍：构建父子关系 - 修复版本
+        logger.info(f"🔗 构建父子关系: {len(self.nodes)} 个节点")
+        
+        for sub_data in subdivisions:
+            subdivision_id = str(sub_data['subdivision_id'])
+            node = self.nodes[subdivision_id]
+            parent_found = False
+            
+            # 方式1：使用parent_subdivision_id（直接的subdivision父子关系）
             if node.parent_id and node.parent_id in self.nodes:
                 self.nodes[node.parent_id].add_child(node)
-            else:
+                parent_found = True
+                parent_workflow_name = self.nodes[node.parent_id].workflow_name
+                logger.info(f"  📎 直接父子关系: {parent_workflow_name} -> {node.workflow_name}")
+            
+            # 方式2：跨工作流的implicit父子关系
+            # 如果subdivision A的子工作流 == subdivision B所属的工作流，则A是B的父级
+            elif not parent_found:
+                current_source_workflow_id = sub_data.get('root_workflow_instance_id')  # 当前subdivision来源工作流
+                
+                # 查找父subdivision：其sub_workflow_instance_id等于当前subdivision的来源工作流ID
+                for other_sub_data in subdivisions:
+                    other_subdivision_id = str(other_sub_data['subdivision_id'])
+                    other_sub_workflow_id = str(other_sub_data['sub_workflow_instance_id']) if other_sub_data['sub_workflow_instance_id'] else None
+                    
+                    # 修复逻辑：如果其他subdivision的子工作流ID == 当前subdivision的来源工作流ID
+                    # 说明当前subdivision是在其他subdivision创建的子工作流中产生的
+                    if (other_subdivision_id != subdivision_id and 
+                        other_sub_workflow_id and 
+                        current_source_workflow_id and
+                        other_sub_workflow_id == current_source_workflow_id):
+                        
+                        if other_subdivision_id in self.nodes:
+                            self.nodes[other_subdivision_id].add_child(node)
+                            node.parent_id = other_subdivision_id
+                            parent_found = True
+                            parent_workflow_name = self.nodes[other_subdivision_id].workflow_name
+                            logger.info(f"  🔗 跨工作流父子关系: {parent_workflow_name} -> {node.workflow_name}")
+                            logger.info(f"    详情: subdivision({other_subdivision_id})的子工作流({other_sub_workflow_id}) == subdivision({subdivision_id})的来源工作流({current_source_workflow_id})")
+                            break
+            
+            # 方式3：如果还没找到父节点，则为根节点
+            if not parent_found:
                 self.roots.append(node)
+                logger.info(f"  🌳 根节点: {node.workflow_name}")
         
         logger.info(f"🌳 树构建完成: {len(self.roots)} 个根，最大深度 {self.get_max_depth()}")
         return self
@@ -172,54 +225,112 @@ class SubdivisionTree:
         """
         转换为前端图形数据
         
-        返回React Flow需要的nodes和edges格式
+        修改：节点代表工作流实例，边代表subdivision关系
         """
-        positions = self.calculate_layout_positions()
+        # 收集所有工作流实例
+        workflow_nodes = {}  # workflow_instance_id -> node_data
+        subdivision_edges = []  # subdivision关系作为边
         
-        nodes = []
-        edges = []
-        
-        # 创建节点
+        # 添加主工作流节点（如果有subdivision数据，主工作流应该是根工作流）
+        main_workflow_ids = set()
         for node in self.get_all_nodes():
-            pos = positions.get(node.subdivision_id, {"x": 0, "y": 0})
-            
-            flow_node = {
-                "id": node.subdivision_id,
-                "type": "workflowTemplate", 
-                "position": pos,
-                "data": {
-                    "label": node.workflow_name,
-                    "workflow_base_id": node.workflow_base_id,
-                    "workflow_instance_id": node.workflow_instance_id,
-                    "status": node.status,
-                    "node_name": node.node_name,
-                    "task_title": node.task_title,
-                    "depth": node.depth,
-                    "children_count": len(node.children),
-                    "isRoot": node.parent_id is None
+            # 从root_workflow_instance_id获取主工作流ID
+            if hasattr(node, 'created_at') and node.workflow_instance_id:
+                # 查找哪些工作流是主工作流（不是任何subdivision的子工作流）
+                root_workflow_id = None
+                for sub_node in self.get_all_nodes():
+                    root_id = getattr(sub_node, 'root_workflow_instance_id', None)
+                    if root_id and root_id not in [n.workflow_instance_id for n in self.get_all_nodes()]:
+                        main_workflow_ids.add(root_id)
+        
+        # 添加主工作流节点
+        positions = self.calculate_layout_positions()
+        y_offset = 0
+        
+        for main_workflow_id in main_workflow_ids:
+            if main_workflow_id not in workflow_nodes:
+                workflow_nodes[main_workflow_id] = {
+                    "id": f"workflow_{main_workflow_id}",
+                    "type": "workflowTemplate",
+                    "position": {"x": 0, "y": y_offset},
+                    "data": {
+                        "label": f"Main Workflow",
+                        "workflow_instance_id": main_workflow_id,
+                        "status": "parent",
+                        "isMainWorkflow": True,
+                        "depth": 0
+                    }
                 }
-            }
-            nodes.append(flow_node)
-            
-            # 创建边
-            for child in node.children:
-                edge = {
-                    "id": f"edge_{node.subdivision_id}_{child.subdivision_id}",
-                    "source": node.subdivision_id,
-                    "target": child.subdivision_id,
-                    "type": "smoothstep",
-                    "animated": child.status == "running",
-                    "label": f"{node.node_name} → {child.workflow_name}"
+                y_offset += 200
+        
+        # 添加子工作流节点
+        for node in self.get_all_nodes():
+            if node.workflow_instance_id and node.workflow_instance_id not in workflow_nodes:
+                pos = positions.get(node.subdivision_id, {"x": 200, "y": y_offset})
+                
+                workflow_nodes[node.workflow_instance_id] = {
+                    "id": f"workflow_{node.workflow_instance_id}",
+                    "type": "workflowTemplate",
+                    "position": pos,
+                    "data": {
+                        "label": node.workflow_name,
+                        "workflow_instance_id": node.workflow_instance_id,
+                        "workflow_base_id": node.workflow_base_id,
+                        "status": node.status,
+                        "isMainWorkflow": False,
+                        "depth": node.depth,
+                        "subdivision_id": node.subdivision_id,
+                        "task_title": node.task_title,
+                        "node_name": node.node_name
+                    }
                 }
-                edges.append(edge)
+                y_offset += 150
+        
+        # 创建subdivision边：基于subdivision数据和树结构
+        processed_edges = set()  # 避免重复边
+        
+        # 方式1：为每个subdivision创建从其来源工作流到子工作流的边
+        for node in self.get_all_nodes():
+            parent_workflow_id = node.root_workflow_instance_id
+            child_workflow_id = node.workflow_instance_id
+            
+            if parent_workflow_id and child_workflow_id and parent_workflow_id != child_workflow_id:
+                edge_key = f"{parent_workflow_id}_{child_workflow_id}"
+                
+                if edge_key not in processed_edges:
+                    processed_edges.add(edge_key)
+                    
+                    parent_node_id = f"workflow_{parent_workflow_id}"
+                    child_node_id = f"workflow_{child_workflow_id}"
+                    edge_id = f"subdivision_{node.subdivision_id}"
+                    
+                    subdivision_edges.append({
+                        "id": edge_id,
+                        "source": parent_node_id,
+                        "target": child_node_id,
+                        "type": "smoothstep",
+                        "animated": node.status == "running",
+                        "label": f"Subdivision: {node.node_name}",
+                        "data": {
+                            "subdivision_id": node.subdivision_id,
+                            "subdivision_name": getattr(node, 'subdivision_name', node.node_name),
+                            "task_title": node.task_title,
+                            "relationship": "subdivision"
+                        }
+                    })
+        
+        nodes_list = list(workflow_nodes.values())
+        
+        logger.info(f"📊 图数据生成完成: {len(nodes_list)} 个工作流节点，{len(subdivision_edges)} 条subdivision边")
         
         return {
-            "nodes": nodes,
-            "edges": edges,
+            "nodes": nodes_list,
+            "edges": subdivision_edges,
             "layout": {
-                "algorithm": "simple_tree",
+                "algorithm": "workflow_tree",
                 "max_depth": self.get_max_depth(),
-                "total_nodes": len(nodes),
+                "total_workflows": len(nodes_list),
+                "total_subdivisions": len(subdivision_edges),
                 "root_count": len(self.roots)
             }
         }

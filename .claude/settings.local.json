@@ -217,7 +217,8 @@
       "Bash(ENVIRONMENT=development PORT=8002 /home/ubuntu/anaconda3/envs/workflow/bin/python main.py)",
       "Bash(ENVIRONMENT=production python3 main.py)",
       "Bash(REACT_APP_API_URL=http://localhost:8002 npm start)",
-      "Bash(ENVIRONMENT=development PORT=8002 /usr/bin/python3 main.py)"
+      "Bash(ENVIRONMENT=development PORT=8002 /usr/bin/python3 main.py)",
+      "Bash(/home/ubuntu/anaconda3/envs/workflow/bin/python test_subdivision_tree_integration.py)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits"
