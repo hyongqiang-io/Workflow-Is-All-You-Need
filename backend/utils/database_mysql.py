@@ -28,6 +28,8 @@ class DatabaseManager:
             'charset': getattr(self.settings.database, 'charset', 'utf8mb4'),
             'autocommit': True,
             'connect_timeout': 60,
+            'read_timeout': 600,  # 10分钟读取超时，支持AI工作流
+            'write_timeout': 600,  # 10分钟写入超时
         }
     
     def _convert_postgresql_query(self, query: str) -> str:

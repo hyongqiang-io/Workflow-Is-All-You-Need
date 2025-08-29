@@ -423,6 +423,230 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             logger.error(f"获取最近实例失败: {e}")
             return []
     
+    async def get_complete_workflow_mapping(self, workflow_instance_id: uuid.UUID, 
+                                          max_depth: int = 10) -> Dict[str, Any]:
+        """
+        获取工作流实例的完整映射关系（包括递归子工作流）
+        
+        Args:
+            workflow_instance_id: 工作流实例ID
+            max_depth: 最大递归深度
+            
+        Returns:
+            完整的工作流-节点-子工作流映射关系
+        """
+        try:
+            logger.info(f"🔍 查询工作流实例完整映射: {workflow_instance_id}")
+            
+            # 存储已处理的工作流实例，防止循环引用
+            processed_workflows = set()
+            
+            # 递归查询根工作流及其所有子工作流
+            root_mapping = await self._get_workflow_mapping_recursive(
+                workflow_instance_id, 0, max_depth, processed_workflows
+            )
+            
+            return {
+                "root_workflow_instance_id": str(workflow_instance_id),
+                "mapping_data": root_mapping,
+                "metadata": {
+                    "total_workflows": len(processed_workflows),
+                    "max_depth_reached": root_mapping.get("depth", 0),
+                    "query_timestamp": now_utc()
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"查询工作流完整映射失败: {e}")
+            raise
+    
+    async def _get_workflow_mapping_recursive(self, workflow_instance_id: uuid.UUID, 
+                                            current_depth: int, max_depth: int,
+                                            processed_workflows: set) -> Dict[str, Any]:
+        """递归获取工作流映射关系"""
+        try:
+            workflow_id_str = str(workflow_instance_id)
+            
+            if workflow_id_str in processed_workflows or current_depth > max_depth:
+                return {"error": "circular_reference_or_max_depth", "workflow_instance_id": workflow_id_str}
+            
+            processed_workflows.add(workflow_id_str)
+            
+            # 获取工作流-节点-subdivision映射
+            mapping_query = """
+            SELECT 
+                -- 工作流信息
+                wi.workflow_instance_id,
+                wi.workflow_instance_name,
+                wi.workflow_base_id,
+                wi.status as workflow_status,
+                w.name as workflow_name,
+                
+                -- 节点信息
+                ni.node_instance_id,
+                ni.node_instance_name,
+                ni.node_base_id,
+                n.name as node_name,
+                n.type as node_type,
+                ni.status as node_status,
+                
+                -- 任务信息
+                ti.task_instance_id,
+                ti.task_title,
+                ti.task_type,
+                ti.status as task_status,
+                
+                -- Subdivision信息
+                ts.subdivision_id,
+                ts.subdivision_name,
+                ts.parent_subdivision_id,
+                ts.status as subdivision_status,
+                ts.sub_workflow_base_id,
+                ts.sub_workflow_instance_id,
+                sw.name as sub_workflow_name,
+                swi.workflow_instance_name as sub_workflow_instance_name,
+                swi.status as sub_workflow_status
+                
+            FROM workflow_instance wi
+            JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = TRUE
+            LEFT JOIN node_instance ni ON wi.workflow_instance_id = ni.workflow_instance_id AND ni.is_deleted = FALSE
+            LEFT JOIN node n ON ni.node_id = n.node_id
+            LEFT JOIN task_instance ti ON ni.node_instance_id = ti.node_instance_id AND ti.is_deleted = FALSE
+            LEFT JOIN task_subdivision ts ON ti.task_instance_id = ts.original_task_id AND ts.is_deleted = FALSE
+            LEFT JOIN workflow sw ON ts.sub_workflow_base_id = sw.workflow_base_id AND sw.is_current_version = TRUE
+            LEFT JOIN workflow_instance swi ON ts.sub_workflow_instance_id = swi.workflow_instance_id
+            WHERE wi.workflow_instance_id = $1 AND wi.is_deleted = FALSE
+            ORDER BY ni.created_at ASC, ti.created_at ASC, ts.subdivision_created_at DESC
+            """
+            
+            results = await self.db.fetch_all(mapping_query, workflow_instance_id)
+            
+            if not results:
+                return {"error": "workflow_not_found", "workflow_instance_id": workflow_id_str}
+            
+            # 构建映射结构
+            workflow_info = results[0]
+            nodes_map = {}
+            
+            for result in results:
+                if result["node_instance_id"]:
+                    node_id = str(result["node_instance_id"])
+                    
+                    if node_id not in nodes_map:
+                        nodes_map[node_id] = {
+                            "node_instance_id": node_id,
+                            "node_instance_name": result["node_instance_name"],
+                            "node_base_id": str(result["node_base_id"]),
+                            "node_name": result["node_name"],
+                            "node_type": result["node_type"],
+                            "node_status": result["node_status"],
+                            "subdivisions": []
+                        }
+                    
+                    # 处理subdivision
+                    if result["subdivision_id"]:
+                        subdivision_data = {
+                            "subdivision_id": str(result["subdivision_id"]),
+                            "subdivision_name": result["subdivision_name"],
+                            "parent_subdivision_id": str(result["parent_subdivision_id"]) if result["parent_subdivision_id"] else None,
+                            "subdivision_status": result["subdivision_status"],
+                            "sub_workflow_base_id": str(result["sub_workflow_base_id"]) if result["sub_workflow_base_id"] else None,
+                            "sub_workflow_name": result["sub_workflow_name"],
+                            "sub_workflow_instance_id": str(result["sub_workflow_instance_id"]) if result["sub_workflow_instance_id"] else None,
+                            "sub_workflow_instance_name": result["sub_workflow_instance_name"],
+                            "sub_workflow_status": result["sub_workflow_status"],
+                            "sub_workflow_mapping": None
+                        }
+                        
+                        # 递归查询子工作流
+                        if result["sub_workflow_instance_id"]:
+                            sub_mapping = await self._get_workflow_mapping_recursive(
+                                result["sub_workflow_instance_id"], current_depth + 1, max_depth, processed_workflows
+                            )
+                            subdivision_data["sub_workflow_mapping"] = sub_mapping
+                        
+                        nodes_map[node_id]["subdivisions"].append(subdivision_data)
+            
+            return {
+                "workflow_instance_id": workflow_id_str,
+                "workflow_instance_name": workflow_info["workflow_instance_name"],
+                "workflow_base_id": str(workflow_info["workflow_base_id"]),
+                "workflow_name": workflow_info["workflow_name"],
+                "workflow_status": workflow_info["workflow_status"],
+                "depth": current_depth,
+                "nodes": list(nodes_map.values())
+            }
+            
+        except Exception as e:
+            logger.error(f"递归查询工作流映射失败: {e}")
+            raise
+    
+    async def get_node_subdivision_bindings(self, node_base_id: uuid.UUID, 
+                                          workflow_base_id: uuid.UUID) -> List[Dict[str, Any]]:
+        """
+        获取特定节点的所有subdivision绑定关系
+        
+        Args:
+            node_base_id: 节点基础ID
+            workflow_base_id: 工作流基础ID
+            
+        Returns:
+            节点的所有subdivision绑定关系列表
+        """
+        try:
+            query = """
+            SELECT 
+                -- 节点信息
+                n.node_base_id,
+                n.name as node_name,
+                n.type as node_type,
+                
+                -- 节点实例信息
+                ni.node_instance_id,
+                ni.node_instance_name,
+                ni.status as node_status,
+                wi.workflow_instance_name,
+                
+                -- 任务信息
+                ti.task_instance_id,
+                ti.task_title,
+                ti.task_type,
+                ti.status as task_status,
+                
+                -- Subdivision信息
+                ts.subdivision_id,
+                ts.subdivision_name,
+                ts.status as subdivision_status,
+                ts.sub_workflow_base_id,
+                ts.sub_workflow_instance_id,
+                
+                -- 子工作流信息
+                sw.name as sub_workflow_name,
+                swi.workflow_instance_name as sub_workflow_instance_name,
+                swi.status as sub_workflow_status
+                
+            FROM node n
+            JOIN node_instance ni ON n.node_id = ni.node_id
+            JOIN workflow_instance wi ON ni.workflow_instance_id = wi.workflow_instance_id
+            LEFT JOIN task_instance ti ON ni.node_instance_id = ti.node_instance_id AND ti.is_deleted = FALSE
+            LEFT JOIN task_subdivision ts ON ti.task_instance_id = ts.original_task_id AND ts.is_deleted = FALSE
+            LEFT JOIN workflow sw ON ts.sub_workflow_base_id = sw.workflow_base_id AND sw.is_current_version = TRUE
+            LEFT JOIN workflow_instance swi ON ts.sub_workflow_instance_id = swi.workflow_instance_id
+            WHERE n.node_base_id = $1 
+                AND n.workflow_base_id = $2
+                AND n.is_current_version = TRUE
+                AND n.is_deleted = FALSE
+                AND ni.is_deleted = FALSE
+            ORDER BY wi.created_at DESC, ts.subdivision_created_at DESC
+            """
+            
+            results = await self.db.fetch_all(query, node_base_id, workflow_base_id)
+            return [dict(result) for result in results]
+            
+        except Exception as e:
+            logger.error(f"获取节点subdivision绑定关系失败: {e}")
+            raise
+
     async def delete_instance(self, instance_id: uuid.UUID, soft_delete: bool = True) -> bool:
         """删除工作流实例"""
         try:

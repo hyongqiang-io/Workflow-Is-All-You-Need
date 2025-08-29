@@ -1,11 +1,4 @@
-/**
- * 工作流模板连接图组件
- * Workflow Template Connection Graph Component
- * 
- * 用于在细分预览中显示工作流模板之间的连接关系图
- */
-
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import ReactFlow, {
   Node,
   Edge,
@@ -22,1096 +15,1077 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import './WorkflowTemplateConnectionGraph.css';
 
-import workflowTemplateConnectionManager, {
-  TemplateNode,
-  TemplateEdge,
-  SubdivisionConnectionDetail,
-  MergeCandidate
-} from '../services/workflowTemplateConnectionManager';
-import WorkflowMergeModal from './WorkflowMergeModal';
+// =============================================================================
+// 简化的数据结构定义
+// =============================================================================
 
-// 工作流容器节点组件 - 专门用于显示工作流模板
-const WorkflowTemplateNode: React.FC<{
-  data: TemplateNode;
-  selected: boolean;
-  enableMergeMode?: boolean;
-  onMergeToggle?: (nodeId: string, candidateId?: string) => void;
-  nodeId?: string;
-}> = React.memo(({ data, selected, enableMergeMode = false, onMergeToggle, nodeId }) => {
-  const getStatusColor = (status?: string) => {
-    switch (status) {
-      case 'completed': return '#4caf50';
-      case 'running': return '#ff9800';
-      case 'failed': return '#f44336';
-      default: return '#9e9e9e';
+interface WorkflowData {
+  id: string;
+  name: string;
+  status: 'completed' | 'running' | 'failed' | 'pending';
+  description?: string;
+  total_nodes?: number;
+  completed_nodes?: number;
+  workflow_base_id?: string;
+  subdivision_id?: string;  // subdivision的唯一标识
+  subdivision_name?: string; // subdivision的名称
+  parent_subdivision_id?: string; // 父subdivision的ID（用于构建层级关系）
+  nodeSourceType?: 'parent_workflow' | 'subdivision'; // 节点来源类型
+  parentWorkflowId?: string; // 父工作流ID（用于构建树结构）
+  parentNodeInfo?: {        // 父节点信息（节点级别连接）
+    node_instance_id: string;
+    node_base_id: string;
+    node_name: string;
+    node_type: string;
+  };
+}
+
+interface ConnectionData {
+  id: string;
+  source: string;
+  target: string;
+  label?: string;
+}
+
+// =============================================================================
+// 简化的布局算法
+// =============================================================================
+
+const calculateTreeLayout = (workflows: WorkflowData[], connections: ConnectionData[]): Map<string, { x: number; y: number }> => {
+  console.log('🌳 [模板连接图] 开始计算统一树状布局:', {
+    workflowsCount: workflows.length,
+    connectionsCount: connections.length,
+    workflows: workflows.map(w => ({ id: w.id, name: w.name, subdivisionId: w.subdivision_id })),
+    connections: connections.map(c => ({ id: c.id, source: c.source, target: c.target }))
+  });
+  
+  const positions = new Map<string, { x: number; y: number }>();
+  const baseHorizontalSpacing = 400; // 基础水平间距
+  const baseVerticalSpacing = 300;   // 基础垂直间距
+  
+  // 动态间距调整：根据层级数和节点数调整间距
+  const maxExpectedLevels = 8; // 期望的最大层级数
+  const dynamicVerticalSpacing = Math.max(
+    200, // 最小垂直间距
+    Math.min(baseVerticalSpacing, baseVerticalSpacing * (maxExpectedLevels / Math.max(1, workflows.length / 2)))
+  );
+  const dynamicHorizontalSpacing = Math.max(
+    300, // 最小水平间距  
+    Math.min(baseHorizontalSpacing, baseHorizontalSpacing * (10 / Math.max(1, workflows.length)))
+  );
+  
+  console.log('🌳 [模板连接图] 动态间距调整:', {
+    workflows: workflows.length,
+    dynamicVerticalSpacing,
+    dynamicHorizontalSpacing,
+    baseVertical: baseVerticalSpacing,
+    baseHorizontal: baseHorizontalSpacing
+  });
+  
+  // 构建父子关系映射
+  const parentChildMap = new Map<string, string[]>();
+  const childParentMap = new Map<string, string>();
+  
+  connections.forEach(conn => {
+    if (!parentChildMap.has(conn.source)) {
+      parentChildMap.set(conn.source, []);
     }
-  };
-
-  const getCompletionPercentage = () => {
-    if (data.total_nodes && data.completed_nodes !== undefined) {
-      return Math.round((data.completed_nodes / data.total_nodes) * 100);
+    parentChildMap.get(conn.source)!.push(conn.target);
+    childParentMap.set(conn.target, conn.source);
+  });
+  
+  // 找到所有潜在根节点（没有父节点的节点）
+  const potentialRoots = workflows.filter(w => !childParentMap.has(w.id));
+  console.log('🌳 [模板连接图] 找到潜在根节点:', potentialRoots.map(r => ({ id: r.id, name: r.name })));
+  
+  // 核心改进：创建虚拟根节点，将所有真实根节点作为其子节点
+  let actualRootNode: string;
+  
+  if (potentialRoots.length === 1) {
+    // 如果只有一个根节点，直接使用它
+    actualRootNode = potentialRoots[0].id;
+    console.log('🌳 [模板连接图] 使用单一根节点:', actualRootNode);
+  } else if (potentialRoots.length > 1) {
+    // 如果有多个根节点，创建虚拟根并连接
+    console.log('🌳 [模板连接图] 检测到多个根节点，创建统一树结构');
+    
+    // 选择第一个根节点作为主根
+    actualRootNode = potentialRoots[0].id;
+    
+    // 将其他根节点作为第一个根节点的子节点
+    const mainRootChildren = parentChildMap.get(actualRootNode) || [];
+    for (let i = 1; i < potentialRoots.length; i++) {
+      const otherRootId = potentialRoots[i].id;
+      mainRootChildren.push(otherRootId);
+      childParentMap.set(otherRootId, actualRootNode);
     }
-    return 0;
-  };
-
-  // 获取工作流名称 - 优先级: workflow_name > label > name
-  const getWorkflowName = () => {
-    // 使用类型断言来处理额外的属性
-    const nodeData = data as any;
-    return nodeData.workflow_name || data.label || nodeData.name || '未命名工作流';
-  };
-
-  // 处理合并选择
-  const handleMergeToggle = (e: React.ChangeEvent<HTMLInputElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (onMergeToggle) {
-      // 使用传入的nodeId，如果没有则使用data.id作为备选
-      const actualNodeId = nodeId || data.id;
-      console.log('🔧 [WorkflowTemplateNode] 合并切换调用:', { 
-        actualNodeId, 
-        candidateId: data.mergeCandidateId,
-        nodeIdSource: nodeId ? 'props' : 'data.id'
+    parentChildMap.set(actualRootNode, mainRootChildren);
+    
+    console.log('🌳 [模板连接图] 统一树结构创建完成，主根节点:', actualRootNode, '子节点:', mainRootChildren);
+  } else {
+    // 如果没有根节点（所有节点都有父节点，可能存在循环），选择第一个节点作为根
+    if (workflows.length > 0) {
+      actualRootNode = workflows[0].id;
+      // 清除这个节点的父关系，使其成为根节点
+      if (childParentMap.has(actualRootNode)) {
+        const formerParent = childParentMap.get(actualRootNode)!;
+        const siblings = parentChildMap.get(formerParent) || [];
+        parentChildMap.set(formerParent, siblings.filter(id => id !== actualRootNode));
+        childParentMap.delete(actualRootNode);
+        console.log('🌳 [模板连接图] 强制指定根节点:', actualRootNode);
+      }
+    } else {
+      console.warn('🌳 [模板连接图] 没有可用的工作流节点');
+      return positions;
+    }
+  }
+  
+  // 构建统一的层级结构
+  const levels: string[][] = [];
+  const nodeLevels = new Map<string, number>();
+  
+  // BFS构建层级，从统一的根节点开始
+  const queue: Array<{ nodeId: string; level: number }> = [];
+  
+  // 初始化统一根节点
+  queue.push({ nodeId: actualRootNode, level: 0 });
+  
+  while (queue.length > 0) {
+    const { nodeId, level } = queue.shift()!;
+    
+    if (nodeLevels.has(nodeId)) continue; // 避免重复处理和循环
+    
+    nodeLevels.set(nodeId, level);
+    
+    // 确保levels数组有足够的层级
+    while (levels.length <= level) {
+      levels.push([]);
+    }
+    levels[level].push(nodeId);
+    
+    // 添加子节点到队列
+    const children = parentChildMap.get(nodeId) || [];
+    children.forEach(childId => {
+      if (!nodeLevels.has(childId)) {
+        queue.push({ nodeId: childId, level: level + 1 });
+      }
+    });
+  }
+  
+  // 确保所有工作流都被包含在树中（处理孤立节点）
+  workflows.forEach(workflow => {
+    if (!nodeLevels.has(workflow.id)) {
+      console.log('🌳 [模板连接图] 发现孤立节点，添加到最后一层:', workflow.id);
+      const lastLevel = Math.max(0, levels.length - 1);
+      levels[lastLevel].push(workflow.id);
+      nodeLevels.set(workflow.id, lastLevel);
+    }
+  });
+  
+  console.log('🌳 [模板连接图] 统一层级结构:', {
+    levelCount: levels.length,
+    totalNodes: Array.from(nodeLevels.keys()).length,
+    levels: levels.map((nodes, index) => ({ level: index, nodeCount: nodes.length, nodes }))
+  });
+  
+  // 计算每层节点的位置，使用动态间距和深层级优化
+  levels.forEach((levelNodes, levelIndex) => {
+    // 使用动态垂直间距，深层级适当压缩
+    const levelSpacingMultiplier = levelIndex > 5 ? 0.8 : 1; // 第6层开始压缩20%
+    const levelY = levelIndex * dynamicVerticalSpacing * levelSpacingMultiplier;
+    
+    if (levelIndex === 0) {
+      // 根节点居中
+      positions.set(actualRootNode, { x: 0, y: levelY });
+      console.log(`🌳 [模板连接图] 统一根节点 ${actualRootNode} 位置: (0, ${levelY})`);
+    } else {
+      // 子节点基于父节点位置分布
+      const processedNodes = new Set<string>();
+      
+      levelNodes.forEach(nodeId => {
+        if (processedNodes.has(nodeId)) return;
+        
+        const parentId = childParentMap.get(nodeId);
+        if (!parentId) {
+          // 孤立节点，放在当前层的边缘
+          const edgeX = levelNodes.length * dynamicHorizontalSpacing / 2;
+          positions.set(nodeId, { x: edgeX, y: levelY });
+          processedNodes.add(nodeId);
+          console.log(`🌳 [模板连接图] 孤立节点 ${nodeId} 位置: (${edgeX}, ${levelY})`);
+          return;
+        }
+        
+        const parentPos = positions.get(parentId);
+        if (!parentPos) return;
+        
+        // 获取同一父节点的所有子节点（在当前层级）
+        const siblings = parentChildMap.get(parentId) || [];
+        const currentSiblings = siblings.filter(siblingId => 
+          nodeLevels.get(siblingId) === levelIndex && !processedNodes.has(siblingId)
+        );
+        
+        // 计算子节点的位置，深层级适当压缩水平间距
+        if (currentSiblings.length === 1) {
+          // 只有一个子节点，直接放在父节点下方
+          positions.set(nodeId, { x: parentPos.x, y: levelY });
+          console.log(`🌳 [模板连接图] 单子节点 ${nodeId} 位置: (${parentPos.x}, ${levelY})`);
+        } else {
+          // 多个子节点，在父节点下方分布
+          const horizontalSpacingMultiplier = levelIndex > 4 ? 0.7 : 1; // 第5层开始压缩30%
+          const siblingSpacing = Math.max(
+            dynamicHorizontalSpacing * horizontalSpacingMultiplier, 
+            250 // 最小间距
+          );
+          const totalSiblingWidth = (currentSiblings.length - 1) * siblingSpacing;
+          const startX = parentPos.x - totalSiblingWidth / 2;
+          
+          currentSiblings.forEach((siblingId, index) => {
+            const x = startX + index * siblingSpacing;
+            positions.set(siblingId, { x, y: levelY });
+            console.log(`🌳 [模板连接图] 多子节点 ${siblingId} 位置: (${x}, ${levelY}) [${index+1}/${currentSiblings.length}] 层级${levelIndex}`);
+          });
+        }
+        
+        // 标记这些节点已处理
+        currentSiblings.forEach(siblingId => processedNodes.add(siblingId));
       });
-      onMergeToggle(actualNodeId, data.mergeCandidateId);
     }
-  };
+  });
+  
+  console.log('✅ [模板连接图] 统一树状布局计算完成:', {
+    positionsCount: positions.size,
+    maxLevel: levels.length - 1,
+    positions: Array.from(positions.entries()).map(([id, pos]) => ({ id, x: pos.x, y: pos.y }))
+  });
+  
+  return positions;
+};
 
-  // 构建节点CSS类名
-  const getNodeClassNames = () => {
-    let classNames = `workflow-template-node ${data.is_parent ? 'parent-workflow' : 'sub-workflow'}`;
-    if (selected) classNames += ' selected';
-    if (data.isMergeSelected) classNames += ' merge-selected';
-    if (data.isMergePath) classNames += ' merge-path';
-    if (enableMergeMode) classNames += ' merge-mode';
-    return classNames;
-  };
+// =============================================================================
+// 简化的工作流节点组件
+// =============================================================================
 
+const WorkflowNode: React.FC<{ data: WorkflowData & { nodeType?: string; isRoot?: boolean; hasChildren?: boolean; isSubdivision?: boolean; level?: number } }> = ({ data }) => {
+  const getStatusColor = (status: string): string => {
+    const colors = {
+      completed: '#4caf50',
+      running: '#ff9800', 
+      failed: '#f44336',
+      pending: '#9e9e9e'
+    };
+    return colors[status as keyof typeof colors] || colors.pending;
+  };
+  
+  const getCompletionRate = (): number => {
+    if (!data.total_nodes || !data.completed_nodes) return 0;
+    return Math.round((data.completed_nodes / data.total_nodes) * 100);
+  };
+  
+  // 根据节点类型和层级选择图标和样式
+  const getNodeIcon = (): string => {
+    if (data.isRoot) return '🌳'; // 根节点用树图标
+    if (data.isSubdivision) {
+      // 根据层级选择不同的子工作流图标
+      const level = data.level || 0;
+      if (level === 1) return '🔗'; // 第一层子工作流
+      if (level === 2) return '📎'; // 第二层子工作流
+      if (level >= 3) return '🔸'; // 更深层级子工作流
+    }
+    return '📦'; // 默认节点用包装图标
+  };
+  
+  const getNodeTypeLabel = (): string => {
+    if (data.isRoot) return '根工作流';
+    if (data.isSubdivision) {
+      const level = data.level || 0;
+      if (level === 1) return '一级子工作流';
+      if (level === 2) return '二级子工作流';
+      if (level >= 3) return `${level}级子工作流`;
+    }
+    return '工作流';
+  };
+  
+  // 根据层级获取节点边框样式
+  const getNodeBorderStyle = (): React.CSSProperties => {
+    const level = data.level || 0;
+    if (data.isRoot) {
+      return { borderColor: '#4caf50', borderWidth: '3px' };
+    }
+    if (data.isSubdivision) {
+      if (level === 1) return { borderColor: '#ff9800', borderWidth: '3px' };
+      if (level === 2) return { borderColor: '#9c27b0', borderWidth: '2px' };
+      if (level >= 3) return { borderColor: '#607d8b', borderWidth: '2px', borderStyle: 'dashed' };
+    }
+    return { borderColor: '#1976d2', borderWidth: '2px' };
+  };
+  
   return (
-    <div className={getNodeClassNames()}>
-      {/* React Flow连接点 */}
-      <Handle
-        type="target"
-        position={Position.Top}
-        id="target"
-        style={{ background: '#1976d2', border: '2px solid #fff' }}
-      />
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        id="source"
-        style={{ background: '#1976d2', border: '2px solid #fff' }}
-      />
+    <div className="workflow-node" style={getNodeBorderStyle()}>
+      <Handle type="target" position={Position.Top} />
+      <Handle type="source" position={Position.Bottom} />
       
-      {/* 合并模式下的选择复选框 */}
-      {enableMergeMode && data.mergeCandidateId && (
-        <div className="merge-checkbox-container">
-          <input
-            type="checkbox"
-            className="merge-checkbox"
-            checked={data.isMergeSelected || false}
-            onChange={handleMergeToggle}
-            onClick={(e) => e.stopPropagation()}
-            title="选择此工作流进行合并"
-          />
-          <span className="merge-checkbox-label">合并</span>
+      <div className="node-header">
+        <div className="node-icon">{getNodeIcon()}</div>
+        <div className="node-title-section">
+          <h3 className="node-name">{data.name}</h3>
+          <div className="node-type-badge">{getNodeTypeLabel()}</div>
         </div>
-      )}
-      
-      <div className="workflow-header">
-        <div className="workflow-icon">📦</div>
-        <div className="workflow-title-section">
-          <h3 className="workflow-name">{getWorkflowName()}</h3>
-          {data.status && (
-            <div 
-              className="workflow-status-indicator"
-              style={{ backgroundColor: getStatusColor(data.status) }}
-              title={`状态: ${data.status}`}
-            ></div>
-          )}
-        </div>
-        {data.recursion_level !== undefined && data.recursion_level > 0 && (
-          <span className="recursion-level-badge" title={`嵌套层级: ${data.recursion_level}`}>
-            L{data.recursion_level}
-          </span>
-        )}
-        {enableMergeMode && data.mergeLevel !== undefined && (
-          <span className="merge-level-badge" title={`合并层级: ${data.mergeLevel}`}>
-            M{data.mergeLevel}
-          </span>
-        )}
+        <div 
+          className="status-indicator"
+          style={{ backgroundColor: getStatusColor(data.status) }}
+          title={`状态: ${data.status}`}
+        />
       </div>
       
-      {/* 子工作流显示来源信息 */}
-      {!data.is_parent && (data as any).source_node_name && (
-        <div className="workflow-source-info">
-          <div className="source-info-label">来源节点:</div>
-          <div className="source-node-details">
-            <span className="source-node-name">{(data as any).source_node_name}</span>
-            <span className="source-node-type">({(data as any).source_node_type})</span>
+      {/* 层级指示器 - 深层级节点显示层级信息 */}
+      {data.isSubdivision && (data.level || 0) > 0 && (
+        <div className="level-indicator">
+          <span className="level-badge">层级 {data.level}</span>
+        </div>
+      )}
+      
+      {/* 细分信息显示 */}
+      {data.isSubdivision && data.subdivision_name && (
+        <div className="subdivision-info">
+          <span className="subdivision-label">细分名称:</span>
+          <span className="subdivision-name">{data.subdivision_name}</span>
+        </div>
+      )}
+      
+      {data.description && (
+        <div className="node-description">{data.description}</div>
+      )}
+      
+      {data.total_nodes && (
+        <div className="progress-section">
+          <div className="progress-header">
+            <span>执行进度</span>
+            <span>{data.completed_nodes || 0}/{data.total_nodes}</span>
           </div>
-        </div>
-      )}
-      
-      {/* 工作流描述 */}
-      {(data.description || data.task_description) && (
-        <div className="workflow-description">
-          {data.description || data.task_description}
-        </div>
-      )}
-      
-      {/* 父工作流显示连接的子工作流信息 */}
-      {data.is_parent && data.connected_nodes && data.connected_nodes.length > 0 && (
-        <div className="sub-workflows-info">
-          <div className="info-label">包含子工作流:</div>
-          <div className="sub-workflow-count">
-            {data.connected_nodes.length} 个子工作流
-          </div>
-          {data.connected_nodes.slice(0, 2).map((node, index) => (
-            <div key={index} className="sub-workflow-item">
-              {node.subdivision_name}
-            </div>
-          ))}
-          {data.connected_nodes.length > 2 && (
-            <div className="more-indicator">
-              还有 {data.connected_nodes.length - 2} 个...
-            </div>
-          )}
-        </div>
-      )}
-      
-      {/* 子工作流显示执行进度 */}
-      {!data.is_parent && data.total_nodes !== undefined && (
-        <div className="workflow-progress-section">
           <div className="progress-bar">
             <div 
               className="progress-fill"
               style={{ 
-                width: `${getCompletionPercentage()}%`,
+                width: `${getCompletionRate()}%`,
                 backgroundColor: getStatusColor(data.status)
               }}
-            ></div>
+            />
           </div>
           <div className="progress-text">
-            进度: {data.completed_nodes}/{data.total_nodes} ({getCompletionPercentage()}%)
+            完成率: {getCompletionRate()}%
           </div>
         </div>
       )}
+      
+      {/* 连接信息 */}
+      <div className="connection-info">
+        {data.hasChildren && (
+          <div className="connection-indicator children">
+            <span>👇 包含子工作流</span>
+          </div>
+        )}
+        {!data.isRoot && (
+          <div className="connection-indicator parent">
+            <span>👆 来源于父工作流</span>
+          </div>
+        )}
+      </div>
     </div>
   );
-});
-
-// 创建一个包装组件来处理合并模式的props传递
-const WorkflowTemplateNodeWrapper: React.FC<any> = React.memo((nodeProps) => {
-  // 从节点数据中获取合并相关的props
-  const enableMergeMode = nodeProps.data?.enableMergeMode || false;
-  const onMergeToggle = nodeProps.data?.onMergeToggle;
-  
-  // 创建一个包装的onMergeToggle函数，确保nodeId正确传递
-  const wrappedOnMergeToggle = React.useCallback((nodeId: string, candidateId?: string) => {
-    if (onMergeToggle) {
-      // 如果没有传入nodeId，使用当前节点的ID
-      const actualNodeId = nodeId || nodeProps.id;
-      console.log('🔧 [Wrapper] 合并切换调用:', { actualNodeId, candidateId, originalNodeId: nodeId });
-      onMergeToggle(actualNodeId, candidateId);
-    }
-  }, [onMergeToggle, nodeProps.id]);
-  
-  return (
-    <WorkflowTemplateNode
-      data={nodeProps.data}
-      selected={nodeProps.selected}
-      enableMergeMode={enableMergeMode}
-      onMergeToggle={wrappedOnMergeToggle}
-      nodeId={nodeProps.id}
-    />
-  );
-});
-
-WorkflowTemplateNodeWrapper.displayName = 'WorkflowTemplateNodeWrapper';
-
-// 节点类型定义 - 使用模块级别的稳定引用避免重复创建警告
-const STABLE_NODE_TYPES = Object.freeze({
-  workflowTemplate: WorkflowTemplateNodeWrapper,
-});
-
-// 边类型定义 - 使用模块级别的稳定引用避免重复创建警告
-const STABLE_EDGE_TYPES = Object.freeze({});
-
-// 树状布局算法 - 唯一合理的工作流布局
-const applyTreeLayout = (nodes: any[], edges: any[]) => {
-  console.log('🌳 应用树状布局');
-  console.log('🌳 [LAYOUT-DEBUG] 布局参数调整:');
-  
-  const layoutedNodes = [...nodes];
-  const nodeSpacing = 450;    // 增加到450px，避免工作流容器重叠
-  const levelSpacing = 350;   // 增加到350px，增加层级间距
-  
-  console.log('🌳 [LAYOUT-DEBUG] nodeSpacing:', nodeSpacing);
-  console.log('🌳 [LAYOUT-DEBUG] levelSpacing:', levelSpacing);
-  console.log('🌳 [LAYOUT-DEBUG] 输入节点数:', nodes.length);
-  console.log('🌳 [LAYOUT-DEBUG] 输入边数:', edges.length);
-  
-  return applyTreeLayoutImpl(layoutedNodes, edges, nodeSpacing, levelSpacing);
 };
 
+// =============================================================================
+// 简化的数据处理 - 专注核心流程：查询 → 构建 → 可视化
+// =============================================================================
 
-// 树状布局实现 - 基于连接关系构建树结构
-const applyTreeLayoutImpl = (nodes: any[], edges: any[], nodeSpacing: number, levelSpacing: number) => {
-  console.log('🌳 应用树状布局');
+const processNodeMappingAPIData = (response: any): { workflows: WorkflowData[], connections: ConnectionData[] } => {
+  const workflows: WorkflowData[] = [];
+  const connections: ConnectionData[] = [];
   
-  // 构建父子关系图
-  const parentChildMap = new Map();
-  const childParentMap = new Map();
+  console.log('🔍 [模板连接图] 开始处理节点映射API响应数据:', response);
   
-  edges.forEach(edge => {
-    if (!parentChildMap.has(edge.source)) {
-      parentChildMap.set(edge.source, []);
+  try {
+    // 处理新的节点映射API响应 - 修复数据提取逻辑
+    console.log('🔍 [模板连接图] API响应完整结构:', {
+      responseType: typeof response,
+      responseKeys: Object.keys(response || {}),
+      hasData: !!response?.data,
+      dataType: typeof response?.data,
+      dataContent: response?.data
+    });
+    
+    // 修复数据提取 - API返回的是 {success: true, data: {...}}，前端axios已经提取了data
+    const actualData = response || {};
+    const templateConnections = actualData?.template_connections || [];
+    const detailedWorkflows = actualData?.detailed_workflows || {};
+    
+    console.log('🔍 [模板连接图] 解析节点映射数据结构:', {
+      hasData: !!actualData,
+      templateConnectionsCount: templateConnections.length,
+      detailedWorkflowsCount: Object.keys(detailedWorkflows).length,
+      nodeLevelMapping: actualData.node_level_mapping,
+      supportsRecursiveSubdivision: actualData.supports_recursive_subdivision,
+      rawData: actualData // 添加原始数据用于调试
+    });
+    
+    // 如果没有数据，记录详细信息用于调试
+    if (templateConnections.length === 0 && Object.keys(detailedWorkflows).length === 0) {
+      console.log('🔍 [模板连接图] 没有数据，记录详细调试信息:', {
+        fullResponse: response,
+        dataKeys: Object.keys(actualData),
+        templateConnectionsType: typeof templateConnections,
+        detailedWorkflowsType: typeof detailedWorkflows,
+        templateConnectionsValue: templateConnections,
+        detailedWorkflowsValue: detailedWorkflows
+      });
     }
-    parentChildMap.get(edge.source).push(edge.target);
-    childParentMap.set(edge.target, edge.source);
-  });
+    // 基于subdivision实例去重，而不是工作流模板去重
+    // 每个subdivision_id代表一个唯一的子工作流实例，即使它们来自同一个工作流模板
+    const uniqueSubdivisions = new Map<string, WorkflowData>();
+    const parentWorkflows = new Map<string, WorkflowData>();
+    const nodeSubdivisionConnections: Array<{
+      subdivisionId: string;
+      parentWorkflowId: string;
+      subWorkflowId: string; // 这里使用subdivision_id作为唯一标识
+      subdivisionName: string;
+      parentNodeId: string;
+      parentNodeName: string;
+      parentNodeType: string;
+    }> = [];
+    
+    // 步骤1: 处理详细工作流信息 - 只添加真正的根工作流(depth=0)
+    Object.entries(detailedWorkflows).forEach(([workflowId, workflowDetail]: [string, any]) => {
+      console.log(`🔍 [模板连接图] 处理工作流详情: ${workflowId}`, workflowDetail);
+      
+      // 只添加根工作流(depth=0)到父工作流映射，避免重复
+      if (workflowDetail.depth === 0 && !parentWorkflows.has(workflowId)) {
+        const workflowData: WorkflowData = {
+          id: workflowId,
+          name: workflowDetail.workflow_name || 'Unknown Workflow',
+          status: workflowDetail.status || 'pending',
+          description: workflowDetail.workflow_description || '',
+          total_nodes: workflowDetail.total_nodes || 0,
+          completed_nodes: workflowDetail.completed_nodes || 0,
+          workflow_base_id: workflowId,
+          nodeSourceType: 'parent_workflow'
+        };
+        parentWorkflows.set(workflowId, workflowData);
+        console.log(`📦 [模板连接图] 添加根工作流: ${workflowData.name} (深度: ${workflowDetail.depth})`);
+      } else if (workflowDetail.depth > 0) {
+        console.log(`🔄 [模板连接图] 跳过子工作流(将通过subdivision创建): ${workflowDetail.workflow_name} (深度: ${workflowDetail.depth})`);
+      }
+    });
+    
+    // 步骤2: 处理每个subdivision连接，为每个subdivision_id创建独立的子工作流节点
+    templateConnections.forEach((connection: any, index: number) => {
+      console.log(`🔍 [模板连接图] 处理subdivision连接 ${index + 1}:`, connection);
+      
+      const parentWorkflow = connection.parent_workflow;
+      const subWorkflow = connection.sub_workflow;
+      const parentNode = connection.parent_node;
+      const subdivisionId = connection.subdivision_id;
+      const subdivisionName = connection.subdivision_name;
+      const parentSubdivisionId = connection.parent_subdivision_id;
+      
+      console.log(`🔍 [模板连接图] 连接详细信息:`, {
+        subdivisionId,
+        subdivisionName,
+        parentSubdivisionId,
+        hasSubWorkflow: !!subWorkflow?.workflow_base_id,
+        subWorkflowId: subWorkflow?.workflow_base_id,
+        subWorkflowName: subWorkflow?.workflow_name
+      });
+      
+      // 不再在这里添加父工作流，因为已经在步骤1中通过depth=0筛选添加了
+      
+      // 为每个subdivision_id创建独立的子工作流节点（重要修复）
+      if (subWorkflow?.workflow_base_id && subdivisionId) {
+        // 使用subdivision_id作为唯一标识，而不是workflow_base_id
+        const uniqueSubId = subdivisionId; // 每个subdivision实例都是唯一的
+        
+        console.log(`🔧 [模板连接图] 准备添加subdivision节点: ${uniqueSubId}`);
+        
+        if (!uniqueSubdivisions.has(uniqueSubId)) {
+          const subData: WorkflowData = {
+            id: uniqueSubId, // 关键修复：使用subdivision_id而不是workflow_base_id
+            name: `${subdivisionName} (${subWorkflow.workflow_name})`, // 显示subdivision名称
+            status: subWorkflow.status || 'pending',
+            description: subWorkflow.workflow_description || '',
+            total_nodes: subWorkflow.total_nodes,
+            completed_nodes: subWorkflow.completed_nodes,
+            workflow_base_id: subWorkflow.workflow_base_id, // 保留原始workflow_base_id用于引用
+            nodeSourceType: 'subdivision',
+            subdivision_id: subdivisionId,
+            subdivision_name: subdivisionName,
+            parent_subdivision_id: parentSubdivisionId, // 确保包含父subdivision ID
+            parentWorkflowId: parentWorkflow?.workflow_base_id,
+            parentNodeInfo: parentNode ? {
+              node_instance_id: parentNode.node_instance_id,
+              node_base_id: parentNode.node_base_id || parentNode.node_instance_id,
+              node_name: parentNode.node_name,
+              node_type: parentNode.node_type
+            } : undefined
+          };
+          uniqueSubdivisions.set(uniqueSubId, subData);
+          console.log(`📦 [模板连接图] ✅ 添加subdivision节点: ${subData.name} (ID: ${uniqueSubId}, 父级ID: ${parentSubdivisionId}, 来源节点: ${parentNode?.node_name})`);
+        } else {
+          console.log(`🔄 [模板连接图] Subdivision节点已存在: ${uniqueSubId}`);
+        }
+      } else {
+        console.warn(`⚠️ [模板连接图] 无法添加subdivision节点:`, {
+          hasSubWorkflow: !!subWorkflow?.workflow_base_id,
+          hasSubdivisionId: !!subdivisionId,
+          subWorkflow,
+          subdivisionId
+        });
+      }
+      
+      // 记录节点级别的subdivision连接关系 - 使用subdivision_id作为目标
+      if (parentWorkflow?.workflow_base_id && subWorkflow?.workflow_base_id && parentNode && subdivisionId) {
+        nodeSubdivisionConnections.push({
+          subdivisionId: subdivisionId,
+          parentWorkflowId: parentWorkflow.workflow_base_id,
+          subWorkflowId: subdivisionId, // 连接到subdivision实例，不是工作流模板
+          subdivisionName: subdivisionName,
+          parentNodeId: parentNode.node_base_id || parentNode.node_instance_id,
+          parentNodeName: parentNode.node_name,
+          parentNodeType: parentNode.node_type
+        });
+      }
+    });
+    
+    // 步骤3: 合并所有工作流（父工作流 + subdivision实例）
+    workflows.push(...Array.from(parentWorkflows.values()));
+    workflows.push(...Array.from(uniqueSubdivisions.values()));
+    
+    // 步骤4: 基于节点级别的subdivision连接关系创建边 - 修复：只为根级subdivision创建到父工作流的连接
+    nodeSubdivisionConnections.forEach(subConn => {
+      // 检查这个subdivision是否是根级subdivision（没有parent_subdivision_id）
+      const subdivisionConnection = templateConnections.find((tc: any) => tc.subdivision_id === subConn.subdivisionId);
+      const isRootSubdivision = !subdivisionConnection?.parent_subdivision_id;
+      
+      // 只为根级subdivision创建到父工作流的连接
+      if (isRootSubdivision) {
+        const connectionData: ConnectionData = {
+          id: subConn.subdivisionId,
+          source: subConn.parentWorkflowId,
+          target: subConn.subWorkflowId,
+          label: `${subConn.parentNodeName}\n→ ${subConn.subdivisionName}`
+        };
+        connections.push(connectionData);
+        console.log(`🔗 [模板连接图] 添加根级subdivision连接: ${subConn.parentWorkflowId}[${subConn.parentNodeName}] -> ${subConn.subWorkflowId} (${subConn.subdivisionName})`);
+      } else {
+        console.log(`🔄 [模板连接图] 跳过非根级subdivision的基本连接，使用层级连接: ${subConn.subdivisionName} (父级: ${subdivisionConnection?.parent_subdivision_id})`);
+      }
+    });
+    
+    // 步骤5: 处理subdivision之间的层级关系 - 新增
+    // 为每个有parent_subdivision_id的subdivision创建到其父subdivision的连接
+    console.log('🔗 [模板连接图] 开始处理subdivision层级关系:', {
+      templateConnectionsCount: templateConnections.length,
+      uniqueSubdivisionsKeys: Array.from(uniqueSubdivisions.keys()),
+      templateConnections: templateConnections.map((tc: any) => ({
+        subdivision_id: tc.subdivision_id,
+        subdivision_name: tc.subdivision_name,
+        parent_subdivision_id: tc.parent_subdivision_id
+      }))
+    });
+    
+    templateConnections.forEach((connection: any) => {
+      const parentSubdivisionId = connection.parent_subdivision_id;
+      if (parentSubdivisionId) {
+        console.log(`🔍 [模板连接图] 检查层级关系: ${connection.subdivision_id} -> 父级: ${parentSubdivisionId}`);
+        
+        // 查找父subdivision对应的工作流节点
+        const parentSubdivision = uniqueSubdivisions.get(parentSubdivisionId);
+        const currentSubdivision = uniqueSubdivisions.get(connection.subdivision_id);
+        
+        console.log(`🔍 [模板连接图] 层级连接检查结果:`, {
+          parentSubdivisionExists: !!parentSubdivision,
+          currentSubdivisionExists: !!currentSubdivision,
+          parentSubdivisionId: parentSubdivisionId,
+          currentSubdivisionId: connection.subdivision_id,
+          parentName: parentSubdivision?.subdivision_name,
+          currentName: currentSubdivision?.subdivision_name
+        });
+        
+        if (parentSubdivision && currentSubdivision) {
+          const hierarchyConnectionData: ConnectionData = {
+            id: `hierarchy_${connection.subdivision_id}`,
+            source: parentSubdivisionId, // 父subdivision的ID
+            target: connection.subdivision_id, // 当前subdivision的ID
+            label: `细分层级\n${parentSubdivision.subdivision_name} → ${currentSubdivision.subdivision_name}`
+          };
+          connections.push(hierarchyConnectionData);
+          console.log(`🔗 [模板连接图] ✅ 添加subdivision层级连接: ${parentSubdivisionId} -> ${connection.subdivision_id}`);
+        } else {
+          console.warn(`⚠️ [模板连接图] 无法建立subdivision层级连接: 父级${parentSubdivisionId}或当前${connection.subdivision_id}不存在`);
+          console.warn(`⚠️ [模板连接图] 调试信息:`, {
+            parentSubdivisionId,
+            currentSubdivisionId: connection.subdivision_id,
+            availableParentIds: Array.from(uniqueSubdivisions.keys()),
+            parentSubdivisionData: parentSubdivision,
+            currentSubdivisionData: currentSubdivision
+          });
+        }
+      } else {
+        console.log(`📍 [模板连接图] 根级subdivision: ${connection.subdivision_name} (${connection.subdivision_id})`);
+      }
+    });
+    
+    console.log('✅ [模板连接图] 节点映射数据处理完成:', {
+      parentWorkflowsCount: parentWorkflows.size,
+      subdivisionNodesCount: uniqueSubdivisions.size,
+      totalWorkflowsCount: workflows.length,
+      connectionsCount: connections.length,
+      nodeConnections: nodeSubdivisionConnections.length,
+      workflows: workflows.map(w => ({ id: w.id, name: w.name, type: w.nodeSourceType, subdivisionId: w.subdivision_id, parentSubdivisionId: w.parent_subdivision_id })),
+      connections: connections.map(c => ({ id: c.id, source: c.source, target: c.target, label: c.label }))
+    });
+    
+    // 额外的连接关系验证
+    console.log('🔍 [模板连接图] 连接关系验证:');
+    const parentChildMap = new Map<string, string[]>();
+    const childParentMap = new Map<string, string>();
+    
+    connections.forEach(conn => {
+      if (!parentChildMap.has(conn.source)) {
+        parentChildMap.set(conn.source, []);
+      }
+      parentChildMap.get(conn.source)!.push(conn.target);
+      childParentMap.set(conn.target, conn.source);
+    });
+    
+    workflows.forEach(workflow => {
+      const workflowId = workflow.id;
+      const hasParent = childParentMap.has(workflowId);
+      const hasChildren = parentChildMap.has(workflowId) && parentChildMap.get(workflowId)!.length > 0;
+      
+      console.log(`📋 [模板连接图] 节点 ${workflow.name} (${workflowId}):`, {
+        hasParent,
+        hasChildren,
+        parentId: hasParent ? childParentMap.get(workflowId) : 'none',
+        childrenIds: hasChildren ? parentChildMap.get(workflowId) : 'none',
+        isSubdivision: !!workflow.subdivision_id,
+        parentSubdivisionId: workflow.parent_subdivision_id
+      });
+    });
+    
+  } catch (error) {
+    console.error('❌ [模板连接图] 处理节点映射API数据失败:', error);
+    console.error('❌ [模板连接图] 原始响应数据:', response);
+  }
   
-  // 找到根节点（没有父节点的节点）
-  const rootNodes = nodes.filter(node => !childParentMap.has(node.id));
-  
-  // 递归布局
-  let currentY = 0;
-  rootNodes.forEach((rootNode, rootIndex) => {
-    layoutSubtree(rootNode, parentChildMap, nodes, rootIndex * nodeSpacing, currentY, nodeSpacing, levelSpacing);
-  });
-  
-  return nodes;
+  return { workflows, connections };
 };
 
-// 递归布局子树
-const layoutSubtree = (node: any, parentChildMap: Map<string, string[]>, allNodes: any[], startX: number, startY: number, nodeSpacing: number, levelSpacing: number) => {
-  node.position = { x: startX, y: startY };
+const loadWorkflowData = async (workflowInstanceId: string): Promise<{ workflows: WorkflowData[], connections: ConnectionData[] }> => {
+  console.log('🚀 [模板连接图] 开始加载工作流数据, ID:', workflowInstanceId);
   
-  const children = parentChildMap.get(node.id) || [];
-  if (children.length === 0) return;
-  
-  const childStartX = startX - ((children.length - 1) * nodeSpacing) / 2;
-  children.forEach((childId, index) => {
-    const childNode = allNodes.find(n => n.id === childId);
-    if (childNode) {
-      layoutSubtree(childNode, parentChildMap, allNodes, childStartX + index * nodeSpacing, startY + levelSpacing, nodeSpacing, levelSpacing);
-    }
-  });
+  try {
+    const { default: api } = await import('../services/api');
+    // 使用新的节点级别映射API
+    const apiUrl = `/execution/workflows/${workflowInstanceId}/node-mapping?include_template_structure=true`;
+    
+    console.log('📡 [模板连接图] 发送节点映射API请求:', apiUrl);
+    
+    const response = await api.get(apiUrl);
+    
+    console.log('📡 [模板连接图] API响应状态:', {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+      hasData: !!response.data
+    });
+    
+    console.log('📡 [模板连接图] API响应数据:', response.data);
+    
+    const result = processNodeMappingAPIData(response.data);
+    
+    console.log('✅ [模板连接图] 工作流数据加载完成:', result);
+    
+    return result;
+  } catch (error: any) {
+    console.error('❌ [模板连接图] 加载工作流数据失败:', error);
+    console.error('❌ [模板连接图] 错误详情:', {
+      message: error.message,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data
+    });
+    throw new Error(`Failed to load workflow data: ${error.message}`);
+  }
 };
 
+const convertToReactFlow = (workflows: WorkflowData[], connections: ConnectionData[]): { nodes: Node[], edges: Edge[] } => {
+  console.log('🔄 [模板连接图] 开始转换为 React Flow 格式:', {
+    workflowsInput: workflows.length,
+    connectionsInput: connections.length
+  });
+  
+  // 计算树状布局位置，同时获取统一树的层级信息
+  const positions = calculateTreeLayout(workflows, connections);
+  
+  // 重新构建统一树的父子关系映射（与calculateTreeLayout中的逻辑一致）
+  const parentChildMap = new Map<string, string[]>();
+  const childParentMap = new Map<string, string>();
+  
+  connections.forEach(conn => {
+    if (!parentChildMap.has(conn.source)) {
+      parentChildMap.set(conn.source, []);
+    }
+    parentChildMap.get(conn.source)!.push(conn.target);
+    childParentMap.set(conn.target, conn.source);
+  });
+  
+  // 应用统一树逻辑（与calculateTreeLayout保持一致）
+  const potentialRoots = workflows.filter(w => !childParentMap.has(w.id));
+  
+  if (potentialRoots.length > 1) {
+    const actualRootNode = potentialRoots[0].id;
+    const mainRootChildren = parentChildMap.get(actualRootNode) || [];
+    
+    for (let i = 1; i < potentialRoots.length; i++) {
+      const otherRootId = potentialRoots[i].id;
+      mainRootChildren.push(otherRootId);
+      childParentMap.set(otherRootId, actualRootNode);
+    }
+    parentChildMap.set(actualRootNode, mainRootChildren);
+  }
+  
+  // 使用统一树关系计算层级
+  const nodeLevels = new Map<string, number>();
+  const calculateNodeLevel = (nodeId: string, visited = new Set<string>()): number => {
+    if (nodeLevels.has(nodeId)) return nodeLevels.get(nodeId)!;
+    if (visited.has(nodeId)) return 0;
+    
+    visited.add(nodeId);
+    const parentId = childParentMap.get(nodeId);
+    const level = parentId ? calculateNodeLevel(parentId, visited) + 1 : 0;
+    nodeLevels.set(nodeId, level);
+    return level;
+  };
+  
+  workflows.forEach(workflow => calculateNodeLevel(workflow.id));
+  
+  // 转换为React Flow节点
+  const nodes: Node[] = workflows.map(workflow => {
+    const position = positions.get(workflow.id) || { x: 0, y: 0 };
+    const nodeLevel = nodeLevels.get(workflow.id) || 0;
+    
+    // 判断节点类型以应用不同样式
+    // 修复：根据层级判断根节点，而不是原始连接关系
+    const isRoot = nodeLevel === 0;
+    const hasChildren = connections.some(c => c.source === workflow.id);
+    const isSubdivision = Boolean(workflow.subdivision_id);
+    
+    // 优化节点名称显示 - 如果有subdivision信息，优先显示subdivision名称
+    let displayName = workflow.name;
+    if (isSubdivision && workflow.subdivision_name) {
+      displayName = `${workflow.subdivision_name} (${workflow.name})`;
+    }
+    
+    let nodeType = 'default';
+    let borderColor = '#1976d2';
+    let backgroundColor = '#f5f5f5';
+    
+    if (isRoot) {
+      nodeType = 'root';
+      borderColor = '#4caf50';
+      backgroundColor = '#e8f5e9';
+    } else if (isSubdivision) {
+      nodeType = 'subdivision';
+      // 根据层级选择不同颜色
+      if (nodeLevel === 1) {
+        borderColor = '#ff9800';
+        backgroundColor = '#fff3e0';
+      } else if (nodeLevel === 2) {
+        borderColor = '#9c27b0';
+        backgroundColor = '#f3e5f5';
+      } else if (nodeLevel >= 3) {
+        borderColor = '#607d8b';
+        backgroundColor = '#eceff1';
+      }
+    }
+    
+    const node: Node = {
+      id: workflow.id,
+      type: 'workflowNode',
+      position: position,
+      data: {
+        ...workflow,
+        name: displayName, // 使用优化后的显示名称
+        nodeType,
+        isRoot,
+        hasChildren,
+        isSubdivision,
+        level: nodeLevel // 传递层级信息
+      },
+      style: {
+        width: 320,
+        minHeight: 180,
+        border: `3px solid ${borderColor}`,
+        backgroundColor: backgroundColor,
+        borderRadius: '12px',
+        boxShadow: isRoot ? '0 4px 12px rgba(76, 175, 80, 0.2)' : 
+                   nodeLevel >= 3 ? '0 2px 6px rgba(96, 125, 139, 0.15)' : '0 2px 8px rgba(0, 0, 0, 0.1)'
+      }
+    };
+    
+    console.log(`🔄 [模板连接图] 创建节点:`, {
+      id: workflow.id,
+      name: displayName,
+      originalName: workflow.name,
+      position: position,
+      type: nodeType,
+      level: nodeLevel,
+      isRoot,
+      hasChildren,
+      isSubdivision
+    });
+    
+    return node;
+  });
+  
+  // 转换为React Flow边，添加更丰富的视觉效果
+  const edges: Edge[] = connections.map((connection) => {
+    const sourceNode = workflows.find(w => w.id === connection.source);
+    const targetNode = workflows.find(w => w.id === connection.target);
+    const targetLevel = nodeLevels.get(connection.target) || 0;
+    
+    // 根据目标节点层级选择边的样式
+    let edgeColor = '#1976d2';
+    let edgeWidth = 3;
+    let isDashed = false;
+    
+    if (targetLevel === 1) {
+      edgeColor = '#ff9800';
+      edgeWidth = 3;
+    } else if (targetLevel === 2) {
+      edgeColor = '#9c27b0';
+      edgeWidth = 2;
+      isDashed = true;
+    } else if (targetLevel >= 3) {
+      edgeColor = '#607d8b';
+      edgeWidth = 2;
+      isDashed = true;
+    }
+    
+    const edge: Edge = {
+      id: connection.id,
+      source: connection.source,
+      target: connection.target,
+      type: 'smoothstep',
+      animated: true,
+      style: { 
+        strokeWidth: edgeWidth, 
+        stroke: edgeColor,
+        strokeDasharray: isDashed ? '5,5' : undefined
+      },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: edgeColor,
+        width: 20,
+        height: 20
+      },
+      label: connection.label,
+      labelStyle: {
+        fontSize: 12,
+        fontWeight: 'bold',
+        fill: edgeColor,
+        background: 'white',
+        padding: '2px 6px',
+        borderRadius: '4px'
+      },
+      labelBgStyle: {
+        fill: 'white',
+        stroke: edgeColor,
+        strokeWidth: 1,
+        fillOpacity: 0.9
+      },
+      data: {
+        ...connection,
+        isSubdivision: Boolean(targetNode?.subdivision_id),
+        targetLevel: targetLevel
+      }
+    };
+    
+    console.log(`🔄 [模板连接图] 创建边:`, {
+      id: connection.id,
+      source: connection.source,
+      target: connection.target,
+      targetLevel: targetLevel,
+      label: connection.label,
+      sourceWorkflow: sourceNode?.name,
+      targetWorkflow: targetNode?.name,
+      isSubdivision: Boolean(targetNode?.subdivision_id)
+    });
+    
+    return edge;
+  });
+  
+  const result = { nodes, edges };
+  
+  console.log('✅ [模板连接图] React Flow 转换完成:', {
+    nodesCount: nodes.length,
+    edgesCount: edges.length,
+    rootNodes: nodes.filter(n => n.data.isRoot).length,
+    subdivisionNodes: nodes.filter(n => n.data.isSubdivision).length,
+    maxLevel: Math.max(...Array.from(nodeLevels.values())),
+    nodeDetails: nodes.map(n => ({ 
+      id: n.id, 
+      position: n.position, 
+      dataName: n.data?.name,
+      type: n.data?.nodeType,
+      level: n.data?.level
+    })),
+    edges: edges.map(e => ({ id: e.id, source: e.source, target: e.target, level: e.data?.targetLevel }))
+  });
+  
+  return result;
+};
 
-
-
+// =============================================================================
+// 简化的主组件
+// =============================================================================
 
 interface Props {
   workflowInstanceId: string;
-  onNodeClick?: (node: TemplateNode) => void;
-  onEdgeClick?: (edge: TemplateEdge) => void;
-  onMergeInitiated?: (mergePreview: any) => void;
+  onNodeClick?: (workflow: WorkflowData) => void;
+  onEdgeClick?: (connection: ConnectionData) => void;
   className?: string;
-  enableMergeMode?: boolean;
 }
 
-// 合并相关接口
-interface DetailedConnectionData {
-  detailed_workflows: Record<string, any>;
-  merge_candidates: MergeCandidate[];
-  detailed_connection_graph: any;
-}
+const WorkflowNodeWrapper: React.FC<any> = React.memo(({ data }) => {
+  return <WorkflowNode data={data} />;
+});
+
+const NODE_TYPES = Object.freeze({
+  workflowNode: WorkflowNodeWrapper,
+});
 
 const WorkflowTemplateConnectionGraph: React.FC<Props> = ({
   workflowInstanceId,
   onNodeClick,
   onEdgeClick,
-  onMergeInitiated,
-  className,
-  enableMergeMode = false
+  className
 }) => {
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  console.log('🎯 [模板连接图] 组件初始化, props:', {
+    workflowInstanceId,
+    hasOnNodeClick: !!onNodeClick,
+    hasOnEdgeClick: !!onEdgeClick,
+    className
+  });
+  
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedEdgeDetail, setSelectedEdgeDetail] = useState<SubdivisionConnectionDetail | null>(null);
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   
-  // 删除不必要的视图切换状态
-  // const [showDetailedView, setShowDetailedView] = useState(false);
-  const [detailedConnectionData, setDetailedConnectionData] = useState<DetailedConnectionData | null>(null);
-  const [selectedMergeCandidates, setSelectedMergeCandidates] = useState<Set<string>>(new Set());
-  const [showMergeModal, setShowMergeModal] = useState(false);
-  
-  // 新增：合并相关状态
-  const [mergeSelectedNodes, setMergeSelectedNodes] = useState<Set<string>>(new Set());
-  const [mergePathNodes, setMergePathNodes] = useState<Set<string>>(new Set());
-  
-  // 使用模块级别的稳定类型引用，确保在StrictMode下也不会触发警告
-  const memoizedEdgeTypes = useMemo(() => STABLE_EDGE_TYPES, []);
-
-  // 智能合并选择逻辑：计算从根节点到选中节点的所有路径
-  const calculateMergePaths = useCallback((targetNodeId: string, allEdges: any[]) => {
-    console.log('🧠 计算合并路径:', targetNodeId);
-    
-    const pathNodes = new Set<string>();
-    const visitedNodes = new Set<string>();
-    
-    // 构建邻接列表（上游节点）
-    const upstreamMap = new Map<string, string[]>();
-    allEdges.forEach((edge: any) => {
-      if (!upstreamMap.has(edge.target)) {
-        upstreamMap.set(edge.target, []);
-      }
-      upstreamMap.get(edge.target)?.push(edge.source);
-    });
-    
-    // 递归查找所有上游节点
-    const findUpstreamNodes = (nodeId: string, level: number = 0) => {
-      if (visitedNodes.has(nodeId)) return;
-      visitedNodes.add(nodeId);
-      pathNodes.add(nodeId);
-      
-      console.log(`  层级${level}: 节点${nodeId}`);
-      
-      const upstreamNodes = upstreamMap.get(nodeId) || [];
-      upstreamNodes.forEach(upstreamNodeId => {
-        findUpstreamNodes(upstreamNodeId, level + 1);
-      });
-    };
-    
-    findUpstreamNodes(targetNodeId);
-    console.log('  计算的路径节点:', Array.from(pathNodes));
-    return pathNodes;
-  }, []);
-
-  // 处理合并节点选择切换
-  const handleMergeNodeToggle = useCallback((nodeId: string, candidateId?: string) => {
-    console.log('🎯 合并节点选择切换:', { nodeId, candidateId });
-    
-    setMergeSelectedNodes(prevSelected => {
-      const newSelected = new Set(prevSelected);
-      const wasSelected = newSelected.has(nodeId);
-      
-      if (wasSelected) {
-        // 取消选择：移除节点和相关路径
-        newSelected.delete(nodeId);
-        console.log('  ❌ 取消选择节点:', nodeId);
-      } else {
-        // 选择节点：添加节点并计算路径
-        newSelected.add(nodeId);
-        console.log('  ✅ 选择节点:', nodeId);
-        
-        // 智能选择：自动选择所有前置工作流
-        const mergePaths = calculateMergePaths(nodeId, edges);
-        mergePaths.forEach(pathNodeId => {
-          if (pathNodeId !== nodeId) {
-            newSelected.add(pathNodeId);
-            console.log('    ➕ 自动选择前置节点:', pathNodeId);
-          }
-        });
-        
-        // 更新路径高亮
-        setMergePathNodes(mergePaths);
-      }
-      
-      // 更新合并候选选择状态（与现有逻辑兼容）
-      if (candidateId) {
-        setSelectedMergeCandidates(prevCandidates => {
-          const newCandidates = new Set(prevCandidates);
-          if (wasSelected) {
-            newCandidates.delete(candidateId);
-          } else {
-            newCandidates.add(candidateId);
-          }
-          return newCandidates;
-        });
-      }
-      
-      console.log('  最终选择的节点数量:', newSelected.size);
-      return newSelected;
-    });
-  }, [edges, calculateMergePaths]);
-
-
-  // 加载详细连接图数据（用于合并功能）
-  const loadDetailedConnectionGraph = useCallback(async () => {
-    console.log('🔄 加载详细工作流模板连接图 - 开始');
-    console.log('   - workflowInstanceId:', workflowInstanceId);
-    console.log('   - maxDepth: 10');
-    console.log('   - enableMergeMode:', enableMergeMode);
-    
+  const loadData = useCallback(async () => {
+    console.log('📊 [模板连接图] 开始 loadData 函数');
     setIsLoading(true);
     setError(null);
-
+    
     try {
-      // 调用详细连接图API - 使用已配置的API实例
-      const { default: api } = await import('../services/api');
-      const apiUrl = `/workflow-merge/${workflowInstanceId}/detailed-connections?max_depth=10`;
-      console.log('📡 发起API请求:', apiUrl);
+      const { workflows, connections } = await loadWorkflowData(workflowInstanceId);
       
-      const response = await api.get(apiUrl);
+      console.log('📊 [模板连接图] loadWorkflowData 返回结果:', {
+        workflowsCount: workflows.length,
+        connectionsCount: connections.length
+      });
       
-      // 增强的响应调试
-      console.log('📡 详细连接图API响应分析:');
-      console.log('   - HTTP状态:', response.status);
-      console.log('   - 响应存在:', !!response.data);
-      console.log('   - 响应类型:', typeof response.data);
-      console.log('   - 完整响应:', response.data);
+      const { nodes: flowNodes, edges: flowEdges } = convertToReactFlow(workflows, connections);
       
-      if (response.data) {
-        console.log('   - 响应结构分析:');
-        console.log('     - success字段:', response.data.success);
-        console.log('     - message字段:', response.data.message);
-        console.log('     - data字段存在:', !!response.data.data);
-        console.log('     - 响应顶层键:', Object.keys(response.data));
-        
-        if (response.data.data) {
-          console.log('     - data内容键:', Object.keys(response.data.data));
-          console.log('     - detailed_connections存在:', !!response.data.data.detailed_connections);
-          console.log('     - has_merge_candidates:', response.data.data.has_merge_candidates);
-          console.log('     - merge_candidates_count:', response.data.data.merge_candidates_count);
-        }
-      }
+      console.log('📊 [模板连接图] convertToReactFlow 返回结果:', {
+        flowNodesCount: flowNodes.length,
+        flowEdgesCount: flowEdges.length
+      });
       
-      // 检查响应格式 - 处理两种可能的格式
-      // 1. 包装的BaseResponse: { success: true, data: { detailed_connections: {...} } }
-      // 2. 直接的数据: { detailed_connections: {...}, has_merge_candidates: true }
+      console.log('📊 [模板连接图] 设置 React Flow 状态...');
+      setNodes(flowNodes);
+      setEdges(flowEdges);
       
-      let detailedData: any = null;
-      let isWrappedResponse = false;
+      console.log('✅ [模板连接图] loadData 完成，状态已更新');
       
-      if (response.data?.success && response.data?.data?.detailed_connections) {
-        // 格式1: 包装的BaseResponse
-        console.log('📡 检测到包装的BaseResponse格式');
-        detailedData = response.data.data.detailed_connections;
-        isWrappedResponse = true;
-      } else if (response.data?.success && response.data?.data) {
-        // 格式1.5: 包装的BaseResponse但detailed_connections在data内
-        console.log('📡 检测到包装的BaseResponse格式(data内容直接为详细数据)');
-        detailedData = response.data.data;
-        isWrappedResponse = true;
-      } else if (response.data?.detailed_connections) {
-        // 格式2: 直接的数据格式
-        console.log('📡 检测到直接的数据格式');
-        detailedData = response.data;
-        isWrappedResponse = false;
-      }
-      
-      console.log('🔍 响应格式分析:');
-      console.log('   - 是包装格式:', isWrappedResponse);
-      console.log('   - detailedData存在:', !!detailedData);
-      console.log('   - detailedData类型:', typeof detailedData);
-      
-      if (detailedData) {
-        
-        console.log('✅ 条件检查通过，开始处理数据');
-        console.log('   - detailedData类型:', typeof detailedData);
-        console.log('   - detailedData键:', Object.keys(detailedData));
-        
-        // 修正数据路径：根据日志显示，数据直接在detailedData中
-        const actualData = detailedData.detailed_connections || detailedData;
-        console.log('   - actualData类型:', typeof actualData);
-        console.log('   - actualData键:', Object.keys(actualData));
-        
-        // 确保从正确的数据源获取合并候选
-        const mergeCandidates = actualData.merge_candidates || detailedData.merge_candidates || [];
-        console.log('   - 合并候选数据源检查:', {
-          'actualData.merge_candidates': actualData.merge_candidates?.length || 0,
-          'detailedData.merge_candidates': detailedData.merge_candidates?.length || 0,
-          'final_count': mergeCandidates.length
-        });
-        
-        setDetailedConnectionData({
-          detailed_workflows: actualData.detailed_workflows || detailedData.detailed_workflows || {},
-          merge_candidates: mergeCandidates,
-          detailed_connection_graph: actualData.detailed_connection_graph || detailedData.detailed_connection_graph || { nodes: [], edges: [] }
-        });
-        console.log('📋 合并候选分析:');
-        console.log('   - 候选数量:', mergeCandidates.length);
-        if (mergeCandidates.length > 0) {
-          console.log('   - 前3个候选:');
-          mergeCandidates.slice(0, 3).forEach((candidate: any, index: number) => {
-            console.log(`     候选${index + 1}:`);
-            console.log(`       - ID: ${candidate.subdivision_id}`);
-            console.log(`       - 节点名称: ${candidate.replaceable_node?.name}`);
-            console.log(`       - 兼容性: ${candidate.compatibility?.is_compatible}`);
-          });
-        } else {
-          console.log('   ❌ 没有可用的合并候选');
-          console.log('   原因分析:');
-          console.log('   - 可能没有已完成的任务细分');
-          console.log('   - 可能当前工作流实例没有子工作流');
-          console.log('   - 可能数据库中缺少相关记录');
-        }
-
-        // 如果有详细连接图数据，使用它来渲染
-        if (actualData.detailed_connection_graph?.nodes) {
-          console.log('🔄 开始处理详细连接图数据');
-          console.log('   - 节点数量:', actualData.detailed_connection_graph.nodes.length);
-          console.log('   - 边数量:', actualData.detailed_connection_graph.edges.length);
-          
-          // 🔍 调试所有节点信息
-          console.log('📊 [DEBUG] 所有返回的节点信息:');
-          actualData.detailed_connection_graph.nodes.forEach((node: any, index: number) => {
-            console.log(`   节点${index + 1}: ${node.label || node.name} (ID: ${node.id})`);
-            console.log(`     - type: ${node.type}`);
-            console.log(`     - data.workflow_base_id: ${node.data?.workflow_base_id}`);
-            console.log(`     - data.parent_workflow_id: ${node.data?.parent_workflow_id}`);
-            console.log(`     - data.node_type: ${node.data?.node_type}`);
-            console.log(`     - 完整data:`, node.data);
-          });
-          
-          // 🔍 检查是否有其他类型的工作流相关节点
-          const allWorkflowRelatedNodes = actualData.detailed_connection_graph.nodes.filter((node: any) => {
-            return node.type === 'workflow_container' || 
-                   node.data?.workflow_base_id || 
-                   node.label?.includes('工作流') || 
-                   node.name?.includes('工作流');
-          });
-          
-          console.log('📊 [DEBUG] 所有工作流相关节点数量:', allWorkflowRelatedNodes.length);
-          
-          // 🔍 详细分析工作流容器
-          console.log('🏗️ [DEBUG] 工作流容器详细信息:');
-          allWorkflowRelatedNodes.forEach((node: any, index: number) => {
-            if (node.type === 'workflow_container') {
-              console.log(`  容器${index + 1}: ${node.label} (${node.id})`);
-              console.log(`    - workflow_base_id: ${node.data?.workflow_base_id}`);
-              console.log(`    - 节点数: ${node.data?.node_count}`);
-              console.log(`    - 连接数: ${node.data?.connection_count}`);
-              console.log(`    - 位置: x=${node.position?.x}, y=${node.position?.y}`);
-            }
-          });
-          
-          // 🎯 只保留工作流容器节点，过滤掉内部节点
-          const workflowContainerNodes = actualData.detailed_connection_graph.nodes.filter((node: any) => {
-            const isWorkflowContainer = node.type === 'workflow_container';
-            console.log(`   - 节点 ${node.label || node.name}: type=${node.type}, isWorkflowContainer=${isWorkflowContainer}`);
-            return isWorkflowContainer;
-          });
-          
-          console.log('🎯 过滤后的工作流容器节点数量:', workflowContainerNodes.length);
-          
-          // 🎯 构建工作流容器间的连接关系
-          // 分析原始边数据，创建从父工作流容器到子工作流容器的连接
-          const workflowConnections: any[] = [];
-          const workflowContainerIds = new Set(workflowContainerNodes.map((node: any) => node.id));
-          
-          console.log('🔍 分析原始边数据以构建工作流容器间连接:');
-          
-          // 创建节点ID到工作流容器的映射
-          const nodeIdToWorkflowContainer = new Map();
-          
-          actualData.detailed_connection_graph.nodes.forEach((node: any) => {
-            if (node.data?.parent_workflow_id) {
-              // 找到这个节点所属的工作流容器
-              const parentWorkflowContainer = workflowContainerNodes.find((wf: any) => 
-                wf.id === node.data.parent_workflow_id || 
-                wf.data?.workflow_base_id === node.data.parent_workflow_id ||
-                wf.data?.workflow_instance_id === node.data.parent_workflow_id
-              );
-              if (parentWorkflowContainer) {
-                nodeIdToWorkflowContainer.set(node.id, parentWorkflowContainer.id);
-                console.log(`   - 节点 ${node.id} 属于工作流容器 ${parentWorkflowContainer.id}`);
-              }
-            }
-          });
-          
-          // 分析原始边，构建工作流容器间的连接
-          actualData.detailed_connection_graph.edges.forEach((edge: any) => {
-            const sourceNodeId = edge.source;
-            const targetNodeId = edge.target;
-            
-            console.log(`   - 分析边: ${sourceNodeId} -> ${targetNodeId}`);
-            
-            // 如果目标是工作流容器，源是内部节点
-            if (workflowContainerIds.has(targetNodeId)) {
-              // 找到源节点所属的工作流容器
-              const sourceWorkflowContainer = nodeIdToWorkflowContainer.get(sourceNodeId);
-              if (sourceWorkflowContainer && sourceWorkflowContainer !== targetNodeId) {
-                // 创建工作流容器间的连接
-                const workflowConnection = {
-                  id: `workflow_connection_${sourceWorkflowContainer}_${targetNodeId}_${sourceNodeId}`,
-                  source: sourceWorkflowContainer,
-                  target: targetNodeId,
-                  type: 'subdivision_connection',
-                  label: '子工作流引用',
-                  data: {
-                    connection_type: 'workflow_reference',
-                    source_node_id: sourceNodeId, // 保存原始源节点ID，用于显示来源信息
-                    ...edge.data
-                  }
-                };
-                workflowConnections.push(workflowConnection);
-                console.log(`   ✅ 创建工作流连接: ${sourceWorkflowContainer} -> ${targetNodeId}`);
-                console.log(`      原始源节点: ${sourceNodeId}`);
-              }
-            }
-          });
-          
-          console.log('🎯 构建的工作流容器间连接数量:', workflowConnections.length);
-          
-          // 应用树状布局（只对工作流容器）
-          const layoutedNodes = applyTreeLayout(workflowContainerNodes, workflowConnections);
-          
-          // 🎯 识别父子工作流关系
-          const childWorkflowIds = new Set(workflowConnections.map((conn: any) => conn.target));
-          const parentWorkflowIds = new Set(workflowConnections.map((conn: any) => conn.source));
-          
-          console.log('🏗️ 工作流层级关系分析:');
-          console.log(`   - 子工作流ID: ${Array.from(childWorkflowIds)}`);
-          console.log(`   - 父工作流ID: ${Array.from(parentWorkflowIds)}`);
-          
-          // 为每个工作流收集来源节点信息
-          const workflowSourceInfo = new Map();
-          workflowConnections.forEach((conn: any) => {
-            const targetWorkflowId = conn.target;
-            const sourceNodeId = conn.data?.source_node_id;
-            
-            if (sourceNodeId) {
-              // 找到源节点的信息
-              const sourceNode = actualData.detailed_connection_graph.nodes.find((node: any) => node.id === sourceNodeId);
-              if (sourceNode) {
-                workflowSourceInfo.set(targetWorkflowId, {
-                  source_node_name: sourceNode.label || sourceNode.name,
-                  source_node_type: sourceNode.type,
-                  source_workflow_id: conn.source
-                });
-                console.log(`   - 子工作流 ${targetWorkflowId} 来源于节点: ${sourceNode.label || sourceNode.name}`);
-              }
-            }
-          });
-          
-          const flowNodes = layoutedNodes.map((node: any) => {
-            // 判断是否为父工作流（有子工作流指向它的，或者不在子工作流列表中）
-            const isParentWorkflow = parentWorkflowIds.has(node.id) && !childWorkflowIds.has(node.id);
-            const isChildWorkflow = childWorkflowIds.has(node.id);
-            
-            // 获取来源信息
-            const sourceInfo = workflowSourceInfo.get(node.id);
-            
-            // 查找关联的合并候选
-            const relatedCandidate = mergeCandidates.find((candidate: any) => 
-              candidate.parent_workflow_id === (node.data as any)?.workflow_base_id ||
-              candidate.sub_workflow_id === (node.data as any)?.workflow_base_id
-            );
-            
-            // 确定合并相关状态
-            const isMergeSelected = mergeSelectedNodes.has(node.id);
-            const isMergePath = mergePathNodes.has(node.id);
-            const mergeLevel = isMergePath ? 
-              Array.from(mergePathNodes).indexOf(node.id) : undefined;
-            
-            console.log(`   - 工作流 ${node.id}: 父工作流=${isParentWorkflow}, 子工作流=${isChildWorkflow}`);
-            console.log(`     合并状态: selected=${isMergeSelected}, path=${isMergePath}, level=${mergeLevel}`);
-            if (sourceInfo) {
-              console.log(`     来源节点: ${sourceInfo.source_node_name} (${sourceInfo.source_node_type})`);
-            }
-            if (relatedCandidate) {
-              console.log(`     关联合并候选: ${relatedCandidate.subdivision_id}`);
-            }
-            
-            return {
-              id: node.id,
-              type: 'workflowTemplate',
-              position: node.position,
-              data: {
-                ...node.data || node,
-                // 优先使用工作流的真实名称，而不是节点标签
-                label: node.data?.workflow_name || node.data?.name || node.label || node.name || 'Unknown Workflow',
-                isInternalNode: false, // 工作流容器不是内部节点
-                is_parent: isParentWorkflow, // 正确标识父子关系
-                parentWorkflowId: node.data?.parent_workflow_id,
-                originalType: node.type,
-                // 工作流容器的额外信息 - 使用any类型避免类型检查
-                workflow_base_id: (node.data as any)?.workflow_base_id || (node as any)?.workflow_base_id,
-                workflow_name: (node.data as any)?.workflow_name || (node.data as any)?.name || (node as any)?.name,
-                connected_nodes: (node.data as any)?.connected_nodes || (node as any)?.connected_nodes || [],
-                // 添加来源节点信息
-                source_node_name: sourceInfo?.source_node_name,
-                source_node_type: sourceInfo?.source_node_type,
-                source_workflow_id: sourceInfo?.source_workflow_id,
-                // 合并相关属性
-                isMergeSelected,
-                isMergePath,
-                mergeLevel,
-                mergeCandidateId: relatedCandidate?.subdivision_id,
-                // 添加合并模式的props，通过节点数据传递给包装组件
-                enableMergeMode: enableMergeMode,
-                onMergeToggle: handleMergeNodeToggle
-              },
-              style: {
-                width: 320,  // 工作流容器统一宽度
-                minHeight: isParentWorkflow ? 200 : 180,  // 父工作流稍微高一些
-                border: `2px solid ${
-                  isMergeSelected ? '#4caf50' : 
-                  isMergePath ? '#ff9800' : 
-                  isParentWorkflow ? '#1976d2' : '#7b1fa2'
-                }`,
-                backgroundColor: 
-                  isMergeSelected ? '#e8f5e8' :
-                  isMergePath ? '#fff3e0' :
-                  isParentWorkflow ? '#e3f2fd' : '#f3e5f5',
-                borderRadius: '8px',
-                opacity: enableMergeMode && !isMergeSelected && !isMergePath && relatedCandidate ? 0.7 : 1,
-                transition: 'all 0.3s ease'
-              }
-            };
-          });
-
-          // 验证和修复工作流连接边数据
-          const validEdges = workflowConnections.filter((edge: any) => {
-            // 基本字段验证
-            if (!edge.id || !edge.source || !edge.target) {
-              console.warn(`⚠️ 边缺少必需字段:`, edge);
-              return false;
-            }
-            
-            const hasValidSource = flowNodes.some((node: any) => node.id === edge.source);
-            const hasValidTarget = flowNodes.some((node: any) => node.id === edge.target);
-            
-            if (!hasValidSource) {
-              console.warn(`⚠️ 边 ${edge.id} 的源节点 ${edge.source} 不存在`);
-            }
-            if (!hasValidTarget) {
-              console.warn(`⚠️ 边 ${edge.id} 的目标节点 ${edge.target} 不存在`);
-            }
-            
-            return hasValidSource && hasValidTarget;
-          });
-          
-          const flowEdges = validEdges.map((edge: any) => {
-            // 确保所有必需字段都存在
-            const processedEdge = {
-              id: edge.id || `edge_${Date.now()}_${Math.random()}`,
-              source: edge.source,
-              target: edge.target,
-              sourceHandle: edge.sourceHandle || 'source', // 添加默认的sourceHandle
-              targetHandle: edge.targetHandle || 'target', // 添加默认的targetHandle
-              type: edge.type === 'subdivision_connection' ? 'smoothstep' : 'default',
-              animated: edge.type === 'subdivision_connection',
-              style: {
-                strokeWidth: edge.type === 'subdivision_connection' ? 3 : 2,
-                stroke: edge.type === 'subdivision_connection' ? '#ff6b6b' : 
-                       edge.type === 'workflow_connection' ? '#2196f3' : '#666',
-                strokeDasharray: edge.type === 'subdivision_connection' ? '5,5' : undefined,
-              },
-              markerEnd: {
-                type: MarkerType.ArrowClosed,
-                color: edge.type === 'subdivision_connection' ? '#ff6b6b' : 
-                       edge.type === 'workflow_connection' ? '#2196f3' : '#666',
-                width: 20,
-                height: 20,
-              },
-              label: edge.label || (edge.type === 'subdivision_connection' ? '细分连接' : ''),
-              labelStyle: {
-                fontSize: 12,
-                fontWeight: 'bold',
-                fill: edge.type === 'subdivision_connection' ? '#ff6b6b' : '#666',
-                backgroundColor: 'rgba(255, 255, 255, 0.8)',
-                padding: '2px 4px',
-                borderRadius: '4px',
-              },
-              labelBgStyle: {
-                fill: 'rgba(255, 255, 255, 0.9)',
-                fillOpacity: 0.9,
-              },
-              data: edge.data || edge
-            };
-            
-            // 验证处理后的边对象
-            if (!processedEdge.source || !processedEdge.target) {
-              console.error('❌ 处理后的边仍然缺少源或目标节点:', processedEdge);
-            }
-            
-            return processedEdge;
-          });
-          
-          console.log(`🔗 边数据处理结果:`);
-          console.log(`   - 原始边数: ${actualData.detailed_connection_graph.edges.length}`);
-          console.log(`   - 有效边数: ${validEdges.length}`);
-          console.log(`   - 处理后边数: ${flowEdges.length}`);
-
-          console.log(`📊 设置React Flow数据:`);
-          console.log(`   - 节点数: ${flowNodes.length}`);
-          console.log(`   - 边数: ${flowEdges.length}`);
-          
-          // 🔍 详细分析最终渲染的节点
-          console.log('🎯 [FINAL-RENDER] 最终渲染的工作流容器:');
-          flowNodes.forEach((node: any, index: number) => {
-            console.log(`  渲染节点${index + 1}: ${node.data?.label} (${node.id})`);
-            console.log(`    - 类型: ${node.type}`);
-            console.log(`    - 位置: x=${node.position?.x}, y=${node.position?.y}`);
-            console.log(`    - workflow_base_id: ${node.data?.workflow_base_id}`);
-            console.log(`    - 是否可见: ${node.hidden !== true}`);
-            console.log(`    - 样式:`, node.style);
-          });
-          
-          setNodes(flowNodes);
-          setEdges(flowEdges);
-        }
-
-        console.log('✅ 详细工作流模板连接图加载成功');
-        console.log(`   - 合并候选数: ${detailedData.merge_candidates?.length || 0}`);
-        console.log(`   - 详细工作流数: ${Object.keys(detailedData.detailed_workflows || {}).length}`);
-        
-        // 检查合并按钮状态
-        console.log('🔘 合并按钮状态检查:');
-        console.log(`   - enableMergeMode: ${enableMergeMode}`);
-        console.log(`   - 合并候选数量: ${mergeCandidates.length}`);
-        console.log(`   - 当前选择数: ${selectedMergeCandidates.size}`);
-        console.log(`   - 按钮应该灰色: ${selectedMergeCandidates.size === 0}`);
-        
-      } else {
-        console.error('⚠️ 详细连接图API返回成功但数据格式不正确');
-        console.error('   数据格式分析:');
-        console.error('   - 响应数据:', response.data);
-        console.error('   - 包装格式检查: success字段=', response.data?.success, ', data.detailed_connections=', !!response.data?.data?.detailed_connections);
-        console.error('   - 直接格式检查: detailed_connections字段=', !!response.data?.detailed_connections);
-        console.error('   预期格式: { detailed_connections: {...}, merge_candidates: [...] } 或包装的BaseResponse');
-        setError('数据格式不正确，无法显示连接图');
-      }
-
     } catch (err: any) {
-      console.error('❌ 加载详细工作流模板连接图失败:');
-      console.error('   - 错误类型:', typeof err);
-      console.error('   - 错误对象:', err);
-      console.error('   - 错误消息:', err.message);
-      
-      if (err.response) {
-        console.error('   - HTTP状态:', err.response.status);
-        console.error('   - 错误响应数据:', err.response.data);
-        console.error('   - 错误响应头:', err.response.headers);
-        
-        let errorMessage = '加载详细连接图失败';
-        if (err.response.status === 404) {
-          errorMessage = '工作流实例不存在或无权限访问';
-        } else if (err.response.status === 500) {
-          errorMessage = '服务器内部错误，请稍后重试';
-        } else if (err.response.data?.detail) {
-          errorMessage = err.response.data.detail;
-        } else if (err.response.data?.message) {
-          errorMessage = err.response.data.message;
-        }
-        
-        setError(errorMessage);
-      } else if (err.request) {
-        console.error('   - 请求对象:', err.request);
-        setError('网络连接失败，请检查网络状态');
-      } else {
-        setError(err.message || '加载详细连接图失败，请刷新重试');
-      }
+      console.error('❌ [模板连接图] loadData 失败:', err);
+      setError(err.message || '加载失败');
     } finally {
       setIsLoading(false);
-      console.log('🏁 详细连接图加载操作完成');
+      console.log('📊 [模板连接图] loadData 结束，loading状态已清除');
     }
-  }, [workflowInstanceId, enableMergeMode, selectedMergeCandidates]);
-
-  // 处理合并候选选择
-  const handleMergeCandidateToggle = useCallback((candidateId: string) => {
-    console.log('🎯 合并候选选择操作:');
-    console.log('   - 操作候选ID:', candidateId);
-    console.log('   - 操作前已选择数量:', selectedMergeCandidates.size);
-    console.log('   - 是否已选中:', selectedMergeCandidates.has(candidateId));
-    
-    // 找到对应的候选信息
-    const candidate = detailedConnectionData?.merge_candidates?.find(c => c.subdivision_id === candidateId);
-    if (candidate) {
-      console.log('   - 候选信息:');
-      console.log('     - 节点名称:', candidate.replaceable_node?.name);
-      console.log('     - 节点类型:', candidate.replaceable_node?.type);
-      console.log('     - 兼容性:', candidate.compatibility?.is_compatible);
-      console.log('     - 问题数量:', candidate.compatibility?.issues?.length || 0);
-    }
-    
-    setSelectedMergeCandidates(prev => {
-      const newSet = new Set(prev);
-      const wasSelected = newSet.has(candidateId);
-      
-      if (wasSelected) {
-        newSet.delete(candidateId);
-        console.log('   ✅ 已取消选择，新的选择数量:', newSet.size);
-      } else {
-        newSet.add(candidateId);
-        console.log('   ✅ 已选择，新的选择数量:', newSet.size);
-      }
-      
-      console.log('   - 所有已选择的候选ID:', Array.from(newSet));
-      
-      return newSet;
-    });
-  }, [selectedMergeCandidates, detailedConnectionData]);
-
-  // 初始加载
-  // 合并模式下直接加载详细数据，不需要切换
-  useEffect(() => {
-    if (workflowInstanceId && enableMergeMode) {
-      console.log('🔄 [WorkflowTemplateConnectionGraph] 合并模式加载:');
-      console.log('   - enableMergeMode:', enableMergeMode);
-      console.log('   → 加载详细数据 (合并模式)');
-      loadDetailedConnectionGraph();
-    }
-  }, [workflowInstanceId, enableMergeMode]);
-
-  // 处理节点点击
-  const handleNodeClick = useCallback(async (_: React.MouseEvent, node: Node) => {
-    console.log('🖱️ 工作流模板连接图节点点击详情:');
-    console.log('   - 节点ID:', node.id);
-    console.log('   - 节点类型:', node.type);
-    console.log('   - 节点数据:', node.data);
-    console.log('   - 节点位置:', node.position);
-    console.log('   - 是否选中:', node.selected);
-    console.log('   - 节点样式:', node.style);
-    
-    // 检查节点是否是内部节点
-    if (node.data.isInternalNode || node.data.originalType === 'internal_node') {
-      console.log('   📍 这是一个内部节点');
-      console.log('     - 父工作流ID:', node.data.parentWorkflowId);
-      console.log('     - 节点类型:', node.data.node_type || node.data.originalType);
-    } else if (node.data.originalType === 'workflow_container') {
-      console.log('   📦 这是一个工作流容器节点');
-      console.log('     - 工作流基础ID:', node.data.workflow_base_id);
-      console.log('     - 连接的节点数:', node.data.connected_nodes?.length || 0);
-    }
-    
-    // 在合并模式下的特殊处理
-    if (enableMergeMode) {
-      console.log('   🔄 合并模式下的节点选择:');
-      console.log('     - 当前合并候选数:', detailedConnectionData?.merge_candidates?.length || 0);
-      console.log('     - 已选择的候选数:', selectedMergeCandidates.size);
-      
-      // 检查这个节点是否关联到某个合并候选
-      const relatedCandidates = detailedConnectionData?.merge_candidates?.filter(candidate => 
-        candidate.replaceable_node?.node_base_id === node.data.node_base_id ||
-        candidate.parent_workflow_id === node.data.workflow_base_id
-      ) || [];
-      
-      if (relatedCandidates.length > 0) {
-        console.log('   🎯 此节点关联的合并候选:');
-        relatedCandidates.forEach((candidate, index) => {
-          console.log(`     候选${index + 1}:`, candidate.subdivision_id);
-          console.log(`       - 节点名称:`, candidate.replaceable_node?.name);
-          console.log(`       - 兼容性:`, candidate.compatibility?.is_compatible);
-        });
-      } else {
-        console.log('   ℹ️ 此节点没有关联的合并候选');
-      }
-    }
-    
-    if (onNodeClick) {
-      onNodeClick(node.data);
-    }
-  }, [onNodeClick, enableMergeMode, detailedConnectionData, selectedMergeCandidates]);
-
-  // 处理边点击
-  const handleEdgeClick = useCallback(async (_: React.MouseEvent, edge: Edge) => {
-    console.log('🖱️ 边点击:', edge.data);
-    
-    if (edge.data && edge.data.subdivision_id) {
-      try {
-        // 获取详细信息
-        const detail = await workflowTemplateConnectionManager.getSubdivisionConnectionDetail(
-          edge.data.subdivision_id
-        );
-        setSelectedEdgeDetail(detail);
-      } catch (err) {
-        console.error('获取细分连接详情失败:', err);
-      }
-    }
-    
-    if (onEdgeClick) {
-      onEdgeClick(edge.data);
-    }
+  }, [workflowInstanceId]);
+  
+  const handleNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+    console.log('🖱️ [模板连接图] 节点被点击:', node);
+    onNodeClick?.(node.data);
+  }, [onNodeClick]);
+  
+  const handleEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
+    console.log('🖱️ [模板连接图] 边被点击:', edge);
+    onEdgeClick?.(edge.data);
   }, [onEdgeClick]);
-
-
+  
+  useEffect(() => {
+    console.log('🔄 [模板连接图] useEffect 触发，开始加载数据');
+    loadData();
+  }, [loadData]);
+  
+  // 监听状态变化
+  useEffect(() => {
+    console.log('📊 [模板连接图] React Flow 节点状态更新:', {
+      nodesCount: nodes.length,
+      nodes: nodes.map(n => ({ id: n.id, type: n.type, position: n.position }))
+    });
+  }, [nodes]);
+  
+  useEffect(() => {
+    console.log('📊 [模板连接图] React Flow 边状态更新:', {
+      edgesCount: edges.length,
+      edges: edges.map(e => ({ id: e.id, source: e.source, target: e.target }))
+    });
+  }, [edges]);
+  
+  console.log('🎯 [模板连接图] 组件渲染状态:', {
+    isLoading,
+    error,
+    nodesCount: nodes.length,
+    edgesCount: edges.length
+  });
+  
   if (isLoading) {
+    console.log('⏳ [模板连接图] 渲染加载状态');
     return (
       <div className={`workflow-template-connection-graph loading ${className || ''}`}>
         <div className="loading-spinner">
           <div className="spinner"></div>
-          <div className="loading-text">正在加载工作流连接图...</div>
+          <div className="loading-text">加载工作流关系图...</div>
         </div>
       </div>
     );
   }
-
+  
   if (error) {
+    console.log('❌ [模板连接图] 渲染错误状态:', error);
     return (
       <div className={`workflow-template-connection-graph error ${className || ''}`}>
         <div className="error-message">
           <div className="error-icon">⚠️</div>
           <div className="error-text">{error}</div>
-          <button className="retry-button" onClick={loadDetailedConnectionGraph}>
-            重试
-          </button>
+          <button className="retry-button" onClick={loadData}>重试</button>
         </div>
       </div>
     );
   }
-
-  return (
-    <WorkflowTemplateConnectionGraphInner
-      {...{
-        className,
-        nodes,
-        edges,
-        onNodesChange,
-        onEdgesChange,
-        handleNodeClick,
-        handleEdgeClick,
-        memoizedEdgeTypes,
-        detailedConnectionData,
-        selectedMergeCandidates,
-        showMergeModal,
-        setShowMergeModal,
-        selectedEdgeDetail,
-        setSelectedEdgeDetail,
-        loadDetailedConnectionGraph,
-        onMergeInitiated,
-        handleMergeCandidateToggle,
-        // 新增的合并相关props
-        enableMergeMode,
-        mergeSelectedNodes,
-        mergePathNodes,
-        handleMergeNodeToggle,
-        workflowInstanceId
-      }}
-    />
-  );
-};
-
-// Inner component that uses useReactFlow
-const WorkflowTemplateConnectionGraphInner: React.FC<any> = (props) => {
-  const {
-    className,
-    nodes,
-    edges,
-    onNodesChange,
-    onEdgesChange,
-    handleNodeClick,
-    handleEdgeClick,
-    memoizedEdgeTypes,
-    detailedConnectionData,
-    selectedMergeCandidates,
-    showMergeModal,
-    setShowMergeModal,
-    selectedEdgeDetail,
-    setSelectedEdgeDetail,
-    loadDetailedConnectionGraph,
-    onMergeInitiated,
-    handleMergeCandidateToggle,
-    enableMergeMode,
-    mergeSelectedNodes,
-    mergePathNodes,
-    workflowInstanceId
-  } = props;
-
-  // 直接使用稳定的节点类型引用，不再需要动态创建
+  
+  console.log('✅ [模板连接图] 渲染正常状态的 React Flow');
+  
   return (
     <div 
       className={`workflow-template-connection-graph ${className || ''}`}
       style={{ width: '100%', height: '500px' }}
       data-layout="tree"
-      data-merge-mode={enableMergeMode ? "true" : "false"}
     >
       <ReactFlow
         nodes={nodes}
@@ -1120,204 +1094,40 @@ const WorkflowTemplateConnectionGraphInner: React.FC<any> = (props) => {
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
         onEdgeClick={handleEdgeClick}
-        nodeTypes={STABLE_NODE_TYPES}
-        edgeTypes={memoizedEdgeTypes}
+        nodeTypes={NODE_TYPES}
         connectionLineType={ConnectionLineType.SmoothStep}
         fitView
         fitViewOptions={{ 
-          padding: 0.1,
-          includeHiddenNodes: false,
-          minZoom: 0.2,
-          maxZoom: 1.5,
-          duration: 800
+          padding: 0.15,
+          minZoom: 0.3,
+          maxZoom: 1.2,
+          duration: 1000
         }}
-        minZoom={0.1}
-        maxZoom={2}
+        minZoom={0.2}
+        maxZoom={1.8}
+        defaultViewport={{ x: 0, y: 0, zoom: 0.6 }}
         attributionPosition="bottom-left"
-        proOptions={{ hideAttribution: true }}
-        defaultViewport={{ x: 0, y: 0, zoom: 0.8 }}
       >
-        <Background color="#f5f5f5" gap={16} />
-        <Controls />
-      </ReactFlow>
-
-      {/* 合并模式控制面板 */}
-      {enableMergeMode && (
-        <div className="merge-control-panel">
-          <div className="control-group merge-header">
-            <h4>🔀 工作流合并模式</h4>
-            <p>选择子工作流将自动选择所有前置工作流</p>
-          </div>
-          
-          <div className="merge-status-info">
-            <div>已选择工作流: {mergeSelectedNodes.size} 个</div>
-            <div>路径高亮节点: {Array.from(mergePathNodes || new Set()).length} 个</div>
-            <div>合并候选: {detailedConnectionData?.merge_candidates?.length || 0} 个</div>
-            <div>可执行合并: {selectedMergeCandidates.size > 0 ? '是' : '否'}</div>
-          </div>
-          
-          <button 
-            className="merge-preview-button"
-            disabled={selectedMergeCandidates.size === 0}
-            onClick={() => setShowMergeModal(true)}
-          >
-            {selectedMergeCandidates.size === 0 ? '请选择要合并的工作流' : `开始合并 (${selectedMergeCandidates.size}个)`}
-          </button>
-          
-          {selectedMergeCandidates.size === 0 && detailedConnectionData?.merge_candidates?.length === 0 && (
-            <div className="merge-no-candidates-warning">
-              ⚠️ 没有可用的合并候选。可能原因：
-              <br />• 没有已完成的任务细分
-              <br />• 当前工作流实例没有子工作流
-            </div>
-          )}
-          
-          <div className="merge-operation-tip">
-            💡 提示：点击子工作流的合并复选框将自动选择所有前置工作流，形成完整的合并路径。
-          </div>
-        </div>
-      )}
-
-      {/* 工作流合并模态框 */}
-      {showMergeModal && detailedConnectionData && (() => {
-        // 从合并候选中获取正确的父工作流基础ID
-        const firstCandidate = detailedConnectionData.merge_candidates[0];
-        const parentWorkflowBaseId = firstCandidate?.parent_workflow_id || workflowInstanceId || 'unknown';
-        
-        console.log('🔍 [合并模态框] 工作流ID检查:', {
-          'workflowInstanceId': workflowInstanceId,
-          'firstCandidate.parent_workflow_id': firstCandidate?.parent_workflow_id,
-          'selected_parentWorkflowBaseId': parentWorkflowBaseId,
-          'detailedConnectionData.detailed_workflows': Object.keys(detailedConnectionData.detailed_workflows || {})
-        });
-        
-        return (
-          <WorkflowMergeModal
-            isOpen={showMergeModal}
-            onClose={() => setShowMergeModal(false)}
-            mergePreviewData={{
-              parent_workflow: {
-                workflow_base_id: parentWorkflowBaseId,
-                name: '当前工作流',
-                current_nodes: 0,
-                current_connections: 0
-              },
-              merge_summary: {
-                total_merge_candidates: detailedConnectionData.merge_candidates.length,
-                valid_merges: selectedMergeCandidates.size,
-                invalid_merges: 0,
-                net_nodes_change: selectedMergeCandidates.size * 3, // 估算
-                net_connections_change: selectedMergeCandidates.size * 2 // 估算
-              },
-              merge_feasibility: {
-                can_proceed: selectedMergeCandidates.size > 0,
-                complexity_increase: selectedMergeCandidates.size > 2 ? 'high' : 'medium',
-                recommended_approach: '直接合并到新工作流'
-              },
-              valid_merge_previews: Array.from(selectedMergeCandidates).map((candidateId) => {
-                const candidateIdStr = candidateId as string;
-                const candidate = detailedConnectionData.merge_candidates.find((c: MergeCandidate) => c.subdivision_id === candidateIdStr);
-                return {
-                  candidate_id: candidateIdStr,
-                  target_node: candidate?.replaceable_node || { node_base_id: '', name: 'Unknown', type: 'unknown' },
-                  replacement_info: {
-                    sub_workflow_name: `子工作流_${candidateIdStr.slice(0, 8)}`,
-                    nodes_to_add: 3,
-                    connections_to_add: 2
-                  }
-                };
-              }),
-              invalid_merge_previews: []
-            }}
-            selectedCandidates={detailedConnectionData.merge_candidates.filter(
-              (candidate: MergeCandidate) => selectedMergeCandidates.has(candidate.subdivision_id)
-            )}
-            allCandidates={detailedConnectionData.merge_candidates}
-          onCandidateToggle={handleMergeCandidateToggle}
-          onMergeExecuted={(result) => {
-            console.log('🎉 合并执行完成:', result);
-            setShowMergeModal(false);
-            // 合并完成后始终刷新详细连接图数据以显示最新状态
-            loadDetailedConnectionGraph();
-            // 通知父组件
-            if (onMergeInitiated) {
-              onMergeInitiated(result);
-            }
-          }}
+        <Background 
+          color="#4caf50" 
+          gap={20} 
+          size={1}
         />
-      )})()}
-      {/* 边详情弹窗 */}
-      {selectedEdgeDetail && (
-        <div className="edge-detail-modal" onClick={() => setSelectedEdgeDetail(null)}>
-          <div className="edge-detail-content" onClick={(e) => e.stopPropagation()}>
-            <div className="edge-detail-header">
-              <h3>细分连接详情</h3>
-              <button 
-                className="close-button" 
-                onClick={() => setSelectedEdgeDetail(null)}
-              >
-                ×
-              </button>
-            </div>
-            <div className="edge-detail-body">
-              <div className="detail-section">
-                <h4>细分信息</h4>
-                <div className="detail-item">
-                  <span className="detail-label">细分名称:</span>
-                  <span className="detail-value">{selectedEdgeDetail.subdivision_name}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">细分描述:</span>
-                  <span className="detail-value">{selectedEdgeDetail.subdivision_description}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">细分者:</span>
-                  <span className="detail-value">{selectedEdgeDetail.subdivider_name}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">创建时间:</span>
-                  <span className="detail-value">
-                    {selectedEdgeDetail.created_at ? new Date(selectedEdgeDetail.created_at).toLocaleString() : '未知'}
-                  </span>
-                </div>
-              </div>
-              
-              <div className="detail-section">
-                <h4>原始任务</h4>
-                <div className="detail-item">
-                  <span className="detail-label">任务标题:</span>
-                  <span className="detail-value">{selectedEdgeDetail.original_task.task_title}</span>
-                </div>
-              </div>
-              
-              <div className="detail-section">
-                <h4>子工作流</h4>
-                <div className="detail-item">
-                  <span className="detail-label">工作流名称:</span>
-                  <span className="detail-value">{selectedEdgeDetail.sub_workflow.workflow_name}</span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">节点进度:</span>
-                  <span className="detail-value">
-                    {selectedEdgeDetail.sub_workflow.completed_nodes}/{selectedEdgeDetail.sub_workflow.total_nodes}
-                  </span>
-                </div>
-                <div className="detail-item">
-                  <span className="detail-label">状态:</span>
-                  <span className={`detail-value status-${selectedEdgeDetail.status}`}>
-                    {selectedEdgeDetail.status}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+        <Controls 
+          showZoom={true}
+          showFitView={true}
+          showInteractive={false}
+          position="top-left"
+        />
+      </ReactFlow>
     </div>
   );
 };
 
-// 包装组件提供ReactFlowProvider
+// =============================================================================
+// Provider包装
+// =============================================================================
+
 const WorkflowTemplateConnectionGraphWithProvider: React.FC<Props> = (props) => {
   return (
     <ReactFlowProvider>

@@ -1,8 +1,8 @@
 [Unit]
 Description=Workflow Backend Service
 Documentation=https://fastapi.tiangolo.com/
-After=network.target mysql.service postgresql.service
-Wants=mysql.service postgresql.service
+After=network.target mysql.service
+Wants=mysql.service
 
 [Service]
 Type=exec

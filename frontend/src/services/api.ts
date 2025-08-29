@@ -2,8 +2,8 @@ import axios from 'axios';
 
 // 创建axios实例
 const api = axios.create({
-  baseURL: process.env.REACT_APP_API_BASE_URL || '/api', // 使用环境变量，默认为相对路径
-  timeout: 60000, // 增加到60秒，因为工作流执行可能需要更长时间
+  baseURL: process.env.REACT_APP_API_BASE_URL || (process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:8001/api'),
+  timeout: 120000, // 增加到120秒，与Nginx配置保持一致
   headers: {
     'Content-Type': 'application/json',
   },

@@ -75,7 +75,7 @@ class WorkflowTemplateConnectionService:
             logger.error(f"❌ 获取工作流模板连接关系失败: {e}")
             raise
     
-    async def _get_recursive_template_connections(self, workflow_instance_id: uuid.UUID, max_depth: int, current_depth: int = 0) -> List[Dict[str, Any]]:
+    async def _get_recursive_template_connections(self, workflow_instance_id: uuid.UUID, max_depth: int, current_depth: int = 0, parent_subdivision_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         递归获取所有层级的模板连接关系
         
@@ -83,6 +83,7 @@ class WorkflowTemplateConnectionService:
             workflow_instance_id: 当前层级的工作流实例ID
             max_depth: 最大递归深度
             current_depth: 当前递归深度
+            parent_subdivision_id: 父subdivision的ID，用于建立真实的层级关系
             
         Returns:
             包含所有层级连接关系的列表
@@ -91,7 +92,7 @@ class WorkflowTemplateConnectionService:
             logger.warning(f"⚠️ 达到最大递归深度 {max_depth}，停止递归查询")
             return []
             
-        logger.debug(f"🔄 递归查询层级 {current_depth}: {workflow_instance_id}")
+        logger.debug(f"🔄 递归查询层级 {current_depth}: {workflow_instance_id}, 父subdivision: {parent_subdivision_id}")
         
         # 查询当前层级的直接子工作流
         subdivisions_query = """
@@ -103,6 +104,7 @@ class WorkflowTemplateConnectionService:
             ts.subdivision_name,
             ts.subdivision_description,
             ts.subdivision_created_at,
+            ts.parent_subdivision_id,
             
             -- 原始任务信息
             ti.task_title,
@@ -176,12 +178,16 @@ class WorkflowTemplateConnectionService:
         child_instance_ids = []  # 记录子工作流实例ID，用于下层递归
         
         for subdivision in subdivisions:
+            # 计算真实的层级关系：如果有父subdivision，则层级+1
+            actual_level = 0 if parent_subdivision_id is None else current_depth
+            
             connection = {
                 "subdivision_id": str(subdivision["subdivision_id"]),
                 "subdivision_name": subdivision["subdivision_name"],
                 "subdivision_description": subdivision["subdivision_description"] or "",
                 "created_at": subdivision["subdivision_created_at"].isoformat() if subdivision["subdivision_created_at"] else None,
-                "recursion_level": current_depth,  # 添加递归层级标识
+                "recursion_level": actual_level,  # 使用实际的层级关系
+                "parent_subdivision_id": parent_subdivision_id,  # 记录父subdivision关系
                 
                 # 父工作流信息
                 "parent_workflow": {
@@ -217,12 +223,15 @@ class WorkflowTemplateConnectionService:
             if subdivision["sub_workflow_instance_id"]:
                 child_instance_ids.append(subdivision["sub_workflow_instance_id"])
         
-        # 递归查询子工作流的连接关系
+        # 递归查询子工作流的连接关系，传递subdivision_id建立真实的父子关系
         all_connections = current_connections.copy()
-        for child_instance_id in child_instance_ids:
+        for i, child_instance_id in enumerate(child_instance_ids):
             try:
+                # 找到对应的subdivision_id作为parent_subdivision_id
+                current_subdivision_id = str(subdivisions[i]["subdivision_id"]) if i < len(subdivisions) else None
+                
                 child_connections = await self._get_recursive_template_connections(
-                    child_instance_id, max_depth, current_depth + 1
+                    child_instance_id, max_depth, current_depth + 1, current_subdivision_id
                 )
                 all_connections.extend(child_connections)
             except Exception as e:
@@ -232,6 +241,39 @@ class WorkflowTemplateConnectionService:
         
         logger.debug(f"✅ 层级 {current_depth} 查询完成: 当前层 {len(current_connections)} 个，总计 {len(all_connections)} 个连接")
         return all_connections
+    
+    def _calculate_subdivision_level(self, target_connection: Dict[str, Any], all_connections: List[Dict[str, Any]]) -> int:
+        """
+        计算subdivision的真实层级
+        
+        Args:
+            target_connection: 目标连接
+            all_connections: 所有连接关系
+            
+        Returns:
+            subdivision的真实层级（0为根级）
+        """
+        try:
+            subdivision_id = target_connection["subdivision_id"]
+            parent_subdivision_id = target_connection.get("parent_subdivision_id")
+            
+            # 如果没有父subdivision，则为根级
+            if not parent_subdivision_id:
+                return 0
+            
+            # 递归查找父subdivision的层级
+            for connection in all_connections:
+                if connection["subdivision_id"] == parent_subdivision_id:
+                    parent_level = self._calculate_subdivision_level(connection, all_connections)
+                    return parent_level + 1
+            
+            # 如果找不到父subdivision，按工作流实例关系判断
+            # 这种情况说明父subdivision可能在上一轮递归中，应该是层级1
+            return 1
+            
+        except Exception as e:
+            logger.error(f"❌ 计算subdivision层级失败: {e}")
+            return 0  # 默认返回0层级
     
     def _calculate_max_depth(self, connections: List[Dict[str, Any]]) -> int:
         """计算连接关系中的最大递归深度"""
@@ -263,22 +305,28 @@ class WorkflowTemplateConnectionService:
             
             logger.debug(f"🏗️ 构建递归连接图: {len(levels)} 个层级, 总计 {len(template_connections)} 个连接")
             
-            # 构建节点（工作流模板）
+            # 构建节点（工作流模板）- 使用subdivision真实层级
             for connection in template_connections:
                 parent_workflow = connection["parent_workflow"]
                 sub_workflow = connection["sub_workflow"]
-                recursion_level = connection.get("recursion_level", 0)
+                subdivision_id = connection["subdivision_id"]
+                parent_subdivision_id = connection.get("parent_subdivision_id")
+                
+                # 计算真实的层级：基于subdivision层级链
+                actual_level = self._calculate_subdivision_level(connection, template_connections)
                 
                 # 添加父工作流节点
                 parent_id = parent_workflow["workflow_base_id"]
                 if parent_id not in nodes:
+                    # 为父工作流计算层级
+                    parent_level = 0 if not parent_subdivision_id else actual_level - 1
                     nodes[parent_id] = {
                         "id": parent_id,
                         "type": "workflow_template",
                         "label": parent_workflow["workflow_name"],
                         "description": parent_workflow["workflow_description"],
-                        "is_parent": recursion_level == 0,  # 只有顶层是真正的父工作流
-                        "recursion_level": recursion_level,
+                        "is_parent": parent_level == 0,  # 只有层级0是真正的根工作流
+                        "recursion_level": parent_level,
                         "connected_nodes": [],
                         "workflow_instance_id": parent_workflow.get("workflow_instance_id")
                     }
@@ -300,7 +348,7 @@ class WorkflowTemplateConnectionService:
                         "label": sub_workflow["workflow_name"],
                         "description": sub_workflow["workflow_description"],
                         "is_parent": False,
-                        "recursion_level": recursion_level + 1,  # 子工作流在下一层级
+                        "recursion_level": actual_level,  # 使用真实的subdivision层级
                         "status": sub_workflow["status"],
                         "total_nodes": sub_workflow["total_nodes"],
                         "completed_nodes": sub_workflow["completed_nodes"],
@@ -322,8 +370,8 @@ class WorkflowTemplateConnectionService:
                     "connected_node_name": parent_workflow["connected_node"]["node_name"],
                     "task_title": parent_workflow["connected_node"]["task_title"],
                     "created_at": connection["created_at"],
-                    "recursion_level": recursion_level,
-                    "edge_weight": recursion_level + 1  # 用于可视化时的边权重
+                    "recursion_level": actual_level,
+                    "edge_weight": actual_level + 1  # 用于可视化时的边权重
                 }
                 edges.append(edge)
             
@@ -371,7 +419,7 @@ class WorkflowTemplateConnectionService:
     
     def _build_tree_layout_data(self, node_list: List[Dict[str, Any]], template_connections: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        构建树状布局的数据结构
+        构建基于subdivision层级关系的树状布局数据结构
         
         Args:
             node_list: 节点列表
@@ -381,18 +429,53 @@ class WorkflowTemplateConnectionService:
             树状布局数据结构
         """
         try:
-            # 构建父子关系映射
-            parent_child_map = {}  # parent_id -> [child_ids]
-            child_parent_map = {}  # child_id -> parent_id
+            # 构建基于subdivision的父子关系映射
+            subdivision_parent_child_map = {}  # parent_subdivision_id -> [child_subdivision_ids]
+            subdivision_child_parent_map = {}  # child_subdivision_id -> parent_subdivision_id
+            subdivision_to_workflow_map = {}   # subdivision_id -> workflow_base_id
+            
+            # 从template_connections构建subdivision层级关系
+            for connection in template_connections:
+                subdivision_id = connection["subdivision_id"]
+                parent_subdivision_id = connection.get("parent_subdivision_id")
+                workflow_base_id = connection["sub_workflow"]["workflow_base_id"]
+                
+                # 记录subdivision到工作流的映射
+                subdivision_to_workflow_map[subdivision_id] = workflow_base_id
+                
+                # 构建subdivision的父子关系
+                if parent_subdivision_id:
+                    # 这是一个子subdivision
+                    if parent_subdivision_id not in subdivision_parent_child_map:
+                        subdivision_parent_child_map[parent_subdivision_id] = []
+                    subdivision_parent_child_map[parent_subdivision_id].append(subdivision_id)
+                    subdivision_child_parent_map[subdivision_id] = parent_subdivision_id
+                # else: 这是一个根subdivision
+            
+            # 构建工作流级别的父子关系（基于subdivision层级）
+            parent_child_map = {}  # parent_workflow_id -> [child_workflow_ids]
+            child_parent_map = {}  # child_workflow_id -> parent_workflow_id
             
             for connection in template_connections:
-                parent_id = connection["parent_workflow"]["workflow_base_id"]
-                child_id = connection["sub_workflow"]["workflow_base_id"]
+                parent_workflow_id = connection["parent_workflow"]["workflow_base_id"]
+                child_workflow_id = connection["sub_workflow"]["workflow_base_id"]
+                subdivision_id = connection["subdivision_id"]
+                parent_subdivision_id = connection.get("parent_subdivision_id")
                 
-                if parent_id not in parent_child_map:
-                    parent_child_map[parent_id] = []
-                parent_child_map[parent_id].append(child_id)
-                child_parent_map[child_id] = parent_id
+                # 如果这个subdivision有父subdivision，则该工作流的父工作流应该是父subdivision对应的工作流
+                if parent_subdivision_id:
+                    # 找到父subdivision对应的工作流
+                    actual_parent_workflow = subdivision_to_workflow_map.get(parent_subdivision_id)
+                    if actual_parent_workflow:
+                        parent_workflow_id = actual_parent_workflow
+                
+                if parent_workflow_id not in parent_child_map:
+                    parent_child_map[parent_workflow_id] = []
+                
+                # 避免重复添加
+                if child_workflow_id not in parent_child_map[parent_workflow_id]:
+                    parent_child_map[parent_workflow_id].append(child_workflow_id)
+                child_parent_map[child_workflow_id] = parent_workflow_id
             
             # 找到根节点（没有父节点的节点）
             all_node_ids = set(node["id"] for node in node_list)
@@ -445,7 +528,9 @@ class WorkflowTemplateConnectionService:
                         "parent": child_parent_map.get(node_id, None)
                     }
             
-            logger.debug(f"🌳 构建树状布局数据: {len(tree_levels)} 层, {len(node_positions)} 个节点")
+            logger.debug(f"🌳 构建基于subdivision的树状布局数据: {len(tree_levels)} 层, {len(node_positions)} 个节点")
+            logger.debug(f"🔗 Subdivision映射: {subdivision_to_workflow_map}")
+            logger.debug(f"📊 父子关系: {parent_child_map}")
             
             return {
                 "tree_levels": tree_levels,
@@ -454,7 +539,12 @@ class WorkflowTemplateConnectionService:
                 "parent_child_map": parent_child_map,
                 "child_parent_map": child_parent_map,
                 "root_nodes": root_nodes,
-                "max_level": max(tree_levels.keys()) if tree_levels else 0
+                "max_level": max(tree_levels.keys()) if tree_levels else 0,
+                "subdivision_mapping": {
+                    "subdivision_to_workflow": subdivision_to_workflow_map,
+                    "subdivision_parent_child": subdivision_parent_child_map,
+                    "subdivision_child_parent": subdivision_child_parent_map
+                }
             }
             
         except Exception as e:

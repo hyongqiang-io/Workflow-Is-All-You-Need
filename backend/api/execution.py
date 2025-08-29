@@ -2848,3 +2848,238 @@ async def get_node_subdivision_detail(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取节点细分详情失败: {str(e)}"
         )
+
+
+@router.get("/workflows/{workflow_instance_id}/complete-mapping")
+async def get_workflow_complete_mapping(
+    workflow_instance_id: uuid.UUID,
+    max_depth: int = Query(10, description="最大递归深度"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+) -> dict:
+    """
+    获取工作流实例的完整节点级别映射关系
+    支持递归查询多层嵌套的子工作流
+    """
+    try:
+        logger.info(f"📊 获取工作流完整映射: {workflow_instance_id}, 最大深度: {max_depth}")
+        
+        from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+        
+        workflow_instance_repo = WorkflowInstanceRepository()
+        
+        # 验证工作流实例是否存在
+        instance = await workflow_instance_repo.get_instance_by_id(workflow_instance_id)
+        if not instance:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="工作流实例不存在"
+            )
+        
+        # 获取完整映射关系
+        mapping_result = await workflow_instance_repo.get_complete_workflow_mapping(
+            workflow_instance_id, max_depth
+        )
+        
+        logger.info(f"✅ 工作流完整映射查询成功: {len(mapping_result.get('metadata', {}).get('total_workflows', 0))} 个工作流")
+        
+        return {
+            "success": True,
+            "data": mapping_result
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取工作流完整映射失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取工作流完整映射失败: {str(e)}"
+        )
+
+
+@router.get("/workflows/{workflow_instance_id}/node-mapping")
+async def get_workflow_node_mapping(
+    workflow_instance_id: uuid.UUID,
+    include_template_structure: bool = Query(True, description="是否包含模板结构信息"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+) -> dict:
+    """
+    获取工作流实例的节点级别映射关系（专为前端图形展示优化）
+    返回工作流框架结构，通过节点关系连接工作流
+    """
+    try:
+        logger.info(f"🎨 获取工作流节点映射: {workflow_instance_id}")
+        
+        from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+        from ..repositories.node.node_repository import NodeRepository, NodeConnectionRepository
+        
+        workflow_repo = WorkflowInstanceRepository()
+        node_repo = NodeRepository()
+        connection_repo = NodeConnectionRepository()
+        
+        # 1. 获取完整的工作流映射数据
+        complete_mapping = await workflow_repo.get_complete_workflow_mapping(workflow_instance_id, max_depth=8)
+        
+        if "error" in complete_mapping.get("mapping_data", {}):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="工作流实例不存在或查询失败"
+            )
+        
+        # 2. 构建适用于前端的数据结构
+        template_workflows = []
+        template_connections = []
+        
+        # 递归处理映射数据
+        await _process_mapping_for_template_graph(
+            complete_mapping["mapping_data"], 
+            template_workflows, 
+            template_connections,
+            node_repo,
+            connection_repo,
+            include_template_structure
+        )
+        
+        result = {
+            "success": True,
+            "data": {
+                "template_connections": template_connections,
+                "detailed_workflows": {
+                    wf["workflow_base_id"]: wf for wf in template_workflows
+                },
+                "node_level_mapping": True,
+                "supports_recursive_subdivision": True
+            }
+        }
+        
+        logger.info(f"✅ 工作流节点映射构建完成: {len(template_workflows)} 个工作流, {len(template_connections)} 个连接")
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取工作流节点映射失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取工作流节点映射失败: {str(e)}"
+        )
+
+
+async def _process_mapping_for_template_graph(mapping_data: dict, 
+                                            template_workflows: list,
+                                            template_connections: list,
+                                            node_repo,
+                                            connection_repo,
+                                            include_template_structure: bool):
+    """递归处理映射数据为模板图格式"""
+    try:
+        if "error" in mapping_data:
+            return
+        
+        # 处理当前工作流
+        workflow_base_id = mapping_data["workflow_base_id"]
+        
+        # 构建工作流数据
+        workflow_data = {
+            "workflow_base_id": workflow_base_id,
+            "workflow_name": mapping_data["workflow_name"],
+            "workflow_instance_id": mapping_data["workflow_instance_id"],
+            "workflow_instance_name": mapping_data["workflow_instance_name"],
+            "status": mapping_data["workflow_status"],
+            "depth": mapping_data.get("depth", 0),
+            "total_nodes": len(mapping_data.get("nodes", [])),
+            "nodes": [],
+            "connections": []
+        }
+        
+        # 如果需要包含模板结构，添加节点和连接信息
+        if include_template_structure:
+            try:
+                # 获取工作流的节点信息
+                workflow_nodes = await node_repo.get_workflow_nodes(uuid.UUID(workflow_base_id))
+                workflow_connections = await connection_repo.get_workflow_connections(uuid.UUID(workflow_base_id))
+                
+                # 添加节点信息
+                for node in workflow_nodes:
+                    workflow_data["nodes"].append({
+                        "node_id": str(node["node_id"]),
+                        "node_base_id": str(node["node_base_id"]),
+                        "name": node["name"],
+                        "type": node["type"],
+                        "position": {
+                            "x": node.get("position_x"),
+                            "y": node.get("position_y")
+                        }
+                    })
+                
+                # 添加连接信息
+                for conn in workflow_connections:
+                    workflow_data["connections"].append({
+                        "connection_id": f"conn_{conn['from_node_id']}_{conn['to_node_id']}",
+                        "from_node": {
+                            "node_id": str(conn["from_node_id"]),
+                            "node_base_id": str(conn["from_node_base_id"]),
+                            "name": conn["from_node_name"]
+                        },
+                        "to_node": {
+                            "node_id": str(conn["to_node_id"]),
+                            "node_base_id": str(conn["to_node_base_id"]),
+                            "name": conn["to_node_name"]
+                        },
+                        "connection_type": conn["connection_type"]
+                    })
+                    
+            except Exception as e:
+                logger.warning(f"获取模板结构信息失败: {e}")
+        
+        template_workflows.append(workflow_data)
+        
+        # 处理节点的subdivisions
+        for node in mapping_data.get("nodes", []):
+            for subdivision in node.get("subdivisions", []):
+                if subdivision["sub_workflow_mapping"] and "error" not in subdivision["sub_workflow_mapping"]:
+                    # 创建模板连接关系
+                    connection = {
+                        "subdivision_id": subdivision["subdivision_id"],
+                        "subdivision_name": subdivision["subdivision_name"],
+                        "parent_subdivision_id": subdivision.get("parent_subdivision_id"),
+                        "parent_workflow": {
+                            "workflow_base_id": workflow_base_id,
+                            "workflow_name": mapping_data["workflow_name"],
+                            "workflow_instance_id": mapping_data["workflow_instance_id"],
+                            "workflow_instance_name": mapping_data["workflow_instance_name"],
+                            "status": mapping_data["workflow_status"]
+                        },
+                        "sub_workflow": {
+                            "workflow_base_id": subdivision["sub_workflow_mapping"]["workflow_base_id"],
+                            "workflow_name": subdivision["sub_workflow_mapping"]["workflow_name"],
+                            "workflow_instance_id": subdivision["sub_workflow_mapping"]["workflow_instance_id"],
+                            "workflow_instance_name": subdivision["sub_workflow_mapping"]["workflow_instance_name"],
+                            "status": subdivision["sub_workflow_mapping"]["workflow_status"],
+                            "total_nodes": len(subdivision["sub_workflow_mapping"].get("nodes", [])),
+                            "completed_nodes": sum(1 for n in subdivision["sub_workflow_mapping"].get("nodes", []) if n.get("node_status") == "completed")
+                        },
+                        "parent_node": {
+                            "node_instance_id": node["node_instance_id"],
+                            "node_base_id": node["node_base_id"],
+                            "node_name": node["node_name"],
+                            "node_type": node["node_type"]
+                        }
+                    }
+                    
+                    template_connections.append(connection)
+                    
+                    # 递归处理子工作流
+                    await _process_mapping_for_template_graph(
+                        subdivision["sub_workflow_mapping"],
+                        template_workflows,
+                        template_connections, 
+                        node_repo,
+                        connection_repo,
+                        include_template_structure
+                    )
+        
+    except Exception as e:
+        logger.error(f"处理映射数据失败: {e}")
+        raise

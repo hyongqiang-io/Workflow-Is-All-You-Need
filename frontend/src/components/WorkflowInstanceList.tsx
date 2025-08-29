@@ -1422,16 +1422,11 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                         <div style={{ flex: 1 }}>
                           <WorkflowTemplateConnectionGraph
                             workflowInstanceId={selectedInstance.instance_id}
-                            enableMergeMode={true}  // 对已完成的工作流始终启用合并模式
                             onNodeClick={(node) => {
                               console.log('🔍 [WorkflowInstanceList] 模板连接图节点点击:', node);
                             }}
                             onEdgeClick={(edge) => {
                               console.log('🔍 [WorkflowInstanceList] 模板连接图边点击:', edge);
-                            }}
-                            onMergeInitiated={(mergeData) => {
-                              console.log('🔄 [WorkflowInstanceList] 合并操作启动:', mergeData);
-                              // 可以在这里添加合并完成后的回调处理
                             }}
                           />
                         </div>

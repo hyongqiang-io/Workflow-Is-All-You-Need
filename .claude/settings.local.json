@@ -206,7 +206,10 @@
       "Bash(PYTHONPATH:*)",
       "Bash(/usr/bin/python3:*)",
       "Bash(mv:*)",
-      "Bash(nslookup:*)"
+      "Bash(nslookup:*)",
+      "Bash(/home/ubuntu/anaconda3/envs/workflow/bin/python test_node_mapping_api.py)",
+      "Bash(journalctl:*)",
+      "Bash(systemctl list-units:*)"
     ],
     "deny": [],
     "defaultMode": "acceptEdits"
