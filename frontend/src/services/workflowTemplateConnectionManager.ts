@@ -223,6 +223,90 @@ export class WorkflowTemplateConnectionManager {
   }
   
   /**
+   * 获取合并候选项
+   */
+  async getMergeCandidates(workflowInstanceId: string): Promise<{
+    success: boolean;
+    candidates?: any[];
+    message?: string;
+  }> {
+    try {
+      console.log('🔍 [API] 获取合并候选项:', workflowInstanceId);
+      
+      const response = await templateConnectionAPI.get(
+        `/workflow-merge/${workflowInstanceId}/candidates`
+      );
+
+      console.log('📋 [API] 合并候选响应:', response.data);
+      
+      if (response.data.success) {
+        return {
+          success: true,
+          candidates: response.data.candidates || [],
+        };
+      } else {
+        return {
+          success: false,
+          message: response.data.message || '获取合并候选项失败'
+        };
+      }
+      
+    } catch (error: any) {
+      console.error('❌ [API] 获取合并候选项失败:', error);
+      return {
+        success: false,
+        message: error.response?.data?.detail || error.message || '获取合并候选项失败'
+      };
+    }
+  }
+
+  /**
+   * 执行工作流合并
+   */
+  async executeWorkflowMerge(workflowInstanceId: string, selectedSubdivisions: string[]): Promise<{
+    success: boolean;
+    data?: any;
+    message?: string;
+  }> {
+    try {
+      console.log('🚀 [API] 执行工作流合并:', { workflowInstanceId, selectedSubdivisions });
+      
+      const response = await templateConnectionAPI.post(
+        `/workflow-merge/${workflowInstanceId}/execute`,
+        {
+          selected_subdivisions: selectedSubdivisions,
+          merge_config: {
+            from_lowest_level: true,
+            preserve_connections: true,
+            remove_start_end_nodes: true
+          }
+        }
+      );
+
+      console.log('✅ [API] 合并执行响应:', response.data);
+      
+      if (response.data.success) {
+        return {
+          success: true,
+          data: response.data,
+        };
+      } else {
+        return {
+          success: false,
+          message: response.data.message || '工作流合并失败'
+        };
+      }
+      
+    } catch (error: any) {
+      console.error('❌ [API] 工作流合并失败:', error);
+      return {
+        success: false,
+        message: error.response?.data?.detail || error.message || '工作流合并失败'
+      };
+    }
+  }
+  
+  /**
    * 格式化统计信息
    */
   formatStatistics(stats: WorkflowConnectionResponse['statistics']): string {

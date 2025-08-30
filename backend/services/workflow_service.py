@@ -38,13 +38,24 @@ class WorkflowService:
     
     def _format_workflow_response(self, workflow_record: Dict[str, Any]) -> WorkflowResponse:
         """格式化工作流响应"""
+        # 处理version字段 - 转换字符串版本号为整数
+        version_value = workflow_record['version']
+        if isinstance(version_value, str):
+            # 如果是类似"1.0.0"的字符串，提取主版本号
+            try:
+                version_int = int(version_value.split('.')[0])
+            except (ValueError, AttributeError):
+                version_int = 1  # 默认版本号
+        else:
+            version_int = int(version_value) if version_value is not None else 1
+        
         return WorkflowResponse(
             workflow_id=workflow_record['workflow_id'],
             workflow_base_id=workflow_record['workflow_base_id'],
             name=workflow_record['name'],
             description=workflow_record.get('description'),
             creator_id=workflow_record['creator_id'],
-            version=workflow_record['version'],
+            version=version_int,
             parent_version_id=workflow_record.get('parent_version_id'),
             is_current_version=workflow_record['is_current_version'],
             change_description=workflow_record.get('change_description'),

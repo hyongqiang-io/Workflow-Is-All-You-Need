@@ -4423,10 +4423,10 @@ class ExecutionEngine:
             
         try:
             query = """
-            SELECT ni.*, n.name as node_name, n.type as node_type, n.description
+            SELECT ni.*, n.name as node_name, n.type as node_type, n.task_description as description
             FROM node_instance ni
             JOIN node n ON ni.node_id = n.node_id
-            WHERE ni.node_instance_id = $1
+            WHERE ni.node_instance_id = %s
             """
             return await self.task_instance_repo.db.fetch_one(query, node_instance_id)
         except Exception as e:

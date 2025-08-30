@@ -188,38 +188,84 @@ class SubdivisionTree:
         for child in node.children:
             self._collect_nodes(child, result)
     
-    def calculate_layout_positions(self, node_spacing: int = 300, level_spacing: int = 200) -> Dict[str, Dict[str, int]]:
+    def calculate_layout_positions(self, node_spacing: int = 350, level_spacing: int = 250) -> Dict[str, Dict[str, int]]:
         """
-        计算树状布局位置
+        计算优化的树状布局位置
         
-        简单算法：
-        - 每层从左到右排列
-        - 子节点在父节点下方
-        - 没有特殊情况
+        算法改进：
+        - 使用基于子树宽度的居中布局
+        - 避免节点重叠
+        - 支持深度嵌套的可视化
         """
         positions = {}
         
-        for i, root in enumerate(self.roots):
-            start_x = i * node_spacing * 2  # 根节点水平分布
-            self._calculate_subtree_positions(root, start_x, 0, node_spacing, level_spacing, positions)
+        # 计算每个节点的子树宽度
+        subtree_widths = self._calculate_subtree_widths(node_spacing)
+        
+        # 为每个根节点分配起始X位置
+        current_x = 0
+        for root in self.roots:
+            root_width = subtree_widths[root.subdivision_id]
+            root_x = current_x + root_width // 2
+            self._calculate_subtree_positions_optimized(
+                root, root_x, 0, node_spacing, level_spacing, positions, subtree_widths
+            )
+            current_x += root_width + node_spacing * 2  # 根节点之间的间距
         
         return positions
     
-    def _calculate_subtree_positions(self, node: SubdivisionNode, x: int, y: int, 
-                                   node_spacing: int, level_spacing: int, 
-                                   positions: Dict[str, Dict[str, int]]):
-        """递归计算子树位置"""
+    def _calculate_subtree_widths(self, node_spacing: int) -> Dict[str, int]:
+        """计算每个节点的子树宽度"""
+        widths = {}
+        
+        def calculate_width(node: SubdivisionNode) -> int:
+            if not node.children:
+                widths[node.subdivision_id] = node_spacing
+                return node_spacing
+            
+            child_widths = [calculate_width(child) for child in node.children]
+            total_child_width = sum(child_widths) + (len(child_widths) - 1) * node_spacing
+            
+            # 节点宽度至少是其自身大小，或所有子节点的宽度
+            width = max(node_spacing, total_child_width)
+            widths[node.subdivision_id] = width
+            return width
+        
+        for root in self.roots:
+            calculate_width(root)
+        
+        return widths
+    
+    def _calculate_subtree_positions_optimized(self, node: SubdivisionNode, x: int, y: int, 
+                                             node_spacing: int, level_spacing: int, 
+                                             positions: Dict[str, Dict[str, int]], 
+                                             subtree_widths: Dict[str, int]):
+        """递归计算优化的子树位置"""
         positions[node.subdivision_id] = {"x": x, "y": y}
         
-        # 子节点在父节点下方水平排列
+        # 子节点排布
         child_count = len(node.children)
         if child_count > 0:
-            start_x = x - (child_count - 1) * node_spacing // 2
+            # 计算所有子节点的总宽度
+            total_child_width = sum(subtree_widths[child.subdivision_id] for child in node.children)
+            total_spacing = (child_count - 1) * node_spacing
+            total_width = total_child_width + total_spacing
+            
+            # 居中排布子节点
+            start_x = x - total_width // 2
             child_y = y + level_spacing
             
-            for i, child in enumerate(node.children):
-                child_x = start_x + i * node_spacing
-                self._calculate_subtree_positions(child, child_x, child_y, node_spacing, level_spacing, positions)
+            current_x = start_x
+            for child in node.children:
+                child_width = subtree_widths[child.subdivision_id]
+                child_x = current_x + child_width // 2
+                
+                self._calculate_subtree_positions_optimized(
+                    child, child_x, child_y, node_spacing, level_spacing, 
+                    positions, subtree_widths
+                )
+                
+                current_x += child_width + node_spacing
     
     def to_graph_data(self) -> Dict[str, Any]:
         """

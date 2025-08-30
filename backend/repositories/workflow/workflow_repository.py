@@ -135,10 +135,10 @@ class WorkflowRepository(BaseRepository[Workflow]):
                 query = """
                     UPDATE workflow 
                     SET is_deleted = TRUE, updated_at = NOW() 
-                    WHERE workflow_base_id = $1
+                    WHERE workflow_base_id = %s
                 """
             else:
-                query = "DELETE FROM workflow WHERE workflow_base_id = $1"
+                query = "DELETE FROM workflow WHERE workflow_base_id = %s"
             
             result = await self.db.execute(query, workflow_base_id)
             success = "1" in result or result.split()[1] != "0"
@@ -155,7 +155,7 @@ class WorkflowRepository(BaseRepository[Workflow]):
         try:
             query = """
                 SELECT * FROM workflow_version_history 
-                WHERE workflow_base_id = $1 
+                WHERE workflow_base_id = %s 
                 ORDER BY version DESC
             """
             results = await self.db.fetch_all(query, workflow_base_id)
@@ -170,8 +170,8 @@ class WorkflowRepository(BaseRepository[Workflow]):
             query = """
                 SELECT w.*, u.username as creator_name
                 FROM workflow w
-                LEFT JOIN "user" u ON u.user_id = w.creator_id
-                WHERE w.creator_id = $1 AND w.is_current_version = TRUE AND w.is_deleted = FALSE
+                LEFT JOIN `user` u ON u.user_id = w.creator_id
+                WHERE w.creator_id = %s AND w.is_current_version = TRUE AND w.is_deleted = FALSE
                 ORDER BY w.created_at DESC
             """
             results = await self.db.fetch_all(query, creator_id)
@@ -185,12 +185,12 @@ class WorkflowRepository(BaseRepository[Workflow]):
         try:
             query = """
                 SELECT * FROM current_workflow_view 
-                WHERE (name ILIKE $1 OR description ILIKE $1) 
+                WHERE (name LIKE %s OR description LIKE %s) 
                 ORDER BY created_at DESC 
-                LIMIT $2
+                LIMIT %s
             """
             keyword_pattern = f"%{keyword}%"
-            results = await self.db.fetch_all(query, keyword_pattern, limit)
+            results = await self.db.fetch_all(query, keyword_pattern, keyword_pattern, limit)
             return results
         except Exception as e:
             logger.error(f"搜索工作流失败: {e}")
@@ -203,7 +203,7 @@ class WorkflowRepository(BaseRepository[Workflow]):
             queries = []
             for user_id in user_ids:
                 queries.append((
-                    "INSERT INTO workflow_user (workflow_base_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    "INSERT INTO workflow_user (workflow_base_id, user_id) VALUES (%s, %s) ON DUPLICATE KEY UPDATE workflow_base_id=workflow_base_id",
                     (workflow_base_id, user_id)
                 ))
             
@@ -217,7 +217,7 @@ class WorkflowRepository(BaseRepository[Workflow]):
     async def remove_workflow_user(self, workflow_base_id: uuid.UUID, user_id: uuid.UUID) -> bool:
         """移除工作流用户"""
         try:
-            query = "DELETE FROM workflow_user WHERE workflow_base_id = $1 AND user_id = $2"
+            query = "DELETE FROM workflow_user WHERE workflow_base_id = %s AND user_id = %s"
             result = await self.db.execute(query, workflow_base_id, user_id)
             success = "1" in result
             if success:
@@ -234,8 +234,8 @@ class WorkflowRepository(BaseRepository[Workflow]):
                 SELECT wu.workflow_base_id, wu.user_id, wu.created_at,
                        u.username, u.email, u.role
                 FROM workflow_user wu
-                JOIN "user" u ON u.user_id = wu.user_id
-                WHERE wu.workflow_base_id = $1 AND u.is_deleted = FALSE
+                JOIN `user` u ON u.user_id = wu.user_id
+                WHERE wu.workflow_base_id = %s AND u.is_deleted = FALSE
                 ORDER BY wu.created_at DESC
             """
             results = await self.db.fetch_all(query, workflow_base_id)
@@ -251,8 +251,8 @@ class WorkflowRepository(BaseRepository[Workflow]):
                 SELECT w.*, u.username as creator_name
                 FROM workflow_user wu
                 JOIN current_workflow_view w ON w.workflow_base_id = wu.workflow_base_id
-                JOIN "user" u ON u.user_id = w.creator_id
-                WHERE wu.user_id = $1
+                JOIN `user` u ON u.user_id = w.creator_id
+                WHERE wu.user_id = %s
                 ORDER BY w.created_at DESC
             """
             results = await self.db.fetch_all(query, user_id)
@@ -267,7 +267,7 @@ class WorkflowRepository(BaseRepository[Workflow]):
             query = """
                 SELECT EXISTS(
                     SELECT 1 FROM current_workflow_view 
-                    WHERE name = $1 AND creator_id = $2
+                    WHERE name = %s AND creator_id = %s
                 )
             """
             result = await self.db.fetch_val(query, name, creator_id)
@@ -283,7 +283,7 @@ class WorkflowRepository(BaseRepository[Workflow]):
                 SELECT 
                     COUNT(DISTINCT workflow_base_id) as total_workflows,
                     COUNT(DISTINCT creator_id) as total_creators,
-                    AVG(version) as avg_version,
+                    AVG(CAST(version AS UNSIGNED)) as avg_version,
                     COUNT(*) as total_versions
                 FROM workflow 
                 WHERE is_deleted = FALSE
