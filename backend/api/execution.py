@@ -1072,6 +1072,52 @@ async def get_my_tasks(
         )
 
 
+@router.get("/tasks/statistics")
+async def get_task_statistics(
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """获取任务统计"""
+    try:
+        stats = await execution_engine.get_task_statistics(current_user.user_id)
+        
+        return {
+            "success": True,
+            "data": stats,
+            "message": "获取任务统计成功"
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取任务统计失败: {str(e)}"
+        )
+
+
+@router.get("/tasks/history")
+async def get_task_history(
+    days: int = 30,
+    limit: int = 100,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """获取任务历史"""
+    try:
+        tasks = await execution_engine.get_task_history(
+            current_user.user_id, days, limit
+        )
+        
+        return {
+            "success": True,
+            "data": tasks,
+            "message": f"获取到 {days} 天内的 {len(tasks)} 个历史任务"
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取任务历史失败: {str(e)}"
+        )
+
+
 @router.get("/tasks/{task_id}")
 async def get_task_details(
     task_id: uuid.UUID,
@@ -1573,52 +1619,6 @@ async def delete_task(
         )
 
 
-@router.get("/tasks/history")
-async def get_task_history(
-    days: int = 30,
-    limit: int = 100,
-    current_user: CurrentUser = Depends(get_current_user_context)
-):
-    """获取任务历史"""
-    try:
-        tasks = await execution_engine.get_task_history(
-            current_user.user_id, days, limit
-        )
-        
-        return {
-            "success": True,
-            "data": tasks,
-            "message": f"获取到 {days} 天内的 {len(tasks)} 个历史任务"
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"获取任务历史失败: {str(e)}"
-        )
-
-
-@router.get("/tasks/statistics")
-async def get_task_statistics(
-    current_user: CurrentUser = Depends(get_current_user_context)
-):
-    """获取任务统计"""
-    try:
-        stats = await execution_engine.get_task_statistics(current_user.user_id)
-        
-        return {
-            "success": True,
-            "data": stats,
-            "message": "获取任务统计成功"
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"获取任务统计失败: {str(e)}"
-        )
-
-
 # ==================== Agent任务端点 ====================
 
 @router.get("/agent-tasks/pending")
@@ -2014,6 +2014,74 @@ async def assign_task_to_user(
         )
 
 
+# ==================== 工作流监控端点 ====================
+
+@router.get("/system/monitor-stats")
+async def get_workflow_monitor_stats(
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """获取工作流监控服务统计信息"""
+    try:
+        # 验证管理员权限
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权限访问监控统计信息"
+            )
+        
+        from ..services.workflow_monitor_service import get_workflow_monitor
+        workflow_monitor = get_workflow_monitor()
+        
+        stats = await workflow_monitor.get_monitor_stats()
+        
+        return {
+            "success": True,
+            "data": stats,
+            "message": "获取监控统计信息成功"
+        }
+        
+    except Exception as e:
+        logger.error(f"获取监控统计信息失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取监控统计信息失败: {str(e)}"
+        )
+
+
+@router.post("/system/monitor-scan")
+async def manual_workflow_monitor_scan(
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """手动触发停滞工作流扫描和恢复"""
+    try:
+        # 验证管理员权限
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权限手动触发监控扫描"
+            )
+        
+        logger.info(f"🔧 用户 {current_user.username} 手动触发停滞工作流扫描")
+        
+        from ..services.workflow_monitor_service import get_workflow_monitor
+        workflow_monitor = get_workflow_monitor()
+        
+        scan_results = await workflow_monitor.manual_scan_and_recover()
+        
+        return {
+            "success": True,
+            "data": scan_results,
+            "message": f"扫描完成，恢复了 {scan_results['successful_recoveries']} 个停滞工作流"
+        }
+        
+    except Exception as e:
+        logger.error(f"手动触发监控扫描失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"手动触发监控扫描失败: {str(e)}"
+        )
+
+
 # ==================== 系统监控端点 ====================
 
 @router.get("/system/status")
@@ -2055,6 +2123,497 @@ async def get_system_status(
         )
 
 
+@router.get("/system/context-health")
+async def get_context_health_stats(
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """获取工作流上下文健康统计信息"""
+    try:
+        # 验证管理员权限
+        if current_user.role not in ['admin', 'manager']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权限访问系统健康状态"
+            )
+        
+        # 获取上下文管理器健康统计
+        from ..services.workflow_execution_context import get_context_manager
+        context_manager = get_context_manager()
+        
+        health_stats = context_manager.get_health_stats()
+        
+        return {
+            "success": True,
+            "data": {
+                "context_health": health_stats,
+                "health_check_enabled": True,
+                "persistence_enabled": context_manager._persistence_enabled,
+                "auto_recovery_enabled": context_manager._auto_recovery_enabled,
+                "context_ttl_hours": context_manager._context_ttl / 3600,
+                "max_memory_contexts": context_manager._max_memory_contexts,
+                "health_check_interval_seconds": context_manager._health_check_interval
+            },
+            "message": "获取上下文健康状态成功"
+        }
+        
+    except Exception as e:
+        logger.error(f"获取上下文健康状态失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取上下文健康状态失败: {str(e)}"
+        )
+
+
+@router.get("/workflows/{instance_id}/context-health")
+async def check_workflow_context_health(
+    instance_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """检查特定工作流的上下文健康状态"""
+    try:
+        from ..services.workflow_execution_context import get_context_manager
+        context_manager = get_context_manager()
+        
+        # 检查上下文健康状态
+        health_status = await context_manager.check_context_health(instance_id)
+        
+        return {
+            "success": True,
+            "data": {
+                "workflow_instance_id": str(instance_id),
+                "context_health": health_status
+            },
+            "message": "上下文健康检查完成"
+        }
+        
+    except Exception as e:
+        logger.error(f"检查工作流上下文健康状态失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"检查工作流上下文健康状态失败: {str(e)}"
+        )
+
+
+@router.post("/workflows/{instance_id}/context-recover")
+async def recover_workflow_context(
+    instance_id: uuid.UUID,
+    force_recover: bool = Query(False, description="强制恢复上下文"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """主动恢复工作流上下文并检查下游节点触发"""
+    try:
+        logger.info(f"🔧 用户 {current_user.username} 请求恢复工作流上下文: {instance_id}")
+        
+        from ..services.workflow_execution_context import get_context_manager
+        from ..services.execution_service import execution_engine
+        
+        context_manager = get_context_manager()
+        
+        # 1. 检查当前上下文状态
+        current_context = context_manager.contexts.get(instance_id)
+        context_existed = current_context is not None
+        
+        logger.info(f"   - 当前内存中上下文存在: {context_existed}")
+        
+        # 2. 强制恢复或上下文不存在时进行恢复
+        if force_recover or not context_existed:
+            logger.info(f"   - 开始恢复上下文 (强制: {force_recover})")
+            
+            # 强制重新从数据库恢复上下文
+            if context_existed and force_recover:
+                # 清理现有上下文
+                await context_manager.remove_context(instance_id)
+                logger.info(f"   - 已清理现有上下文")
+            
+            # 恢复上下文
+            recovered_context = await context_manager.get_context(instance_id)
+            
+            if recovered_context:
+                logger.info(f"✅ 上下文恢复成功")
+                logger.info(f"   - 节点依赖数: {len(recovered_context.node_dependencies)}")
+                logger.info(f"   - 已完成节点: {len(recovered_context.execution_context.get('completed_nodes', set()))}")
+                logger.info(f"   - 待触发节点: {len(recovered_context.pending_triggers)}")
+                
+                # 3. 检查并触发下游节点
+                ready_nodes = await recovered_context.get_ready_nodes()
+                logger.info(f"   - 发现待触发节点: {len(ready_nodes)}")
+                
+                triggered_count = 0
+                if ready_nodes:
+                    for node_instance_id in ready_nodes:
+                        try:
+                            # 触发节点执行
+                            logger.info(f"   - 触发节点执行: {node_instance_id}")
+                            await execution_engine._on_nodes_ready_to_execute(instance_id, [node_instance_id])
+                            triggered_count += 1
+                        except Exception as trigger_error:
+                            logger.error(f"   - 触发节点失败 {node_instance_id}: {trigger_error}")
+                
+                return {
+                    "success": True,
+                    "data": {
+                        "workflow_instance_id": str(instance_id),
+                        "context_recovered": True,
+                        "context_existed_before": context_existed,
+                        "forced_recovery": force_recover,
+                        "node_dependencies_count": len(recovered_context.node_dependencies),
+                        "completed_nodes_count": len(recovered_context.execution_context.get('completed_nodes', set())),
+                        "ready_nodes_found": len(ready_nodes),
+                        "nodes_triggered": triggered_count,
+                        "triggered_node_ids": [str(nid) for nid in ready_nodes] if ready_nodes else []
+                    },
+                    "message": f"上下文恢复成功，触发了 {triggered_count} 个待执行节点"
+                }
+            else:
+                return {
+                    "success": False,
+                    "data": {
+                        "workflow_instance_id": str(instance_id),
+                        "context_recovered": False,
+                        "error": "无法从数据库恢复上下文"
+                    },
+                    "message": "上下文恢复失败"
+                }
+        else:
+            # 上下文已存在且不强制恢复，只检查待触发节点
+            ready_nodes = await current_context.get_ready_nodes()
+            logger.info(f"   - 上下文已存在，检查待触发节点: {len(ready_nodes)}")
+            
+            triggered_count = 0
+            if ready_nodes:
+                for node_instance_id in ready_nodes:
+                    try:
+                        await execution_engine._on_nodes_ready_to_execute(instance_id, [node_instance_id])
+                        triggered_count += 1
+                    except Exception as trigger_error:
+                        logger.error(f"   - 触发节点失败 {node_instance_id}: {trigger_error}")
+            
+            return {
+                "success": True,
+                "data": {
+                    "workflow_instance_id": str(instance_id),
+                    "context_recovered": False,
+                    "context_existed_before": True,
+                    "forced_recovery": False,
+                    "ready_nodes_found": len(ready_nodes),
+                    "nodes_triggered": triggered_count,
+                    "triggered_node_ids": [str(nid) for nid in ready_nodes] if ready_nodes else []
+                },
+                "message": f"上下文已存在，触发了 {triggered_count} 个待执行节点"
+            }
+        
+    except Exception as e:
+        logger.error(f"恢复工作流上下文失败: {e}")
+        import traceback
+        logger.error(f"错误堆栈: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"恢复工作流上下文失败: {str(e)}"
+        )
+
+
+@router.post("/workflows/smart-refresh")
+async def smart_workflow_refresh(
+    workflow_instance_ids: Optional[List[uuid.UUID]] = None,
+    force_recovery: bool = Query(False, description="强制恢复上下文"),
+    include_stale_detection: bool = Query(True, description="包含停滞检测"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    智能工作流刷新 - 前端刷新时自动调用
+    
+    结合上下文恢复和停滞检测的智能刷新机制：
+    1. 如果提供了具体的workflow_instance_ids，只处理指定的工作流
+    2. 如果没有提供，自动扫描用户的活动工作流
+    3. 对每个工作流进行上下文健康检查和恢复
+    4. 可选地检测和修复停滞状态
+    """
+    try:
+        logger.info(f"🔄 用户 {current_user.username} 请求智能工作流刷新")
+        
+        from ..services.workflow_monitor_service import get_workflow_monitor
+        from ..services.workflow_execution_context import get_context_manager
+        from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+        
+        context_manager = get_context_manager()
+        workflow_monitor = get_workflow_monitor()
+        workflow_repo = WorkflowInstanceRepository()
+        
+        # 如果没有指定工作流ID，则获取用户的活动工作流
+        if not workflow_instance_ids:
+            user_workflows_query = """
+            SELECT workflow_instance_id
+            FROM workflow_instance 
+            WHERE executor_id = %s 
+            AND status IN ('running', 'pending')
+            AND is_deleted = 0
+            ORDER BY updated_at DESC
+            LIMIT 20
+            """
+            user_workflows = await workflow_repo.db.fetch_all(user_workflows_query, current_user.user_id)
+            workflow_instance_ids = [uuid.UUID(wf['workflow_instance_id']) for wf in user_workflows]
+        
+        if not workflow_instance_ids:
+            return {
+                "success": True,
+                "data": {
+                    "message": "没有找到需要刷新的工作流",
+                    "processed_workflows": [],
+                    "total_processed": 0,
+                    "recovery_results": {
+                        "context_recoveries": 0,
+                        "stale_recoveries": 0,
+                        "triggered_nodes": 0
+                    }
+                },
+                "message": "智能刷新完成 - 无工作流需要处理"
+            }
+        
+        logger.info(f"   - 准备处理 {len(workflow_instance_ids)} 个工作流")
+        
+        # 处理结果统计
+        results = []
+        recovery_stats = {
+            "context_recoveries": 0,
+            "stale_recoveries": 0,
+            "triggered_nodes": 0,
+            "failed_recoveries": 0
+        }
+        
+        # 处理每个工作流
+        for instance_id in workflow_instance_ids:
+            workflow_result = {
+                "workflow_instance_id": str(instance_id),
+                "context_recovery": False,
+                "stale_recovery": False,
+                "nodes_triggered": 0,
+                "status": "unknown",
+                "issues_detected": [],
+                "actions_taken": []
+            }
+            
+            try:
+                # 1. 获取工作流基本信息
+                workflow_info = await workflow_repo.get_instance_by_id(instance_id)
+                if not workflow_info:
+                    workflow_result["status"] = "not_found"
+                    workflow_result["issues_detected"].append("工作流实例不存在")
+                    results.append(workflow_result)
+                    continue
+                
+                workflow_result["workflow_name"] = workflow_info.get("workflow_instance_name", "未知")
+                workflow_result["workflow_status"] = workflow_info.get("status")
+                
+                # 2. 检查上下文健康状态
+                context_health = await context_manager.check_context_health(instance_id)
+                if not context_health.get("healthy", True):
+                    workflow_result["issues_detected"].append("上下文不健康")
+                    
+                    # 尝试恢复上下文
+                    logger.info(f"   - 恢复工作流上下文: {instance_id}")
+                    if force_recovery:
+                        await context_manager.remove_context(instance_id)
+                    
+                    recovered_context = await context_manager.get_context(instance_id)
+                    if recovered_context:
+                        workflow_result["context_recovery"] = True
+                        workflow_result["actions_taken"].append("上下文已恢复")
+                        recovery_stats["context_recoveries"] += 1
+                        
+                        # 检查并触发待执行节点
+                        ready_nodes = await recovered_context.get_ready_nodes()
+                        if ready_nodes:
+                            triggered_count = 0
+                            for node_instance_id in ready_nodes:
+                                try:
+                                    await execution_engine._on_nodes_ready_to_execute(instance_id, [node_instance_id])
+                                    triggered_count += 1
+                                except Exception:
+                                    pass
+                            
+                            if triggered_count > 0:
+                                workflow_result["nodes_triggered"] = triggered_count
+                                workflow_result["actions_taken"].append(f"触发了 {triggered_count} 个待执行节点")
+                                recovery_stats["triggered_nodes"] += triggered_count
+                    else:
+                        workflow_result["issues_detected"].append("上下文恢复失败")
+                        recovery_stats["failed_recoveries"] += 1
+                
+                # 3. 可选的停滞检测和恢复
+                if include_stale_detection and workflow_info.get("status") in ["running", "pending"]:
+                    # 检查是否停滞
+                    workflow_data = dict(workflow_info)
+                    workflow_data["workflow_instance_id"] = str(instance_id)
+                    
+                    if await workflow_monitor._is_workflow_truly_stale(workflow_data):
+                        workflow_result["issues_detected"].append("工作流停滞")
+                        
+                        try:
+                            await workflow_monitor._attempt_workflow_recovery(workflow_data)
+                            workflow_result["stale_recovery"] = True
+                            workflow_result["actions_taken"].append("停滞状态已修复")
+                            recovery_stats["stale_recoveries"] += 1
+                        except Exception as e:
+                            workflow_result["issues_detected"].append(f"停滞恢复失败: {str(e)}")
+                            recovery_stats["failed_recoveries"] += 1
+                
+                # 4. 最终状态
+                if not workflow_result["issues_detected"]:
+                    workflow_result["status"] = "healthy"
+                elif workflow_result["context_recovery"] or workflow_result["stale_recovery"]:
+                    workflow_result["status"] = "recovered" 
+                else:
+                    workflow_result["status"] = "needs_attention"
+                
+            except Exception as e:
+                logger.error(f"   - 处理工作流 {instance_id} 失败: {e}")
+                workflow_result["status"] = "error"
+                workflow_result["issues_detected"].append(f"处理异常: {str(e)}")
+                recovery_stats["failed_recoveries"] += 1
+            
+            results.append(workflow_result)
+        
+        # 统计成功处理的工作流
+        successful_results = [r for r in results if r["status"] in ["healthy", "recovered"]]
+        
+        return {
+            "success": True,
+            "data": {
+                "processed_workflows": results,
+                "total_processed": len(workflow_instance_ids),
+                "successful_processed": len(successful_results),
+                "recovery_results": recovery_stats,
+                "summary": {
+                    "healthy_workflows": len([r for r in results if r["status"] == "healthy"]),
+                    "recovered_workflows": len([r for r in results if r["status"] == "recovered"]),
+                    "failed_workflows": len([r for r in results if r["status"] == "error"]),
+                    "workflows_needing_attention": len([r for r in results if r["status"] == "needs_attention"])
+                }
+            },
+            "message": f"智能刷新完成 - 处理了 {len(workflow_instance_ids)} 个工作流，恢复了 {recovery_stats['context_recoveries'] + recovery_stats['stale_recoveries']} 个"
+        }
+        
+    except Exception as e:
+        logger.error(f"智能工作流刷新失败: {e}")
+        import traceback
+        logger.error(f"错误堆栈: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"智能工作流刷新失败: {str(e)}"
+        )
+
+
+@router.post("/workflows/batch-context-recover")
+async def batch_recover_workflow_contexts(
+    workflow_instance_ids: List[uuid.UUID],
+    force_recover: bool = Query(False, description="强制恢复上下文"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """批量恢复多个工作流的上下文（用于前端列表刷新时）"""
+    try:
+        logger.info(f"🔧 用户 {current_user.username} 请求批量恢复 {len(workflow_instance_ids)} 个工作流上下文")
+        
+        from ..services.workflow_execution_context import get_context_manager
+        from ..services.execution_service import execution_engine
+        
+        context_manager = get_context_manager()
+        
+        results = []
+        total_triggered = 0
+        
+        for instance_id in workflow_instance_ids:
+            try:
+                logger.info(f"   - 处理工作流: {instance_id}")
+                
+                # 检查当前上下文状态
+                current_context = context_manager.contexts.get(instance_id)
+                context_existed = current_context is not None
+                
+                # 强制恢复或上下文不存在时进行恢复
+                if force_recover or not context_existed:
+                    if context_existed and force_recover:
+                        await context_manager.remove_context(instance_id)
+                    
+                    # 恢复上下文
+                    recovered_context = await context_manager.get_context(instance_id)
+                    
+                    if recovered_context:
+                        # 检查并触发下游节点
+                        ready_nodes = await recovered_context.get_ready_nodes()
+                        triggered_count = 0
+                        
+                        for node_instance_id in ready_nodes:
+                            try:
+                                await execution_engine._on_nodes_ready_to_execute(instance_id, [node_instance_id])
+                                triggered_count += 1
+                            except Exception:
+                                pass  # 静默处理单个节点触发失败
+                        
+                        total_triggered += triggered_count
+                        
+                        results.append({
+                            "workflow_instance_id": str(instance_id),
+                            "success": True,
+                            "context_recovered": True,
+                            "nodes_triggered": triggered_count
+                        })
+                    else:
+                        results.append({
+                            "workflow_instance_id": str(instance_id),
+                            "success": False,
+                            "context_recovered": False,
+                            "error": "恢复失败"
+                        })
+                else:
+                    # 上下文已存在，只检查待触发节点
+                    ready_nodes = await current_context.get_ready_nodes()
+                    triggered_count = 0
+                    
+                    for node_instance_id in ready_nodes:
+                        try:
+                            await execution_engine._on_nodes_ready_to_execute(instance_id, [node_instance_id])
+                            triggered_count += 1
+                        except Exception:
+                            pass
+                    
+                    total_triggered += triggered_count
+                    
+                    results.append({
+                        "workflow_instance_id": str(instance_id),
+                        "success": True,
+                        "context_recovered": False,
+                        "nodes_triggered": triggered_count
+                    })
+                    
+            except Exception as e:
+                logger.error(f"   - 处理工作流 {instance_id} 失败: {e}")
+                results.append({
+                    "workflow_instance_id": str(instance_id),
+                    "success": False,
+                    "error": str(e)
+                })
+        
+        successful_recoveries = len([r for r in results if r["success"]])
+        
+        return {
+            "success": True,
+            "data": {
+                "total_workflows": len(workflow_instance_ids),
+                "successful_recoveries": successful_recoveries,
+                "total_nodes_triggered": total_triggered,
+                "results": results
+            },
+            "message": f"批量恢复完成: {successful_recoveries}/{len(workflow_instance_ids)} 成功，触发了 {total_triggered} 个节点"
+        }
+        
+    except Exception as e:
+        logger.error(f"批量恢复工作流上下文失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"批量恢复工作流上下文失败: {str(e)}"
+        )
+
+
 @router.get("/online-resources")
 async def get_online_resources(
     current_user: CurrentUser = Depends(get_current_user_context)
@@ -2067,15 +2626,20 @@ async def get_online_resources(
         user_repo = UserRepository()
         processor_repo = ProcessorRepository()
         
-        # 获取所有活跃用户
-        users = await user_repo.list_all({"status": True, "is_deleted": False})
+        # 获取真正在线的用户 (30分钟内有活动的用户)
+        online_users_data = await user_repo.get_online_users(activity_timeout_minutes=30)
+        
+        # 获取所有活跃用户用于对比
+        all_active_users = await user_repo.list_all({"status": True, "is_deleted": False})
         
         # 获取所有Agent处理器
         agents = await processor_repo.list_all({"type": "agent", "is_deleted": False})
         
-        # 格式化用户数据
-        online_users = []
-        for user in users:
+        # 格式化用户数据 - 包含所有用户，区分在线/离线状态
+        all_users = []
+        online_user_ids = {str(user["user_id"]) for user in online_users_data}
+        
+        for user in all_active_users:
             # 安全处理profile字段
             profile = user.get("profile", {})
             if isinstance(profile, str):
@@ -2085,17 +2649,22 @@ async def get_online_resources(
                 except:
                     profile = {}
             
-            online_users.append({
-                "user_id": str(user["user_id"]),
+            user_id = str(user["user_id"])
+            is_user_online = user_id in online_user_ids
+            
+            all_users.append({
+                "user_id": user_id,
                 "username": user["username"],
                 "email": user["email"],
                 "full_name": profile.get("full_name", "") if isinstance(profile, dict) else "",
                 "description": user.get("description", ""),
-                "status": "online",
+                "status": "online" if is_user_online else "offline",
+                "is_online": is_user_online,
                 "capabilities": profile.get("capabilities", []) if isinstance(profile, dict) else [],
                 "role": user.get("role", "user"),
                 "created_at": user["created_at"].isoformat() if user.get("created_at") else None,
-                "last_login": user["updated_at"].isoformat() if user.get("updated_at") else None
+                "last_login": user.get("last_login_at").isoformat() if user.get("last_login_at") else None,
+                "last_activity": user.get("last_activity_at").isoformat() if user.get("last_activity_at") else None
             })
         
         # 格式化Agent数据
@@ -2116,12 +2685,13 @@ async def get_online_resources(
         return {
             "success": True,
             "data": {
-                "users": online_users,
+                "users": all_users,
                 "agents": online_agents,
                 "statistics": {
-                    "total_users": len(online_users),
+                    "total_users": len(all_users),
                     "total_agents": len(online_agents),
-                    "online_users": len(online_users),
+                    "online_users": len([u for u in all_users if u["is_online"]]),
+                    "offline_users": len([u for u in all_users if not u["is_online"]]),
                     "online_agents": len(online_agents)
                 }
             },

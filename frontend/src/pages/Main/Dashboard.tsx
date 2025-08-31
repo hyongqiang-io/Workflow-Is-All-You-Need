@@ -58,7 +58,24 @@ const Dashboard: React.FC = () => {
         console.warn('获取Agent列表失败:', error);
       }
 
-      // 获取当前用户的待办任务
+      // 获取任务统计信息
+      let taskStats = {
+        totalTasks: 0,
+        pendingTasks: 0
+      };
+      try {
+        const statsResponse: any = await taskAPI.getTaskStatistics();
+        if (statsResponse.success && statsResponse.data) {
+          taskStats = {
+            totalTasks: statsResponse.data.total_tasks || 0,
+            pendingTasks: statsResponse.data.pending_total || 0  // 使用待处理任务总数（包含pending, assigned, in_progress）
+          };
+        }
+      } catch (error) {
+        console.warn('获取任务统计失败:', error);
+      }
+
+      // 获取当前用户的待办任务列表（用于显示具体任务）
       let userTasks: any[] = [];
       try {
         const tasksResponse: any = await taskAPI.getUserTasks();
@@ -116,10 +133,10 @@ const Dashboard: React.FC = () => {
 
       // 更新统计信息
       setStats({
-        totalWorkflows: 0, // 可以从API获取
-        runningWorkflows: 0,
-        totalTasks: userTasks.length,
-        pendingTasks: userTasks.filter(task => task.status === 'pending').length,
+        totalWorkflows: workflows.length,
+        runningWorkflows: workflows.filter(w => w.status === 'running').length,
+        totalTasks: taskStats.totalTasks,
+        pendingTasks: taskStats.pendingTasks,
         onlineUsers: onlineResources.users?.length || 0,
         onlineAgents: agents.length || 0
       });
@@ -231,12 +248,6 @@ const Dashboard: React.FC = () => {
       action: () => navigate('/todo')
     },
     {
-      title: '管理Agent',
-      icon: <RobotOutlined />,
-      color: '#722ed1',
-      action: () => navigate('/agent')
-    },
-    {
       title: '资源监控',
       icon: <TeamOutlined />,
       color: '#fa8c16',
@@ -266,7 +277,7 @@ const Dashboard: React.FC = () => {
         <Col xs={24} sm={12} md={6}>
           <Card>
             <Statistic
-              title="我的任务"
+              title="全部任务"
               value={stats.totalTasks}
               prefix={<CheckSquareOutlined />}
               valueStyle={{ color: '#1890ff' }}
@@ -276,7 +287,7 @@ const Dashboard: React.FC = () => {
         <Col xs={24} sm={12} md={6}>
           <Card>
             <Statistic
-              title="待处理"
+              title="待处理任务"
               value={stats.pendingTasks}
               prefix={<RocketOutlined />}
               valueStyle={{ color: '#fa8c16' }}
@@ -286,7 +297,7 @@ const Dashboard: React.FC = () => {
         <Col xs={24} sm={12} md={6}>
           <Card>
             <Statistic
-              title="在线用户"
+              title="用户"
               value={stats.onlineUsers}
               prefix={<UserOutlined />}
               valueStyle={{ color: '#722ed1' }}
@@ -296,7 +307,7 @@ const Dashboard: React.FC = () => {
         <Col xs={24} sm={12} md={6}>
           <Card>
             <Statistic
-              title="在线Agent"
+              title="Agent"
               value={stats.onlineAgents}
               prefix={<RobotOutlined />}
               valueStyle={{ color: '#fa8c16' }}
@@ -454,18 +465,10 @@ const Dashboard: React.FC = () => {
                       title={
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ fontWeight: 'bold' }}>{workflow.name}</span>
-                          <Tag color={workflow.status === 'active' ? 'green' : workflow.status === 'draft' ? 'blue' : 'orange'}>
-                            {workflow.status === 'active' ? '运行中' : 
-                             workflow.status === 'draft' ? '草稿' : 
-                             workflow.status === 'completed' ? '已完成' : '暂停'}
-                          </Tag>
                         </div>
                       }
                       description={
                         <div>
-                          <div style={{ marginBottom: '4px', color: '#666' }}>
-                            节点数: {workflow.nodeCount} | 执行次数: {workflow.executionCount}
-                          </div>
                           <div style={{ color: '#999', fontSize: '12px' }}>
                             创建时间: {formatTimeAgo(workflow.created_at)}
                           </div>

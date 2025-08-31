@@ -114,7 +114,7 @@ class UserRepository(BaseRepository[User]):
                 update_data["password_hash"] = hash_password(user_data.password)
             
             # 其他字段
-            for field in ['terminal_endpoint', 'profile', 'description', 'role', 'status']:
+            for field in ['terminal_endpoint', 'profile', 'description', 'role', 'status', 'is_online', 'last_login_at', 'last_activity_at']:
                 value = getattr(user_data, field, None)
                 if value is not None:
                     update_data[field] = value
@@ -238,4 +238,55 @@ class UserRepository(BaseRepository[User]):
             return results
         except Exception as e:
             logger.error(f"获取所有激活用户失败: {e}")
+            raise
+    
+    async def set_user_online_status(self, user_id: uuid.UUID, is_online: bool) -> bool:
+        """设置用户在线状态"""
+        try:
+            update_data = {
+                "is_online": is_online,
+                "last_activity_at": now_utc()
+            }
+            
+            if is_online:
+                update_data["last_login_at"] = now_utc()
+            
+            result = await self.update(user_id, update_data, "user_id")
+            return result is not None
+        except Exception as e:
+            logger.error(f"设置用户在线状态失败: {e}")
+            raise
+    
+    async def update_user_activity(self, user_id: uuid.UUID) -> bool:
+        """更新用户活动时间"""
+        try:
+            result = await self.update(user_id, {"last_activity_at": now_utc()}, "user_id")
+            if result is None:
+                # 用户不存在，记录调试信息但不报错
+                logger.debug(f"无法更新用户活动时间，用户可能不存在: {user_id}")
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"更新用户活动时间失败: {e}")
+            return False
+    
+    async def get_online_users(self, activity_timeout_minutes: int = 30) -> List[Dict[str, Any]]:
+        """获取真正在线的用户（基于活动时间）"""
+        try:
+            query = f"""
+                SELECT user_id, username, email, terminal_endpoint, profile, 
+                       description, role, status, is_online, last_login_at, 
+                       last_activity_at, created_at, updated_at
+                FROM {self.table_name} 
+                WHERE status = TRUE AND is_deleted = FALSE 
+                AND (
+                    is_online = TRUE 
+                    AND last_activity_at > DATE_SUB(NOW(), INTERVAL %s MINUTE)
+                )
+                ORDER BY last_activity_at DESC
+            """
+            results = await self.db.fetch_all(query, activity_timeout_minutes)
+            return results
+        except Exception as e:
+            logger.error(f"获取在线用户失败: {e}")
             raise

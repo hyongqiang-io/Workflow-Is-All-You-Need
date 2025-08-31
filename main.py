@@ -3,6 +3,56 @@
 Workflow Framework Main Application
 """
 
+import os
+from pathlib import Path
+
+# 自动加载环境配置
+def load_environment():
+    """加载环境配置文件"""
+    project_root = Path(__file__).parent.absolute()
+    
+    # 根据 ENVIRONMENT 环境变量决定加载哪个配置文件
+    env_name = os.environ.get('ENVIRONMENT', 'development')
+    
+    # 尝试加载对应的环境配置文件
+    env_files = [
+        f".env.{env_name}",
+        ".env.development",  # 备用开发配置
+        ".env"  # 默认配置
+    ]
+    
+    for env_file in env_files:
+        env_path = project_root / env_file
+        if env_path.exists():
+            print(f"🔧 加载环境配置: {env_file}")
+            
+            # 手动解析 .env 文件并设置环境变量
+            with open(env_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+                        
+                        # 移除引号
+                        if value.startswith('"') and value.endswith('"'):
+                            value = value[1:-1]
+                        elif value.startswith("'") and value.endswith("'"):
+                            value = value[1:-1]
+                        
+                        # 只有当环境变量不存在时才设置
+                        if key not in os.environ:
+                            os.environ[key] = value
+            
+            return True
+    
+    print("⚠️  未找到环境配置文件，使用默认配置")
+    return False
+
+# 在导入其他模块之前先加载环境配置
+load_environment()
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -36,6 +86,7 @@ from backend.utils.exceptions import BusinessException, ErrorResponse
 from backend.services.execution_service import execution_engine
 from backend.services.agent_task_service import agent_task_service
 from backend.services.monitoring_service import monitoring_service
+from backend.services.workflow_monitor_service import get_workflow_monitor
 
 # 配置日志 - 修复Windows GBK编码问题
 logger.remove()
@@ -282,6 +333,11 @@ async def startup_event():
         await monitoring_service.start_monitoring()
         logger.trace("监控服务启动成功")
         
+        # 🔧 启动停滞工作流监控服务
+        workflow_monitor = get_workflow_monitor()
+        await workflow_monitor.start_monitoring()
+        logger.trace("停滞工作流监控服务启动成功")
+        
         # 🔧 启动上下文健康检查服务
         await startup_context_health_check()
         logger.trace("上下文健康检查完成")
@@ -302,6 +358,11 @@ async def shutdown_event():
         # 停止监控服务
         await monitoring_service.stop_monitoring()
         logger.trace("监控服务已停止")
+        
+        # 停止停滞工作流监控服务
+        workflow_monitor = get_workflow_monitor()
+        await workflow_monitor.stop_monitoring()
+        logger.trace("停滞工作流监控服务已停止")
         
         # 停止数据库驱动的MCP服务
         from backend.services.database_mcp_service import database_mcp_service
@@ -428,15 +489,15 @@ if __name__ == "__main__":
     import uvicorn
     import os
     
-    # 根据环境配置端口：开发模式8002，生产模式8001
-    port = int(os.environ.get('PORT', 8002))  # 默认8002用于开发
-    environment = os.environ.get('ENVIRONMENT', 'development')
+    # 统一使用8000端口
+    environment = os.environ.get('ENVIRONMENT', 'production')
+    port = int(os.environ.get('PORT', 8000))  # 统一使用8000端口
     
     logger.trace(f"启动服务器... (环境: {environment}, 端口: {port})")
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=port,
-        reload=False,  # 禁用自动重载以防止服务自动关闭
+        reload=True,  # 禁用自动重载以防止服务自动关闭
         log_level="info"
     )

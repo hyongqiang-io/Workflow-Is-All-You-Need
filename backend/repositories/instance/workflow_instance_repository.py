@@ -912,6 +912,44 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
     
     # ================== 工作流持久化功能 ==================
     
+    async def update_context_snapshot(self, workflow_instance_id: uuid.UUID, context_data: Dict[str, Any]) -> bool:
+        """更新工作流上下文快照（用于定期持久化）"""
+        try:
+            # 查找最近的自动快照
+            query = """
+                SELECT snapshot_id FROM workflow_context_snapshot 
+                WHERE workflow_instance_id = %s AND snapshot_type = 'auto'
+                ORDER BY created_at DESC 
+                LIMIT 1
+            """
+            
+            result = await self.db.fetch_one(query, workflow_instance_id)
+            
+            if result:
+                # 更新现有快照 - 移除updated_at字段因为数据库表中不存在
+                update_query = """
+                    UPDATE workflow_context_snapshot
+                    SET context_data = %s
+                    WHERE snapshot_id = %s
+                """
+                await self.db.execute(update_query, json.dumps(context_data, default=str), result['snapshot_id'])
+                logger.trace(f"✅ 更新上下文快照: {result['snapshot_id']}")
+            else:
+                # 创建新快照
+                await self.save_workflow_context_snapshot(
+                    workflow_instance_id=workflow_instance_id,
+                    context_data=context_data,
+                    snapshot_type='auto',
+                    description='自动持久化快照'
+                )
+                logger.trace(f"✅ 创建新的上下文快照: {workflow_instance_id}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"更新上下文快照失败 {workflow_instance_id}: {e}")
+            return False
+    
     async def save_workflow_context_snapshot(self, 
                                            workflow_instance_id: uuid.UUID,
                                            context_data: Dict[str, Any],

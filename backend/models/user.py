@@ -5,6 +5,7 @@ User Models
 
 import uuid
 from typing import Optional, Dict, Any
+from datetime import datetime
 from pydantic import BaseModel, Field, EmailStr
 from .base import BaseEntity, CreateRequest, UpdateRequest
 
@@ -18,6 +19,9 @@ class UserBase(BaseModel):
     description: Optional[str] = Field(None, description="用户描述")
     role: Optional[str] = Field(None, max_length=50, description="用户角色")
     status: bool = Field(True, description="用户状态")
+    is_online: Optional[bool] = Field(False, description="是否在线")
+    last_login_at: Optional[datetime] = Field(None, description="最后登录时间")
+    last_activity_at: Optional[datetime] = Field(None, description="最后活动时间")
 
 
 class User(UserBase, BaseEntity):
@@ -41,6 +45,9 @@ class UserUpdate(UpdateRequest):
     role: Optional[str] = Field(None, max_length=50, description="用户角色")
     status: Optional[bool] = Field(None, description="用户状态")
     password: Optional[str] = Field(None, min_length=6, description="新密码")
+    is_online: Optional[bool] = Field(None, description="是否在线")
+    last_login_at: Optional[datetime] = Field(None, description="最后登录时间")
+    last_activity_at: Optional[datetime] = Field(None, description="最后活动时间")
 
 
 class UserResponse(UserBase):
@@ -48,6 +55,9 @@ class UserResponse(UserBase):
     user_id: uuid.UUID
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    is_online: Optional[bool] = False
+    last_login_at: Optional[str] = None
+    last_activity_at: Optional[str] = None
 
 
 class UserLogin(BaseModel):

@@ -197,11 +197,8 @@ class DatabaseManager:
                             logger.info(f"[DEBUG] UPDATE成功，影响行数: {affected_rows}")
                             return {"_update_success": True, "affected_rows": affected_rows}
                         else:
-                            # 没有记录被更新
-                            logger.warning(f"[DEBUG] UPDATE操作未影响任何记录，可能是WHERE条件不匹配")
-                            logger.warning(f"[DEBUG] 原始查询完整内容: {query}")
-                            logger.warning(f"[DEBUG] 转换查询完整内容: {converted_query}")
-                            logger.warning(f"[DEBUG] 查询参数: {args}")
+                            # 没有记录被更新 - 简化日志，避免垃圾信息
+                            logger.debug(f"[DEBUG] UPDATE操作未影响任何记录 (可能记录不存在或WHERE条件不匹配)")
                             return None
                     
                     else:

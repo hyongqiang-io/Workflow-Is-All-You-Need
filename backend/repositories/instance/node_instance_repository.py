@@ -498,6 +498,23 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
             logger.error(f"删除节点实例失败: {e}")
             raise
     
+    async def get_completed_nodes_by_workflow(self, workflow_instance_id: uuid.UUID) -> List[uuid.UUID]:
+        """获取工作流实例中所有已完成的节点ID列表"""
+        try:
+            query = """
+                SELECT node_id
+                FROM node_instance
+                WHERE workflow_instance_id = $1 
+                  AND status = 'completed'
+                  AND is_deleted = FALSE
+                ORDER BY completed_at ASC
+            """
+            results = await self.db.fetch_all(query, workflow_instance_id)
+            return [result['node_id'] for result in results]
+        except Exception as e:
+            logger.error(f"获取工作流实例已完成节点失败: {e}")
+            raise
+
     async def delete_nodes_by_workflow_instance(self, workflow_instance_id: uuid.UUID, soft_delete: bool = True) -> int:
         """批量删除指定工作流实例下的所有节点实例"""
         try:

@@ -147,8 +147,19 @@ class TaskSubdivisionService:
             if not template:
                 raise ValidationError(f"指定的工作流模板不存在: {provided_template_id}")
             
-            logger.info(f"✅ 找到现有工作流模板: {template.name}")
-            return provided_template_id
+            # 验证模板是否有有效内容（至少有非start/end节点）
+            node_count_result = await self.node_service.node_repository.db.fetch_one(
+                "SELECT COUNT(*) as count FROM node WHERE workflow_base_id = %s AND is_deleted = FALSE AND type NOT IN ('start', 'end')",
+                provided_template_id
+            )
+            node_count = node_count_result.get('count', 0) if node_count_result else 0
+            
+            if node_count == 0:
+                logger.warning(f"⚠️ 选择的工作流模板 {template.name} 没有有效节点，将创建新模板")
+                # 继续执行创建新模板的逻辑
+            else:
+                logger.info(f"✅ 找到现有工作流模板: {template.name} (包含 {node_count} 个有效节点)")
+                return provided_template_id
         
         # 情况2：创建新的工作流模板
         logger.info(f"🔄 创建新的工作流模板: {subdivision_name}")

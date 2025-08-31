@@ -163,7 +163,7 @@ class CurrentUser:
 
 async def get_current_user_context(current_user: UserResponse = Depends(get_current_active_user)) -> CurrentUser:
     """
-    获取当前用户上下文
+    获取当前用户上下文，并更新用户活动时间
     
     Args:
         current_user: 当前用户
@@ -171,4 +171,15 @@ async def get_current_user_context(current_user: UserResponse = Depends(get_curr
     Returns:
         用户上下文对象
     """
+    # 更新用户活动时间
+    try:
+        from ..repositories.user.user_repository import UserRepository
+        user_repo = UserRepository()
+        await user_repo.update_user_activity(current_user.user_id)
+    except Exception as e:
+        # 活动时间更新失败不应影响主要功能，但记录具体原因
+        from loguru import logger
+        logger.debug(f"用户活动时间更新失败 (用户ID: {current_user.user_id}): {e}")
+        pass
+    
     return CurrentUser(current_user)

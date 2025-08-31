@@ -36,6 +36,7 @@ import {
   DatabaseOutlined
 } from '@ant-design/icons';
 import { mcpAPI } from '../../services/api';
+import MCPToolConfig from '../../components/MCPToolConfig';
 
 // Placeholder API functions - to be implemented
 const processorAPI = {
@@ -44,7 +45,6 @@ const processorAPI = {
   createAgent: async (data: any) => ({ success: false }),
   deleteAgent: async (agentId: string) => ({ success: false }),
 };
-import MCPToolConfig from '../../components/MCPToolConfig';
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;

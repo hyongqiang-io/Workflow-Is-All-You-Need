@@ -5,6 +5,7 @@ Database Helper Utils
 
 import uuid
 import json
+import pytz
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
@@ -16,7 +17,8 @@ def generate_uuid() -> uuid.UUID:
 
 def now_utc() -> datetime:
     """获取当前UTC时间"""
-    return datetime.now(timezone.utc)
+    tz = pytz.timezone("Asia/Shanghai")
+    return datetime.now(tz)
 
 
 def safe_json_serializer(obj):

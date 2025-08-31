@@ -149,6 +149,9 @@ class AuthService:
             
             logger.info(f"用户登录成功: {user_record['username']} ({user_record['user_id']})")
             
+            # 设置用户为在线状态
+            await self.user_repository.set_user_online_status(user_record['user_id'], True)
+            
             # 生成访问令牌
             return create_token_response(
                 str(user_record['user_id']),
@@ -289,4 +292,23 @@ class AuthService:
             
         except Exception as e:
             logger.error(f"更新用户状态失败: {e}")
+            return False
+    
+    async def logout_user(self, user_id: uuid.UUID) -> bool:
+        """
+        用户登出，设置离线状态
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            是否登出成功
+        """
+        try:
+            result = await self.user_repository.set_user_online_status(user_id, False)
+            if result:
+                logger.info(f"用户 {user_id} 已登出")
+            return result
+        except Exception as e:
+            logger.error(f"用户登出失败: {e}")
             return False

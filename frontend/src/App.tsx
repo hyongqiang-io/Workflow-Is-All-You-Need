@@ -15,6 +15,7 @@ import Todo from './pages/Main/Todo';
 import Resource from './pages/Main/Resource';
 import Profile from './pages/Profile/Profile';
 import TaskFlow from './pages/Workflow/TaskFlow';
+import AgentManagement from './pages/Agent/AgentManagement';
 
 // 组件
 import ProtectedRoute from './components/ProtectedRoute';
@@ -23,6 +24,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import './App.css';
 
 function App() {
+  console.log('🔄 App组件已重新加载 - 时间:', new Date().toLocaleString());
   return (
     <ConfigProvider locale={zhCN}>
       <Router>
@@ -43,6 +45,7 @@ function App() {
             <Route path="workflow" element={<Workflow />} />
             <Route path="workflow/:workflowId/task-flow" element={<TaskFlow />} />
             <Route path="todo" element={<Todo />} />
+            <Route path="agent" element={<AgentManagement />} />
           </Route>
           <Route path="*" element={<Navigate to="/login" />} />
         </Routes>

@@ -767,3 +767,80 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
         except Exception as e:
             logger.error(f"批量删除工作流任务实例失败: {e}")
             raise
+    
+    async def get_user_task_statistics(self, user_id: uuid.UUID) -> Dict[str, Any]:
+        """获取用户任务统计信息（包括所有分配给用户的任务，不包括已删除任务）"""
+        try:
+            query = """
+                SELECT 
+                    COUNT(*) as total_tasks,
+                    COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_tasks,
+                    COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_tasks,
+                    COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_tasks,
+                    COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as in_progress_tasks,
+                    COUNT(CASE WHEN status = 'assigned' THEN 1 END) as assigned_tasks,
+                    COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled_tasks,
+                    -- 待处理任务总数（包含pending, assigned, in_progress）
+                    COUNT(CASE WHEN status IN ('pending', 'assigned', 'in_progress') THEN 1 END) as pending_total,
+                    COUNT(CASE WHEN task_type = 'human' THEN 1 END) as human_tasks,
+                    COUNT(CASE WHEN task_type = 'agent' THEN 1 END) as agent_tasks,
+                    COUNT(CASE WHEN task_type = 'mixed' THEN 1 END) as mixed_tasks,
+                    AVG(CASE WHEN actual_duration IS NOT NULL THEN actual_duration END) as average_duration,
+                    AVG(CASE WHEN estimated_duration IS NOT NULL THEN estimated_duration END) as average_estimated_duration,
+                    SUM(CASE WHEN actual_duration IS NOT NULL THEN actual_duration ELSE 0 END) as total_duration,
+                    -- 最近完成的任务数量（最近7天）
+                    COUNT(CASE WHEN status = 'completed' AND completed_at >= NOW() - INTERVAL 7 DAY THEN 1 END) as recent_completed_tasks,
+                    -- 最近创建的任务数量（最近7天）  
+                    COUNT(CASE WHEN created_at >= NOW() - INTERVAL 7 DAY THEN 1 END) as recent_created_tasks
+                FROM task_instance 
+                WHERE assigned_user_id = %s AND is_deleted = FALSE
+            """
+            result = await self.db.fetch_one(query, user_id)
+            
+            # 转换结果为字典，确保数值类型正确
+            if result:
+                stats = dict(result)
+                # 确保数值字段为整数或浮点数
+                for key in ['total_tasks', 'completed_tasks', 'failed_tasks', 'pending_tasks', 
+                           'in_progress_tasks', 'assigned_tasks', 'cancelled_tasks', 'pending_total',
+                           'human_tasks', 'agent_tasks', 'mixed_tasks', 'recent_completed_tasks', 'recent_created_tasks']:
+                    stats[key] = int(stats.get(key, 0) or 0)
+                
+                for key in ['average_duration', 'average_estimated_duration', 'total_duration']:
+                    value = stats.get(key)
+                    stats[key] = float(value) if value is not None else 0.0
+                
+                # 添加计算字段
+                total = stats['total_tasks']
+                if total > 0:
+                    stats['completion_rate'] = round((stats['completed_tasks'] / total) * 100, 1)
+                    stats['success_rate'] = round(((stats['completed_tasks'] / (stats['completed_tasks'] + stats['failed_tasks'])) * 100) if (stats['completed_tasks'] + stats['failed_tasks']) > 0 else 0, 1)
+                else:
+                    stats['completion_rate'] = 0.0
+                    stats['success_rate'] = 0.0
+                
+                return stats
+            else:
+                return {
+                    'total_tasks': 0,
+                    'completed_tasks': 0,
+                    'failed_tasks': 0,
+                    'pending_tasks': 0,
+                    'in_progress_tasks': 0,
+                    'assigned_tasks': 0,
+                    'cancelled_tasks': 0,
+                    'pending_total': 0,  # 待处理任务总数
+                    'human_tasks': 0,
+                    'agent_tasks': 0,
+                    'mixed_tasks': 0,
+                    'average_duration': 0.0,
+                    'average_estimated_duration': 0.0,
+                    'total_duration': 0.0,
+                    'recent_completed_tasks': 0,
+                    'recent_created_tasks': 0,
+                    'completion_rate': 0.0,
+                    'success_rate': 0.0
+                }
+        except Exception as e:
+            logger.error(f"获取用户任务统计信息失败: {e}")
+            raise

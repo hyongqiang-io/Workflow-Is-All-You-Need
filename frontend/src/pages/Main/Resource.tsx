@@ -1408,7 +1408,6 @@ const Resource: React.FC = () => {
             <Select placeholder="请选择处理器类型">
               <Option value="human">用户处理器</Option>
               <Option value="agent">Agent处理器</Option>
-              <Option value="mix">混合处理器</Option>
             </Select>
           </Form.Item>
 

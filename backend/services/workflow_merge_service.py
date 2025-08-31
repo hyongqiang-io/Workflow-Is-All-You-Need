@@ -217,7 +217,7 @@ class WorkflowMergeService:
             sub_workflow_id = await self.db.fetch_one("""
                 SELECT workflow_id FROM workflow 
                 WHERE workflow_base_id = %s 
-                AND is_current_version = TRUE AND is_deleted = FALSE
+                AND is_current_version = TRUE
             """, candidate.workflow_base_id)
             
             if not sub_workflow_id:
@@ -283,7 +283,7 @@ class WorkflowMergeService:
                 FROM workflow_instance wi
                 JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id
                 WHERE wi.workflow_instance_id = %s 
-                AND w.is_current_version = TRUE AND w.is_deleted = FALSE
+                AND w.is_current_version = TRUE
             """, original_workflow_id)
             
             parent_name = parent_workflow['name'] if parent_workflow else "Unknown_Workflow"
@@ -316,7 +316,7 @@ class WorkflowMergeService:
                 SELECT w.workflow_id FROM workflow_instance wi
                 JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id
                 WHERE wi.workflow_instance_id = %s 
-                AND w.is_current_version = TRUE AND w.is_deleted = FALSE
+                AND w.is_current_version = TRUE
             """, original_workflow_id)
             
             if parent_workflow_id:

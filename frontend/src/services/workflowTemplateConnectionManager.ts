@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // 创建专用的axios实例用于模板连接API
 const templateConnectionAPI = axios.create({
-  baseURL: process.env.REACT_APP_API_BASE_URL || (process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:8002/api'),
+  baseURL: process.env.REACT_APP_API_BASE_URL || (process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:8000/api'),
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',

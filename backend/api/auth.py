@@ -232,6 +232,9 @@ async def logout_user(current_user: UserResponse = Depends(get_current_active_us
     try:
         logger.info(f"用户登出: {current_user.username}")
         
+        # 设置用户为离线状态
+        await auth_service.logout_user(current_user.user_id)
+        
         return BaseResponse(
             success=True,
             message="登出成功",
