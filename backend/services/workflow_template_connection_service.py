@@ -44,9 +44,9 @@ class WorkflowTemplateConnectionService:
             logger.info(f"📋 未找到subdivision: {workflow_instance_id}")
             return self._empty_connection_result(workflow_instance_id)
         
-        # 使用新的树构建器
-        from .subdivision_tree_builder import SubdivisionTree
-        tree = SubdivisionTree().build_from_subdivisions(subdivisions)
+        # 使用新的工作流模板树构建器
+        from .workflow_template_tree import WorkflowTemplateTree
+        tree = await WorkflowTemplateTree().build_from_subdivisions(subdivisions, workflow_instance_id)
         
         # 直接从树获取图形数据和统计信息
         graph_data = tree.to_graph_data()

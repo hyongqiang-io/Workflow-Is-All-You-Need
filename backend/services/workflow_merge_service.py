@@ -16,7 +16,7 @@ from loguru import logger
 
 from ..repositories.base import BaseRepository
 from ..utils.helpers import now_utc
-from .subdivision_tree_builder import SubdivisionTree, SubdivisionNode
+from .workflow_template_tree import WorkflowTemplateTree, WorkflowTemplateNode
 
 
 @dataclass
@@ -122,7 +122,7 @@ class WorkflowMergeService:
             if len(subdivisions_data) > 5:
                 logger.info(f"    ... 还有 {len(subdivisions_data) - 5} 条subdivision记录")
             
-            tree = SubdivisionTree().build_from_subdivisions(subdivisions_data)
+            tree = await WorkflowTemplateTree().build_from_subdivisions(subdivisions_data, workflow_instance_id)
             candidates = []
             
             # 收集所有节点并按深度排序
@@ -149,27 +149,29 @@ class WorkflowMergeService:
                 total_candidates += 1
                 
                 logger.info(f"🔍 [节点检查 {total_candidates}] 检查节点: {node.workflow_name}")
-                logger.info(f"   - subdivision_id: {node.subdivision_id}")
-                logger.info(f"   - workflow_instance_id: {node.workflow_instance_id}")
                 logger.info(f"   - workflow_base_id: {node.workflow_base_id}")
+                logger.info(f"   - workflow_instance_id: {node.workflow_instance_id}")
+                logger.info(f"   - workflow_name: {node.workflow_name}")
                 logger.info(f"   - status: {node.status}")
                 logger.info(f"   - depth: {node.depth}")
-                logger.info(f"   - node_name: {node.node_name}")
-                logger.info(f"   - task_title: {node.task_title}")
+                logger.info(f"   - replacement_info: {node.replacement_info}")
                 
-                # 🔧 移除可行性检查，直接认为所有subdivision都可以合并
+                # 🔧 移除可行性检查，直接认为所有工作流模板都可以合并
                 can_merge = True
-                reason = "无需可行性校验，直接允许合并"
+                reason = "基于工作流模板树，直接允许合并"
                 
                 mergeable_candidates += 1
-                logger.info(f"   - ✅ [可合并] 节点可以合并 (已跳过可行性校验)")
+                logger.info(f"   - ✅ [可合并] 节点可以合并 (基于工作流模板树)")
+                
+                # 获取替换信息作为subdivision相关数据 - 使用新的source_subdivision
+                source_subdivision = getattr(node, 'source_subdivision', {}) or {}
                 
                 candidate = MergeCandidate(
-                    subdivision_id=node.subdivision_id,
-                    parent_subdivision_id=node.parent_id,
+                    subdivision_id=source_subdivision.get('subdivision_id', f"template_{node.workflow_base_id}"),
+                    parent_subdivision_id=node.parent_node.workflow_base_id if node.parent_node else None,
                     workflow_instance_id=node.workflow_instance_id or "",
                     workflow_base_id=node.workflow_base_id,
-                    node_name=node.node_name,
+                    node_name=source_subdivision.get('original_node_name', node.workflow_name),
                     depth=node.depth,
                     can_merge=can_merge,
                     merge_reason=reason
@@ -366,29 +368,28 @@ class WorkflowMergeService:
             return {"success": False, "error": str(e)}
 
     
-    async def _check_merge_feasibility(self, node: SubdivisionNode) -> Tuple[bool, str]:
-        """检查节点是否可以合并 - 简化版本，直接基于subdivision树数据"""
+    async def _check_merge_feasibility(self, node: WorkflowTemplateNode) -> Tuple[bool, str]:
+        """检查工作流模板节点是否可以合并 - 基于工作流模板树"""
         try:
-            logger.info(f"🔍 [简化可行性检查] 检查合并可行性: {node.workflow_name}")
-            logger.info(f"   - subdivision_id: {node.subdivision_id}")
-            logger.info(f"   - workflow_instance_id: {node.workflow_instance_id}")
+            logger.info(f"🔍 [工作流模板可行性检查] 检查合并可行性: {node.workflow_name}")
             logger.info(f"   - workflow_base_id: {node.workflow_base_id}")
+            logger.info(f"   - workflow_instance_id: {node.workflow_instance_id}")
             logger.info(f"   - status: {node.status}")
             
             # 基本检查：必须有子工作流实例ID
             if not node.workflow_instance_id:
-                logger.warning(f"   ❌ [简化检查] 缺少子工作流实例ID")
+                logger.warning(f"   ❌ [工作流模板检查] 缺少子工作流实例ID")
                 return False, "缺少子工作流实例ID"
             
             # 基本检查：必须有workflow_base_id
             if not node.workflow_base_id:
-                logger.warning(f"   ❌ [简化检查] 缺少workflow_base_id")
+                logger.warning(f"   ❌ [工作流模板检查] 缺少workflow_base_id")
                 return False, "缺少workflow_base_id"
             
-            # 🔧 简化逻辑：直接基于subdivision树数据进行合并，不检查具体状态
-            # 只要subdivision数据完整，就认为可以合并
-            logger.info(f"   ✅ [简化检查] 可以合并 - 基于subdivision树数据")
-            return True, "基于subdivision树数据，可以合并"
+            # 🔧 简化逻辑：直接基于工作流模板树数据进行合并，不检查具体状态
+            # 只要工作流模板数据完整，就认为可以合并
+            logger.info(f"   ✅ [工作流模板检查] 可以合并 - 基于工作流模板树数据")
+            return True, "基于工作流模板树数据，可以合并"
             
         except Exception as e:
             logger.error(f"❌ [简化可行性检查] 检查失败: {e}")
