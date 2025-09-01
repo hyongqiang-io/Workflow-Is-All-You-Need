@@ -149,7 +149,7 @@ const Login: React.FC = () => {
           border: '1px solid #b7eb8f'
         }}>
           <Text type="secondary" style={{ fontSize: '12px' }}>
-            💡 测试账号：testuser / testpass123
+            💡 测试账号：test123 / 123456
           </Text>
         </div>
       </Card>

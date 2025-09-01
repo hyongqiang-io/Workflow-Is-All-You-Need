@@ -13,9 +13,9 @@ const api = axios.create({
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');
-    console.log('🔐 [AUTH-DEBUG] 请求拦截器');
-    console.log('   - URL:', config.url);
-    console.log('   - Token存在:', !!token);
+    // console.log('🔐 [AUTH-DEBUG] 请求拦截器');
+    // console.log('   - URL:', config.url);
+    // console.log('   - Token存在:', !!token);
     
     if (token) {
       // 解析token获取用户信息
@@ -44,12 +44,12 @@ api.interceptors.request.use(
 // 响应拦截器 - 处理错误
 api.interceptors.response.use(
   (response) => {
-    console.log('🔄 [INTERCEPTOR-DEBUG] 响应拦截器 - 成功响应');
-    console.log('   - URL:', response.config.url);
-    console.log('   - 方法:', response.config.method);
-    console.log('   - 状态码:', response.status);
-    console.log('   - 原始响应数据:', response.data);
-    console.log('   - 原始响应数据类型:', typeof response.data);
+    // console.log('🔄 [INTERCEPTOR-DEBUG] 响应拦截器 - 成功响应');
+    // console.log('   - URL:', response.config.url);
+    // console.log('   - 方法:', response.config.method);
+    // console.log('   - 状态码:', response.status);
+    // console.log('   - 原始响应数据:', response.data);
+    // console.log('   - 原始响应数据类型:', typeof response.data);
     
     // 后端返回统一格式: { success: boolean, message: string, data: any }
     const responseData = response.data;
@@ -78,9 +78,9 @@ api.interceptors.response.use(
         // 业务逻辑错误，抛出异常
         throw new Error(responseData.message || '操作失败');
       }
-      console.log('✅ [INTERCEPTOR-DEBUG] 返回业务数据');
-      console.log('   - 返回的数据结构:', responseData);
-      console.log('   - 是否提取data字段:', responseData.data ? '是' : '否');
+      // console.log('✅ [INTERCEPTOR-DEBUG] 返回业务数据');
+      // console.log('   - 返回的数据结构:', responseData);
+      // console.log('   - 是否提取data字段:', responseData.data ? '是' : '否');
       // 为了调试，暂时返回完整的responseData而不是data字段
       return responseData;
     }

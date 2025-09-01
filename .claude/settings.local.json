@@ -5,7 +5,8 @@
       "Bash(dos2unix:*)",
       "Bash(./start-dev-simple.sh:*)",
       "Bash(python3:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(mysql:*)"
     ],
     "deny": [],
     "ask": [],

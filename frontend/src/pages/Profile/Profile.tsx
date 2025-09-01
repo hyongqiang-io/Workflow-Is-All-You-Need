@@ -1,21 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Form, Input, Button, Row, Col, message, Switch, Divider, Statistic, Avatar, Typography, Space, Tag } from 'antd';
-import { UserOutlined, RobotOutlined, SettingOutlined, CalendarOutlined, MailOutlined, CheckCircleOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Card, Form, Input, Button, Row, Col, message, Divider, Statistic, Avatar, Typography, Space } from 'antd';
+import { UserOutlined, RobotOutlined, SettingOutlined, CheckCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useAuthStore } from '../../stores/authStore';
 import { userAPI } from '../../services/api';
 
 const { TextArea } = Input;
-const { Title, Text } = Typography;
+const { Title } = Typography;
 
 // 根据真实数据库结构定义接口
 interface UserProfile {
   user_id: string;
   username: string;
   email: string;
-  terminal_endpoint?: string;
-  profile?: Record<string, any>;
   description?: string;
-  role?: string;
   status: boolean;
   created_at: string;
   updated_at: string;
@@ -78,7 +75,8 @@ const Profile: React.FC = () => {
       console.log('用户详细信息API响应:', response);
       
       if (response && response.success !== false && response.data) {
-        const userData = response.data;
+        // 检查数据结构，支持两种格式
+        const userData = response.data.user || response.data;
         console.log('设置用户资料数据:', userData);
         setUserProfile(userData);
         
@@ -86,10 +84,7 @@ const Profile: React.FC = () => {
         userForm.setFieldsValue({
           username: userData.username || currentUser.username || '',
           email: userData.email || currentUser.email || '',
-          terminal_endpoint: userData.terminal_endpoint || '',
           description: userData.description || '',
-          role: userData.role || currentUser.role || '',
-          profile: userData.profile ? JSON.stringify(userData.profile, null, 2) : '',
         });
       } else {
         // 如果API调用失败，使用authStore中的基础信息
@@ -98,23 +93,17 @@ const Profile: React.FC = () => {
           user_id: currentUser.user_id,
           username: currentUser.username,
           email: currentUser.email,
-          role: currentUser.role || undefined,
           status: true,
           created_at: currentUser.created_at,
           updated_at: currentUser.created_at,
           description: '',
-          terminal_endpoint: '',
-          profile: undefined
         };
         
         setUserProfile(basicUserData);
         userForm.setFieldsValue({
           username: currentUser.username || '',
           email: currentUser.email || '',
-          terminal_endpoint: '',
           description: '',
-          role: currentUser.role || '',
-          profile: '',
         });
         
         message.warning('使用基础用户信息，部分功能可能受限');
@@ -130,23 +119,17 @@ const Profile: React.FC = () => {
           user_id: currentUser.user_id,
           username: currentUser.username,
           email: currentUser.email,
-          role: currentUser.role || undefined,
           status: true,
           created_at: currentUser.created_at,
           updated_at: currentUser.created_at,
           description: '',
-          terminal_endpoint: '',
-          profile: undefined
         };
         
         setUserProfile(basicUserData);
         userForm.setFieldsValue({
           username: currentUser.username || '',
           email: currentUser.email || '',
-          terminal_endpoint: '',
           description: '',
-          role: currentUser.role || '',
-          profile: '',
         });
       }
     } finally {
@@ -183,13 +166,20 @@ const Profile: React.FC = () => {
   };
 
   const handleUserUpdate = async (values: any) => {
-    if (!userProfile || !userProfile.user_id) {
+    // 首先尝试从userProfile获取user_id，如果没有则从authStore获取
+    let userId = userProfile?.user_id;
+    if (!userId) {
+      const currentUser = useAuthStore.getState().user;
+      userId = currentUser?.user_id;
+    }
+    
+    if (!userId) {
       message.error('用户信息不完整，请刷新页面重试');
       return;
     }
 
     console.log('开始更新用户信息，表单值:', values);
-    console.log('用户ID:', userProfile.user_id);
+    console.log('用户ID:', userId);
     setUserLoading(true);
 
     try {
@@ -200,24 +190,8 @@ const Profile: React.FC = () => {
         description: values.description,
       };
 
-      // 可选字段
-      if (values.terminal_endpoint) {
-        updateData.terminal_endpoint = values.terminal_endpoint;
-      }
-
-      // 处理profile JSON
-      if (values.profile) {
-        try {
-          updateData.profile = JSON.parse(values.profile);
-        } catch (e) {
-          message.error('Profile JSON格式不正确');
-          setUserLoading(false);
-          return;
-        }
-      }
-
       console.log('发送用户更新请求:', updateData);
-      const response: any = await userAPI.updateUser(userProfile.user_id, updateData);
+      const response: any = await userAPI.updateUser(userId, updateData);
       console.log('用户更新响应:', response);
       console.log('响应类型检查:', {
         hasResponse: !!response,
@@ -231,14 +205,22 @@ const Profile: React.FC = () => {
         console.log('✅ 进入成功分支，准备显示成功消息');
         
         // 使用服务器返回的数据更新本地状态
-        if (response.data) {
-          setUserProfile(response.data);
+        if (response.data && response.data.user) {
+          setUserProfile(response.data.user);
           // 更新全局用户状态
+          setUser({
+            ...user!,
+            username: response.data.user.username,
+            email: response.data.user.email,
+          });
+          console.log('用户资料更新成功，新数据:', response.data.user);
+        } else if (response.data) {
+          // 兼容直接返回用户数据的情况
+          setUserProfile(response.data);
           setUser({
             ...user!,
             username: response.data.username,
             email: response.data.email,
-            role: response.data.role
           });
           console.log('用户资料更新成功，新数据:', response.data);
         }
@@ -251,10 +233,20 @@ const Profile: React.FC = () => {
           icon: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
         });
         
-        // 重新获取最新数据确保同步
-        setTimeout(() => {
-          fetchUserProfile();
-        }, 1000);
+        // 如果没有从服务器获取到数据，至少保留当前表单的数据
+        if (!response.data) {
+          const currentUser = useAuthStore.getState().user;
+          const formUserData: UserProfile = {
+            user_id: userId,
+            username: values.username,
+            email: values.email,
+            description: values.description || '',
+            status: true,
+            created_at: currentUser?.created_at || new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+          setUserProfile(formUserData);
+        }
       } else {
         console.error('❌ 更新失败，响应:', response);
         message.error({
@@ -320,33 +312,10 @@ const Profile: React.FC = () => {
                 <Title level={3} style={{ margin: 0 }}>
                   {userProfile.username}
                 </Title>
-                <Space>
-                  <MailOutlined style={{ color: '#666' }} />
-                  <Text type="secondary">{userProfile.email}</Text>
-                </Space>
-                <Space>
-                  <CalendarOutlined style={{ color: '#666' }} />
-                  <Text type="secondary">
-                    加入时间: {new Date(userProfile.created_at).toLocaleDateString('zh-CN')}
-                  </Text>
-                </Space>
-                {userProfile.role && (
-                  <Tag color={userProfile.role === 'admin' ? 'red' : 'blue'}>
-                    {userProfile.role.toUpperCase()}
-                  </Tag>
-                )}
               </Space>
             </Col>
             <Col span={8}>
               <Row gutter={16}>
-                <Col span={12}>
-                  <Statistic
-                    title="账户状态"
-                    value={userProfile.status ? '正常' : '禁用'}
-                    prefix={<CheckCircleOutlined style={{ color: userProfile.status ? '#52c41a' : '#f5222d' }} />}
-                    valueStyle={{ color: userProfile.status ? '#52c41a' : '#f5222d' }}
-                  />
-                </Col>
                 <Col span={12}>
                   <Statistic
                     title="关联Agent"
@@ -399,13 +368,6 @@ const Profile: React.FC = () => {
                 </Col>
               </Row>
 
-              <Form.Item 
-                name="terminal_endpoint" 
-                label="终端端点"
-                tooltip="用于系统连接的终端地址"
-              >
-                <Input placeholder="请输入终端端点地址" />
-              </Form.Item>
               
               <Form.Item 
                 name="description" 
@@ -414,43 +376,7 @@ const Profile: React.FC = () => {
                 <TextArea rows={3} placeholder="请输入个人描述" />
               </Form.Item>
 
-              <Form.Item 
-                name="role" 
-                label="用户角色"
-                tooltip="用户在系统中的角色"
-              >
-                <Input 
-                  placeholder="如: admin, user, developer" 
-                  addonBefore="Role"
-                />
-              </Form.Item>
 
-              <Form.Item 
-                name="profile" 
-                label="扩展信息 (JSON格式)"
-                tooltip="以JSON格式存储的扩展用户信息"
-                rules={[
-                  {
-                    validator: (_, value) => {
-                      if (!value || value.trim() === '') {
-                        return Promise.resolve();
-                      }
-                      try {
-                        JSON.parse(value);
-                        return Promise.resolve();
-                      } catch (error) {
-                        return Promise.reject(new Error('请输入有效的JSON格式'));
-                      }
-                    }
-                  }
-                ]}
-              >
-                <TextArea 
-                  rows={4} 
-                  placeholder='{"skills": ["Python", "React"], "location": "Beijing", "department": "IT"}' 
-                  style={{ fontFamily: 'Monaco, Consolas, "Courier New", monospace', fontSize: '13px' }}
-                />
-              </Form.Item>
               
               <Form.Item>
                 <Button 
@@ -481,14 +407,6 @@ const Profile: React.FC = () => {
           >
             {userProfile && (
               <div>
-                <p><strong>账户状态:</strong> 
-                  <Switch 
-                    checked={userProfile.status} 
-                    disabled 
-                    style={{ marginLeft: '8px' }}
-                  />
-                  {userProfile.status ? '激活' : '禁用'}
-                </p>
                 <p><strong>创建时间:</strong><br/>
                   {new Date(userProfile.created_at).toLocaleString('zh-CN')}
                 </p>

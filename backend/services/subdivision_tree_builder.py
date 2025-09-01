@@ -129,7 +129,7 @@ class SubdivisionTree:
                 logger.info(f"  📎 直接父子关系: {parent_workflow_name} -> {node.workflow_name}")
             
             # 方式2：跨工作流的implicit父子关系
-            # 如果subdivision A的子工作流 == subdivision B所属的工作流，则A是B的父级
+            # 如果subdivision B是在subdivision A创建的子工作流中产生的，则A是B的父级
             elif not parent_found:
                 current_source_workflow_id = sub_data.get('root_workflow_instance_id')  # 当前subdivision来源工作流
                 
@@ -138,21 +138,26 @@ class SubdivisionTree:
                     other_subdivision_id = str(other_sub_data['subdivision_id'])
                     other_sub_workflow_id = str(other_sub_data['sub_workflow_instance_id']) if other_sub_data['sub_workflow_instance_id'] else None
                     
-                    # 修复逻辑：如果其他subdivision的子工作流ID == 当前subdivision的来源工作流ID
-                    # 说明当前subdivision是在其他subdivision创建的子工作流中产生的
+                    # 正确逻辑：如果其他subdivision的子工作流ID == 当前subdivision的来源工作流ID
+                    # 说明当前subdivision是在其他subdivision创建的子工作流中产生的，其他subdivision是父级
                     if (other_subdivision_id != subdivision_id and 
                         other_sub_workflow_id and 
                         current_source_workflow_id and
                         other_sub_workflow_id == current_source_workflow_id):
                         
                         if other_subdivision_id in self.nodes:
-                            self.nodes[other_subdivision_id].add_child(node)
-                            node.parent_id = other_subdivision_id
-                            parent_found = True
-                            parent_workflow_name = self.nodes[other_subdivision_id].workflow_name
-                            logger.info(f"  🔗 跨工作流父子关系: {parent_workflow_name} -> {node.workflow_name}")
-                            logger.info(f"    详情: subdivision({other_subdivision_id})的子工作流({other_sub_workflow_id}) == subdivision({subdivision_id})的来源工作流({current_source_workflow_id})")
-                            break
+                            # 添加循环检测和深度验证
+                            potential_parent = self.nodes[other_subdivision_id]
+                            if self._is_valid_parent_child_relationship(potential_parent, node):
+                                self.nodes[other_subdivision_id].add_child(node)
+                                node.parent_id = other_subdivision_id
+                                parent_found = True
+                                parent_workflow_name = self.nodes[other_subdivision_id].workflow_name
+                                logger.info(f"  🔗 跨工作流父子关系: {parent_workflow_name} -> {node.workflow_name}")
+                                logger.info(f"    详情: subdivision({other_subdivision_id})的子工作流({other_sub_workflow_id}) == subdivision({subdivision_id})的来源工作流({current_source_workflow_id})")
+                                break
+                            else:
+                                logger.warning(f"  ⚠️ 跳过无效的父子关系: {other_subdivision_id} -> {subdivision_id} (可能导致循环或深度过深)")
             
             # 方式3：如果还没找到父节点，则为根节点
             if not parent_found:
@@ -161,6 +166,49 @@ class SubdivisionTree:
         
         logger.info(f"🌳 树构建完成: {len(self.roots)} 个根，最大深度 {self.get_max_depth()}")
         return self
+    
+    def _is_valid_parent_child_relationship(self, potential_parent: SubdivisionNode, child: SubdivisionNode) -> bool:
+        """
+        验证父子关系是否有效，防止循环引用和深度过深
+        
+        Args:
+            potential_parent: 潜在的父节点
+            child: 子节点
+            
+        Returns:
+            是否为有效的父子关系
+        """
+        # 1. 防止自引用
+        if potential_parent.subdivision_id == child.subdivision_id:
+            return False
+        
+        # 2. 防止循环引用：检查potential_parent是否已经是child的后代
+        current = potential_parent
+        visited = set()
+        max_check_depth = 10  # 防止无限循环检查
+        check_count = 0
+        
+        while current and current.parent_id and check_count < max_check_depth:
+            if current.parent_id in visited:
+                # 检测到循环，但这不影响当前关系的有效性
+                break
+            visited.add(current.parent_id)
+            
+            # 如果potential_parent的祖先链中包含child，则会形成循环
+            if current.parent_id == child.subdivision_id:
+                logger.warning(f"防止循环引用: {potential_parent.subdivision_id} -> {child.subdivision_id}")
+                return False
+            
+            # 向上查找
+            current = self.nodes.get(current.parent_id)
+            check_count += 1
+        
+        # 3. 检查深度限制（可选）
+        if potential_parent.depth >= 5:  # 限制最大深度
+            logger.warning(f"深度限制: 父节点 {potential_parent.subdivision_id} 深度已达到 {potential_parent.depth}")
+            return False
+        
+        return True
     
     def get_max_depth(self) -> int:
         """获取最大深度"""
@@ -283,7 +331,6 @@ class SubdivisionTree:
             # 从root_workflow_instance_id获取主工作流ID
             if hasattr(node, 'created_at') and node.workflow_instance_id:
                 # 查找哪些工作流是主工作流（不是任何subdivision的子工作流）
-                root_workflow_id = None
                 for sub_node in self.get_all_nodes():
                     root_id = getattr(sub_node, 'root_workflow_instance_id', None)
                     if root_id and root_id not in [n.workflow_instance_id for n in self.get_all_nodes()]:

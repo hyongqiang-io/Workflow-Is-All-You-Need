@@ -438,7 +438,7 @@ const Resource: React.FC = () => {
         is_autonomous: values.is_autonomous || false
       };
       
-      console.log('🔥 处理后的Agent数据:', agentData);
+      // console.log('🔥 处理后的Agent数据:', agentData);
       
       // 创建Agent
       const response = await agentAPI.createAgent(agentData);
@@ -666,7 +666,7 @@ const Resource: React.FC = () => {
                   <Option value="all">全部状态</Option>
                   <Option value="online">在线</Option>
                   <Option value="offline">离线</Option>
-                  <Option value="busy">忙碌</Option>
+                  {/* <Option value="busy">忙碌</Option> */}
                 </Select>
               </Col>
               <Col xs={24} sm={12} md={8}>
@@ -1111,7 +1111,7 @@ const Resource: React.FC = () => {
         <Col xs={24} sm={12} md={6}>
           <Card>
             <Statistic
-              title="在线资源"
+              title="在线用户"
               value={stats.online}
               prefix={<ThunderboltOutlined />}
               valueStyle={{ color: '#52c41a' }}

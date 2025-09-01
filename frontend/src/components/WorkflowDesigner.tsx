@@ -370,11 +370,11 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
         workflowNodes = [];
       }
       
-      console.log('处理后的节点数据:', workflowNodes);
+      // console.log('处理后的节点数据:', workflowNodes);
       
       // 过滤掉已删除的节点
       const activeNodes = workflowNodes.filter((node: any) => !node.is_deleted);
-      console.log('过滤删除节点后的数据:', activeNodes);
+      // console.log('过滤删除节点后的数据:', activeNodes);
       
       // 转换为ReactFlow节点
       const flowNodes: Node[] = activeNodes.map((node: any, index: number) => ({
@@ -398,25 +398,25 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
       console.log('转换后的ReactFlow节点:', flowNodes);
       
       // 🔍 DEBUG: 验证节点Handle ID
-      console.log('🔍 DEBUG: 验证Handle ID生成:');
-      flowNodes.forEach((node, index) => {
-        const nodeId = node.data.nodeId || node.data.id || node.id;
-        console.log(`节点 ${index + 1}: ${node.data.label}`);
-        console.log(`  - 节点ID: ${node.id}`);
-        console.log(`  - data.nodeId: ${node.data.nodeId}`);
-        console.log(`  - data.id: ${node.data.id}`);
-        console.log(`  - 生成的Target Handle: ${nodeId}-target`);
-        console.log(`  - 生成的Source Handle: ${nodeId}-source`);
-      });
+      // console.log('🔍 DEBUG: 验证Handle ID生成:');
+      // flowNodes.forEach((node, index) => {
+      //   const nodeId = node.data.nodeId || node.data.id || node.id;
+      //   console.log(`节点 ${index + 1}: ${node.data.label}`);
+      //   console.log(`  - 节点ID: ${node.id}`);
+      //   console.log(`  - data.nodeId: ${node.data.nodeId}`);
+      //   console.log(`  - data.id: ${node.data.id}`);
+      //   console.log(`  - 生成的Target Handle: ${nodeId}-target`);
+      //   console.log(`  - 生成的Source Handle: ${nodeId}-source`);
+      // });
       
       // 🔍 DEBUG: 检查processor_id是否正确加载
-      console.log('🔍 DEBUG: 检查processor_id加载情况:');
-      activeNodes.forEach((node: any, index: number) => {
-        console.log(`节点 ${index + 1}: ${node.name} (${node.type})`);
-        console.log(`  - processor_id: ${node.processor_id || '未设置'}`);
-        console.log(`  - is_deleted: ${node.is_deleted}`);
-        console.log(`  - 完整数据:`, node);
-      });
+      // console.log('🔍 DEBUG: 检查processor_id加载情况:');
+      // activeNodes.forEach((node: any, index: number) => {
+      //   console.log(`节点 ${index + 1}: ${node.name} (${node.type})`);
+      //   console.log(`  - processor_id: ${node.processor_id || '未设置'}`);
+      //   console.log(`  - is_deleted: ${node.is_deleted}`);
+      //   console.log(`  - 完整数据:`, node);
+      // });
       
       setNodes(flowNodes);
       
@@ -1289,14 +1289,14 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
                 const processorValue = processor.processor_id || processor.id;
                 
                 // 🔍 DEBUG: 输出processor选项信息
-                console.log(`🔍 DEBUG: Processor选项 ${index + 1}:`, {
-                  name: processorName,
-                  value: processorValue,
-                  processor_id: processor.processor_id,
-                  id: processor.id,
-                  type: processorType,
-                  fullData: processor
-                });
+                // console.log(`🔍 DEBUG: Processor选项 ${index + 1}:`, {
+                //   name: processorName,
+                //   value: processorValue,
+                //   processor_id: processor.processor_id,
+                //   id: processor.id,
+                //   type: processorType,
+                //   fullData: processor
+                // });
                 
                 const getTypeColor = (type: string) => {
                   switch (type.toLowerCase()) {

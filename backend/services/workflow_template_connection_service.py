@@ -34,87 +34,42 @@ class WorkflowTemplateConnectionService:
         Returns:
             简化的连接图数据结构
         """
-        try:
-            logger.info(f"🌳 [Linus式简化] 获取subdivision树: {workflow_instance_id}")
-            
-            # 简单查询：获取所有subdivision，让树构建器处理层级关系
-            subdivisions = await self._get_all_subdivisions_simple(workflow_instance_id)
-            
-            if not subdivisions:
-                logger.info(f"📋 未找到subdivision: {workflow_instance_id}")
-                return self._empty_connection_result(workflow_instance_id)
-            
-            # 使用新的树构建器
-            from .subdivision_tree_builder import SubdivisionTree
-            tree = SubdivisionTree().build_from_subdivisions(subdivisions)
-            
-            # 直接从树获取图形数据和统计信息
-            graph_data = tree.to_graph_data()
-            statistics = tree.get_statistics()
-            
-            result = {
-                "workflow_instance_id": str(workflow_instance_id),
-                "template_connections": [],  # 保持兼容性，实际数据在graph里
-                "detailed_workflows": {},    # 简化后不需要
-                "merge_candidates": [],      # 简化后不需要
-                "detailed_connection_graph": graph_data,
-                "statistics": statistics
-            }
-            
-            logger.info(f"✅ [Linus式简化] subdivision树构建完成: {statistics}")
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ [Linus式简化] 获取subdivision树失败: {e}")
-            # 如果Linus式简化失败，回退到旧版本
-            logger.info(f"🔄 [回退] 使用旧版本方法")
-            return await self._get_detailed_workflow_connections_old(workflow_instance_id, max_depth)
-
-    async def _get_detailed_workflow_connections_old(self, workflow_instance_id: uuid.UUID, max_depth: int = 10) -> Dict[str, Any]:
-        """
-        旧版本方法（回退用）
+        # try:
+        logger.info(f"🌳 [Linus式简化] 获取subdivision树: {workflow_instance_id}")
         
-        Args:
-            workflow_instance_id: 工作流实例ID
-            max_depth: 最大递归深度
+        # 简单查询：获取所有subdivision，让树构建器处理层级关系
+        subdivisions = await self._get_all_subdivisions_simple(workflow_instance_id)
+        
+        if not subdivisions:
+            logger.info(f"📋 未找到subdivision: {workflow_instance_id}")
+            return self._empty_connection_result(workflow_instance_id)
+        
+        # 使用新的树构建器
+        from .subdivision_tree_builder import SubdivisionTree
+        tree = SubdivisionTree().build_from_subdivisions(subdivisions)
+        
+        # 直接从树获取图形数据和统计信息
+        graph_data = tree.to_graph_data()
+        statistics = tree.get_statistics()
+        
+        result = {
+            "workflow_instance_id": str(workflow_instance_id),
+            "template_connections": [],  # 保持兼容性，实际数据在graph里
+            "detailed_workflows": {},    # 简化后不需要
+            "merge_candidates": [],      # 简化后不需要
+            "detailed_connection_graph": graph_data,
+            "statistics": statistics
+        }
+        
+        logger.info(f"✅ [Linus式简化] subdivision树构建完成: {statistics}")
+        return result
             
-        Returns:
-            连接图数据结构
-        """
-        try:
-            logger.info(f"🌳 [Linus式简化] 获取subdivision树: {workflow_instance_id}")
-            
-            # 简单查询：获取所有subdivision，让树构建器处理层级关系
-            subdivisions = await self._get_all_subdivisions_simple(workflow_instance_id)
-            
-            if not subdivisions:
-                logger.info(f"📋 未找到subdivision: {workflow_instance_id}")
-                return self._empty_connection_result(workflow_instance_id)
-            
-            # 使用新的树构建器
-            from .subdivision_tree_builder import SubdivisionTree
-            tree = SubdivisionTree().build_from_subdivisions(subdivisions)
-            
-            # 直接从树获取图形数据和统计信息
-            graph_data = tree.to_graph_data()
-            statistics = tree.get_statistics()
-            
-            result = {
-                "workflow_instance_id": str(workflow_instance_id),
-                "template_connections": [],  # 保持兼容性，实际数据在graph里
-                "detailed_workflows": {},    # 简化后不需要
-                "merge_candidates": [],      # 简化后不需要
-                "detailed_connection_graph": graph_data,
-                "statistics": statistics
-            }
-            
-            logger.info(f"✅ [Linus式简化] subdivision树构建完成: {statistics}")
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ [Linus式简化] 获取subdivision树失败: {e}")
-            raise
-    
+        # except Exception as e:
+        #     logger.error(f"❌ [Linus式简化] 获取subdivision树失败: {e}")
+        #     # 如果Linus式简化失败，回退到旧版本
+        #     logger.info(f"🔄 [回退] 使用旧版本方法")
+        #     return await self._get_detailed_workflow_connections_old(workflow_instance_id, max_depth)
+
     async def _get_all_subdivisions_simple(self, workflow_instance_id: uuid.UUID) -> List[Dict[str, Any]]:
         """
         递归查询：获取所有subdivision（包括嵌套的），构建完整的subdivision树
@@ -123,9 +78,32 @@ class WorkflowTemplateConnectionService:
         """
         try:
             logger.info(f"🌳 开始递归查询subdivision: {workflow_instance_id}")
+            logger.info(f"📊 [调试] 工作流实例ID类型: {type(workflow_instance_id)}, 值: {workflow_instance_id}")
             
             all_subdivisions = []
             processed_workflows = set()
+            
+            # 🔧 增加调试：检查工作流实例是否存在
+            workflow_check = await self.db.fetch_one("""
+                SELECT workflow_instance_id, status, created_at 
+                FROM workflow_instance 
+                WHERE workflow_instance_id = %s
+            """, workflow_instance_id)
+            logger.info(f"📊 [调试] 工作流实例检查: {workflow_check}")
+            
+            if not workflow_check:
+                logger.error(f"❌ [严重错误] 工作流实例不存在: {workflow_instance_id}")
+                return []
+            
+            # 🔧 增加调试：检查task_subdivision表是否有记录
+            subdivision_count = await self.db.fetch_one("""
+                SELECT COUNT(*) as count 
+                FROM task_subdivision ts
+                JOIN task_instance ti ON ts.original_task_id = ti.task_instance_id
+                WHERE ti.workflow_instance_id = %s
+                AND ts.is_deleted = FALSE
+            """, workflow_instance_id)
+            logger.info(f"📊 [调试] subdivision总数量: {subdivision_count['count'] if subdivision_count else 0}")
             
             async def recursive_query(current_workflow_id: uuid.UUID, current_depth: int = 1, max_depth: int = 10):
                 """递归查询subdivision"""
@@ -135,7 +113,20 @@ class WorkflowTemplateConnectionService:
                 processed_workflows.add(str(current_workflow_id))
                 logger.info(f"  🔍 查询第{current_depth}层: {current_workflow_id}")
                 
-                # 查询当前工作流的subdivisions
+                # 🔧 先检查基础数据
+                basic_check = await self.db.fetch_all("""
+                    SELECT COUNT(*) as total_subdivisions,
+                           COUNT(ts.sub_workflow_instance_id) as subdivisions_with_workflow,
+                           COUNT(ts.sub_workflow_base_id) as subdivisions_with_base_id
+                    FROM task_subdivision ts
+                    JOIN task_instance ti ON ts.original_task_id = ti.task_instance_id
+                    WHERE ti.workflow_instance_id = %s
+                    AND ts.is_deleted = FALSE
+                    AND ti.is_deleted = FALSE
+                """, current_workflow_id)
+                logger.info(f"    📊 基础统计: {dict(basic_check[0]) if basic_check else 'None'}")
+                
+                # 查询当前工作流的subdivisions - 修复版本
                 query = """
                 SELECT 
                     ts.subdivision_id,
@@ -177,28 +168,53 @@ class WorkflowTemplateConnectionService:
                 AND ts.is_deleted = FALSE
                 AND ti.is_deleted = FALSE
                 AND ni.is_deleted = FALSE
-                AND ts.sub_workflow_instance_id IS NOT NULL
+                -- 🔧 修复：不要过滤掉 sub_workflow_instance_id 为 NULL 的记录
+                -- 因为有些subdivision可能处于创建中或者有其他状态
                 ORDER BY ts.subdivision_created_at
                 """
                 
+                logger.info(f"    🔍 执行subdivision查询...")
                 subdivisions = await self.db.fetch_all(query, current_depth, current_workflow_id, current_workflow_id)
                 current_level_subdivisions = [dict(row) for row in subdivisions]
                 
-                if current_level_subdivisions:
-                    logger.info(f"    📦 第{current_depth}层找到 {len(current_level_subdivisions)} 个subdivision")
-                    all_subdivisions.extend(current_level_subdivisions)
+                logger.info(f"    📦 第{current_depth}层原始查询结果: {len(current_level_subdivisions)} 个subdivision")
+                
+                # 🔧 增加详细调试信息
+                for i, sub in enumerate(current_level_subdivisions[:3]):  # 显示前3个
+                    logger.info(f"      subdivision {i+1}:")
+                    logger.info(f"        subdivision_id: {sub.get('subdivision_id')}")
+                    logger.info(f"        sub_workflow_instance_id: {sub.get('sub_workflow_instance_id')}")
+                    logger.info(f"        sub_workflow_base_id: {sub.get('sub_workflow_base_id')}")
+                    logger.info(f"        subdivision_name: {sub.get('subdivision_name')}")
+                    logger.info(f"        task_title: {sub.get('task_title')}")
+                    logger.info(f"        sub_workflow_status: {sub.get('sub_workflow_status')}")
+                
+                # 过滤有效的subdivision：必须有sub_workflow_base_id
+                valid_subdivisions = []
+                for sub in current_level_subdivisions:
+                    if sub.get('sub_workflow_base_id'):
+                        valid_subdivisions.append(sub)
+                    else:
+                        logger.warning(f"      ⚠️ 跳过无效subdivision (缺少sub_workflow_base_id): {sub.get('subdivision_id')}")
+                
+                logger.info(f"    ✅ 第{current_depth}层有效subdivision: {len(valid_subdivisions)} 个")
+                
+                if valid_subdivisions:
+                    all_subdivisions.extend(valid_subdivisions)
                     
-                    # 递归查询子工作流的subdivisions
+                    # 递归查询子工作流的subdivisions - 只对有workflow_instance_id的继续递归
                     child_workflow_ids = []
-                    for sub in current_level_subdivisions:
-                        if sub['sub_workflow_instance_id']:
+                    for sub in valid_subdivisions:
+                        if sub.get('sub_workflow_instance_id'):
                             child_workflow_ids.append(uuid.UUID(sub['sub_workflow_instance_id']))
+                    
+                    logger.info(f"    🔄 准备递归查询 {len(child_workflow_ids)} 个子工作流")
                     
                     # 对每个子工作流进行递归查询
                     for child_id in child_workflow_ids:
                         await recursive_query(child_id, current_depth + 1, max_depth)
                 else:
-                    logger.info(f"    📭 第{current_depth}层无subdivision")
+                    logger.info(f"    📭 第{current_depth}层无有效subdivision")
             
             # 开始递归查询
             await recursive_query(workflow_instance_id, 1)
@@ -225,6 +241,7 @@ class WorkflowTemplateConnectionService:
     
     def _empty_connection_result(self, workflow_instance_id: uuid.UUID) -> Dict[str, Any]:
         """返回空的连接结果"""
+        logger.warning(f"🔍 返回空的连接结果: {workflow_instance_id}")
         return {
             "workflow_instance_id": str(workflow_instance_id),
             "template_connections": [],

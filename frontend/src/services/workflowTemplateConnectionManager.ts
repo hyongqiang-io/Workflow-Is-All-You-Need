@@ -126,14 +126,14 @@ export class WorkflowTemplateConnectionManager {
         const data = response.data.data;
         
         // 调试：检查返回的数据结构
-        console.log('🔍 [DEBUG] 完整API响应:', response.data);
-        console.log('🔍 [DEBUG] 数据结构检查:', {
-          hasDetailedConnectionGraph: !!data.detailed_connection_graph,
-          nodeCount: data.detailed_connection_graph?.nodes?.length || 0,
-          edgeCount: data.detailed_connection_graph?.edges?.length || 0,
-          firstNode: data.detailed_connection_graph?.nodes?.[0],
-          statistics: data.statistics
-        });
+        // console.log('🔍 [DEBUG] 完整API响应:', response.data);
+        // console.log('🔍 [DEBUG] 数据结构检查:', {
+        //   hasDetailedConnectionGraph: !!data.detailed_connection_graph,
+        //   nodeCount: data.detailed_connection_graph?.nodes?.length || 0,
+        //   edgeCount: data.detailed_connection_graph?.edges?.length || 0,
+        //   firstNode: data.detailed_connection_graph?.nodes?.[0],
+        //   statistics: data.statistics
+        // });
         
         // 检查是否真的是subdivision数据
         const nodes = data.detailed_connection_graph?.nodes || [];
@@ -156,11 +156,11 @@ export class WorkflowTemplateConnectionManager {
           }
         }
         
-        console.log('✅ [简化] subdivision树数据获取成功:', {
-          totalNodes: data.detailed_connection_graph?.nodes?.length || 0,
-          totalEdges: data.detailed_connection_graph?.edges?.length || 0,
-          maxDepth: data.statistics?.max_depth
-        });
+        // console.log('✅ [简化] subdivision树数据获取成功:', {
+        //   totalNodes: data.detailed_connection_graph?.nodes?.length || 0,
+        //   totalEdges: data.detailed_connection_graph?.edges?.length || 0,
+        //   maxDepth: data.statistics?.max_depth
+        // });
         return data;
       } else {
         throw new Error(response.data.message || '获取数据失败');
@@ -242,7 +242,7 @@ export class WorkflowTemplateConnectionManager {
       if (response.data.success) {
         return {
           success: true,
-          candidates: response.data.candidates || [],
+          candidates: response.data.data?.candidates || [], // 修复：从data.data.candidates获取
         };
       } else {
         return {

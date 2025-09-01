@@ -9,7 +9,6 @@ import {
   Card,
   Space,
   Typography,
-  Divider,
   Row,
   Col,
   Select,
@@ -57,8 +56,8 @@ const TaskSubdivisionModal: React.FC<TaskSubdivisionModalProps> = ({
   const [workflowNodes, setWorkflowNodes] = useState<Node[]>([]);
   const [workflowEdges, setWorkflowEdges] = useState<Edge[]>([]);
   
-  // 新增状态：工作流选择模式
-  const [workflowSelectionMode, setWorkflowSelectionMode] = useState<'existing' | 'create'>('create');
+  // 工作流选择模式
+  const [workflowSelectionMode, setWorkflowSelectionMode] = useState<'existing' | 'create'>('existing');
   const [existingWorkflows, setExistingWorkflows] = useState<any[]>([]);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [loadingWorkflows, setLoadingWorkflows] = useState(false);
@@ -153,7 +152,7 @@ const TaskSubdivisionModal: React.FC<TaskSubdivisionModalProps> = ({
   // 重置状态当模态框关闭时
   useEffect(() => {
     if (!visible) {
-      setWorkflowSelectionMode('create');
+      setWorkflowSelectionMode('existing');
       setSelectedWorkflowId(null);
       setNewWorkflowId(null);
       setWorkflowNodes([]);
@@ -225,7 +224,7 @@ const TaskSubdivisionModal: React.FC<TaskSubdivisionModalProps> = ({
 
       // 构建细分请求数据
       const subdivisionData = {
-        subdivision_name: values.subdivision_name,
+        subdivision_name: workflowSelectionMode === 'create' ? values.subdivision_name : `使用模板_${Date.now()}`,
         subdivision_description: values.subdivision_description || '',
         sub_workflow_base_id: templateId, // 🔧 明确指定使用的模板ID
         sub_workflow_data: subWorkflowData, // 只有创建新模板时才有数据
@@ -263,28 +262,6 @@ const TaskSubdivisionModal: React.FC<TaskSubdivisionModalProps> = ({
   };
 
   const getWorkflowDesigner = () => {
-    if (workflowSelectionMode === 'existing') {
-      return (
-        <div style={{ 
-          height: '500px', 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center',
-          border: '1px solid #d9d9d9', 
-          borderRadius: '6px',
-          backgroundColor: '#fafafa'
-        }}>
-          <div style={{ textAlign: 'center', color: '#666' }}>
-            <FolderOpenOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
-            <div>使用现有工作流模板</div>
-            <div style={{ fontSize: '12px', marginTop: '8px' }}>
-              {selectedWorkflowId ? `已选择模板: ${selectedWorkflowId}` : '请在上方选择一个工作流模板'}
-            </div>
-          </div>
-        </div>
-      );
-    }
-
     // 创建模式
     if (creatingWorkflow) {
       return (
@@ -334,6 +311,15 @@ const TaskSubdivisionModal: React.FC<TaskSubdivisionModalProps> = ({
     );
   };
 
+  // 检查是否可以提交
+  const canSubmit = () => {
+    if (workflowSelectionMode === 'existing') {
+      return selectedWorkflowId;
+    } else {
+      return workflowNodes.length > 0 && newWorkflowId && !creatingWorkflow;
+    }
+  };
+
   return (
     <Modal
       title={
@@ -369,9 +355,29 @@ const TaskSubdivisionModal: React.FC<TaskSubdivisionModalProps> = ({
           task_input_data: taskInputData
         }}
       >
-        {/* 任务信息传递设置 */}
+        {/* 步骤1: 工作流模板选择 */}
         <Card 
-          title="任务信息传递设置" 
+          title="步骤1: 选择工作流模板" 
+          size="small" 
+          style={{ marginBottom: 16 }}
+        >
+          <Radio.Group 
+            value={workflowSelectionMode} 
+            onChange={(e) => handleSelectionModeChange(e.target.value)}
+            style={{ marginBottom: 16 }}
+          >
+            <Radio.Button value="existing">
+              <FolderOpenOutlined /> 使用现有工作流
+            </Radio.Button>
+            <Radio.Button value="create">
+              <PlusOutlined /> 创建新工作流
+            </Radio.Button>
+          </Radio.Group>
+        </Card>
+
+        {/* 步骤2: 任务信息传递设置 */}
+        <Card 
+          title="步骤2: 任务信息传递设置" 
           size="small" 
           style={{ marginBottom: 16 }}
           extra={<Text type="secondary">这些信息将传递给子工作流</Text>}
@@ -422,120 +428,149 @@ const TaskSubdivisionModal: React.FC<TaskSubdivisionModalProps> = ({
           </Row>
         </Card>
 
-        {/* 细分工作流配置 */}
+        {/* 步骤3: 细分工作流配置 - 合并选择和设计 */}
         <Card 
-          title="细分工作流配置" 
+          title="步骤3: 细分工作流配置" 
           size="small" 
           style={{ marginBottom: 16 }}
         >
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                name="subdivision_name"
-                label="细分工作流名称"
-                rules={[{ required: true, message: '请输入细分工作流名称' }]}
-                extra={workflowSelectionMode === 'create' ? "将作为新工作流模板的名称" : "细分任务的标识名称"}
-              >
-                <Input 
-                  placeholder="如：详细数据处理流程" 
-                  onChange={(e) => {
-                    // 如果是创建模式且有名称，自动创建工作流模板
-                    if (workflowSelectionMode === 'create' && e.target.value && !newWorkflowId && !creatingWorkflow) {
-                      createNewWorkflowTemplate(e.target.value);
-                    }
-                  }}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="execute_immediately"
-                label="创建后立即执行"
-                valuePropName="checked"
-                extra="启用后将自动执行细分工作流并提交结果"
-              >
-                <Switch 
-                  checkedChildren="立即执行" 
-                  unCheckedChildren="稍后执行" 
-                  defaultChecked={true}
-                />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Form.Item
-            name="subdivision_description"
-            label="细分说明"
-          >
-            <TextArea 
-              rows={3} 
-              placeholder="说明为什么要细分这个任务，以及细分后的预期效果..." 
-            />
-          </Form.Item>
-        </Card>
-
-        {/* 工作流选择模式 */}
-        <Card 
-          title="工作流模板选择" 
-          size="small" 
-          style={{ marginBottom: 16 }}
-        >
-          <Radio.Group 
-            value={workflowSelectionMode} 
-            onChange={(e) => handleSelectionModeChange(e.target.value)}
-            style={{ marginBottom: 16 }}
-          >
-            <Radio.Button value="existing">
-              <FolderOpenOutlined /> 使用现有工作流
-            </Radio.Button>
-            <Radio.Button value="create">
-              <PlusOutlined /> 创建新工作流
-            </Radio.Button>
-          </Radio.Group>
-
+          {/* 使用现有工作流的配置 */}
           {workflowSelectionMode === 'existing' && (
-            <Form.Item
-              label="选择工作流模板"
-              extra="选择一个现有的工作流作为细分模板"
-            >
-              <Select
-                placeholder="请选择一个工作流模板"
-                loading={loadingWorkflows}
-                value={selectedWorkflowId}
-                onChange={setSelectedWorkflowId}
-                showSearch
-                filterOption={(input, option) => {
-                  if (!option || !option.children) return false;
-                  const children = option.children;
-                  return String(children).toLowerCase().includes(input.toLowerCase());
-                }}
+            <div>
+              <Form.Item
+                label="选择工作流模板"
+                extra="选择一个现有的工作流作为细分模板，不会修改原工作流"
               >
-                {existingWorkflows.map(workflow => (
-                  <Option key={workflow.workflow_base_id} value={workflow.workflow_base_id}>
-                    {workflow.name} ({workflow.status})
-                  </Option>
-                ))}
-              </Select>
-            </Form.Item>
+                <Select
+                  placeholder="请选择一个工作流模板"
+                  loading={loadingWorkflows}
+                  value={selectedWorkflowId}
+                  onChange={setSelectedWorkflowId}
+                  showSearch
+                  filterOption={(input, option) => {
+                    if (!option || !option.children) return false;
+                    const children = option.children;
+                    return String(children).toLowerCase().includes(input.toLowerCase());
+                  }}
+                >
+                  {existingWorkflows.map(workflow => (
+                    <Option key={workflow.workflow_base_id} value={workflow.workflow_base_id}>
+                      {workflow.name} ({workflow.status})
+                    </Option>
+                  ))}
+                </Select>
+              </Form.Item>
+              
+              {/* 现有工作流的预览信息 */}
+              {selectedWorkflowId && (
+                <div style={{ 
+                  height: '200px', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  border: '1px solid #d9d9d9', 
+                  borderRadius: '6px',
+                  backgroundColor: '#fafafa',
+                  marginBottom: '16px'
+                }}>
+                  <div style={{ textAlign: 'center', color: '#666' }}>
+                    <FolderOpenOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
+                    <div>将使用现有工作流模板</div>
+                    <div style={{ fontSize: '12px', marginTop: '8px' }}>
+                      已选择模板: {existingWorkflows.find(w => w.workflow_base_id === selectedWorkflowId)?.name || selectedWorkflowId}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#999', marginTop: '4px' }}>
+                      注意：不会修改原工作流，仅作为模板使用
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item
+                    name="execute_immediately"
+                    label="创建后立即执行"
+                    valuePropName="checked"
+                    extra="启用后将自动执行细分工作流并提交结果"
+                  >
+                    <Switch 
+                      checkedChildren="立即执行" 
+                      unCheckedChildren="稍后执行" 
+                      defaultChecked={true}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
+            </div>
+          )}
+          
+          {/* 创建新工作流的配置和设计 */}
+          {workflowSelectionMode === 'create' && (
+            <div>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item
+                    name="subdivision_name"
+                    label="细分工作流名称"
+                    rules={[{ required: workflowSelectionMode === 'create', message: '请输入细分工作流名称' }]}
+                    extra="将作为新工作流模板的名称"
+                  >
+                    <Input 
+                      placeholder="如：详细数据处理流程" 
+                      onChange={(e) => {
+                        // 如果是创建模式且有名称，自动创建工作流模板
+                        if (e.target.value && !newWorkflowId && !creatingWorkflow) {
+                          createNewWorkflowTemplate(e.target.value);
+                        }
+                      }}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item
+                    name="execute_immediately"
+                    label="创建后立即执行"
+                    valuePropName="checked"
+                    extra="启用后将自动执行细分工作流并提交结果"
+                  >
+                    <Switch 
+                      checkedChildren="立即执行" 
+                      unCheckedChildren="稍后执行" 
+                      defaultChecked={true}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
+
+              <Form.Item
+                name="subdivision_description"
+                label="细分说明"
+              >
+                <TextArea 
+                  rows={3} 
+                  placeholder="说明为什么要细分这个任务，以及细分后的预期效果..." 
+                />
+              </Form.Item>
+              
+              {/* 合并工作流设计器 */}
+              <div style={{ marginTop: '16px' }}>
+                <div style={{ marginBottom: '8px', fontWeight: '500' }}>
+                  工作流设计
+                </div>
+                {getWorkflowDesigner()}
+              </div>
+            </div>
           )}
         </Card>
-
-        <Divider orientation="left">
-          <Space>
-            <BranchesOutlined />
-            {workflowSelectionMode === 'existing' ? '工作流模板预览' : '工作流设计'}
-          </Space>
-        </Divider>
-
-        {/* 工作流设计器或预览 */}
-        {getWorkflowDesigner()}
 
         <div style={{ marginTop: 16, padding: '12px', backgroundColor: '#f0f2f5', borderRadius: '6px' }}>
           <Text type="secondary" style={{ fontSize: '12px' }}>
             💡 提示：<br />
             {workflowSelectionMode === 'existing' ? (
               <>• 使用现有工作流模板可以复用之前设计好的流程<br />
-              • 选择的模板将被用作细分工作流的基础结构</>
+              • 选择的模板将被用作细分工作流的基础结构<br />
+              • 原工作流不会被修改，只是作为模板使用</>
             ) : (
               <>• 使用设计器创建新的工作流模板<br />
               • 当前设计包含 <Text strong>{workflowNodes.length}</Text> 个节点和 <Text strong>{workflowEdges.length}</Text> 个连接</>
@@ -551,11 +586,7 @@ const TaskSubdivisionModal: React.FC<TaskSubdivisionModalProps> = ({
               htmlType="submit" 
               loading={loading}
               icon={<SaveOutlined />}
-              disabled={
-                workflowSelectionMode === 'existing' 
-                  ? !selectedWorkflowId 
-                  : (workflowNodes.length === 0 || !newWorkflowId || creatingWorkflow)
-              }
+              disabled={!canSubmit()}
             >
               创建细分
             </Button>

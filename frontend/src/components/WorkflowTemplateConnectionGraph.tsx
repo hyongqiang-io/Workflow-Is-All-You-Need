@@ -358,9 +358,9 @@ export const WorkflowTemplateConnectionGraph: React.FC<Props> = ({
       console.log('🔍 [WorkflowTree] 收到API响应:', response);
       
       if (response.detailed_connection_graph && response.detailed_connection_graph.nodes) {
-        console.log('✅ [WorkflowTree] 处理subdivision工作流树数据');
-        console.log('🔍 [DEBUG] nodes数据:', response.detailed_connection_graph.nodes);
-        console.log('🔍 [DEBUG] 第一个node示例:', response.detailed_connection_graph.nodes[0]);
+        // console.log('✅ [WorkflowTree] 处理subdivision工作流树数据');
+        // console.log('🔍 [DEBUG] nodes数据:', response.detailed_connection_graph.nodes);
+        // console.log('🔍 [DEBUG] 第一个node示例:', response.detailed_connection_graph.nodes[0]);
         
         // 直接使用SubdivisionTree返回的数据，并添加合并模式支持
         const workflowNodes: Node[] = response.detailed_connection_graph.nodes.map((nodeData: any) => {
