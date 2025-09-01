@@ -22,13 +22,20 @@ class WorkflowTemplateNode:
     workflow_instance_id: Optional[str] = None
     parent_node: Optional['WorkflowTemplateNode'] = None
     children: List['WorkflowTemplateNode'] = field(default_factory=list)
-    node_replacements: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # 记录内部节点的替换关系: node_id -> replacement_info
+    node_replacements: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # 记录内部节点的替换关系: node_id -> source_subdivision
     depth: int = 0
     status: str = "unknown"
     # 添加字段来存储来源subdivision信息
     source_subdivision: Optional[Dict[str, Any]] = None
     
-    def add_child_replacement(self, child_node: 'WorkflowTemplateNode', replacement_info: Dict[str, Any]):
+    # 🔧 新增：合并所需的完整数据，避免后续查subdivision表
+    original_node_id: Optional[str] = None  # 被替换的原始节点ID
+    original_task_id: Optional[str] = None  # 被替换的原始任务ID
+    original_node_name: Optional[str] = None  # 被替换的原始节点名称
+    original_node_position: Optional[Dict[str, int]] = None  # 原始节点位置 {x, y}
+    merge_node_key: Optional[str] = None  # 用于合并操作的唯一标识
+    
+    def add_child_replacement(self, child_node: 'WorkflowTemplateNode', source_subdivision: Dict[str, Any]):
         """添加子工作流替换关系 - 记录哪个内部节点被哪个子工作流替换"""
         child_node.parent_node = self
         child_node.depth = self.depth + 1
@@ -38,19 +45,24 @@ class WorkflowTemplateNode:
             self.children.append(child_node)
         
         # 记录替换关系：内部节点ID -> 替换信息
-        original_node_id = replacement_info.get('original_node_id')  # 被替换的节点ID
-        if original_node_id:
-            self.node_replacements[str(original_node_id)] = {
+        original_node_id = source_subdivision.get('original_task_id')  # 修正：使用original_task_id
+        original_node_name = source_subdivision.get('original_node_name', '')
+        
+        # 如果没有original_task_id，使用original_node_name作为key
+        replacement_key = str(original_node_id) if original_node_id else original_node_name
+        
+        if replacement_key:
+            self.node_replacements[replacement_key] = {
                 'child_workflow_base_id': child_node.workflow_base_id,
                 'child_workflow_name': child_node.workflow_name,
                 'child_workflow_instance_id': child_node.workflow_instance_id,
-                'subdivision_id': replacement_info.get('subdivision_id'),
-                'original_node_name': replacement_info.get('original_node_name'),
-                'task_title': replacement_info.get('task_title'),
-                'created_at': replacement_info.get('created_at')
+                'subdivision_id': source_subdivision.get('subdivision_id'),
+                'original_node_name': original_node_name,
+                'task_title': source_subdivision.get('task_title'),
+                'created_at': source_subdivision.get('created_at')
             }
             
-        logger.info(f"  📎 添加子工作流替换: {self.workflow_name}[{replacement_info.get('original_node_name')}] -> {child_node.workflow_name}")
+        logger.info(f"  📎 添加子工作流替换: {self.workflow_name}[{original_node_name}] -> {child_node.workflow_name}")
     
     def get_replacement_for_node(self, node_id: str) -> Optional[Dict[str, Any]]:
         """获取指定内部节点的替换信息"""
@@ -132,14 +144,19 @@ class WorkflowTemplateTree:
             self.instance_to_base[root_workflow_instance_id] = root_node.workflow_base_id
             logger.info(f"  🌳 创建根节点: {root_node.workflow_name} ({str(root_node.workflow_base_id)[:8]})")
         
-        # 第二步：为每个subdivision记录创建工作流模板节点
-        # 即使是同一个工作流模板，不同的subdivision也要创建独立的节点
-        template_instances = {}  # subdivision_id -> subdivision数据
+        # 第二步：为每个subdivision记录创建工作流模板节点，并预查询原始节点信息
+        template_instances = {}
+        
+        # 🔧 批量查询原始节点信息，减少数据库查询
+        original_nodes_info = await self._batch_get_original_nodes_info(subdivisions)
         
         for sub in subdivisions:
             subdivision_id = str(sub['subdivision_id'])
             child_workflow_base_id = str(sub['sub_workflow_base_id'])
             child_workflow_instance_id = str(sub['sub_workflow_instance_id'])
+            
+            # 从预查询结果中获取原始节点信息
+            original_node_info = original_nodes_info.get(subdivision_id)
             
             # 为每个subdivision创建独立的工作流模板节点
             template_instances[subdivision_id] = sub
@@ -171,13 +188,25 @@ class WorkflowTemplateTree:
             child_workflow_base_id = str(sub_data['sub_workflow_base_id'])
             child_workflow_instance_id = str(sub_data['sub_workflow_instance_id'])
             
+            # 获取预查询的原始节点信息
+            original_node_info = original_nodes_info.get(subdivision_id, {})
+            
             # 使用subdivision_id作为节点的唯一标识，但保留工作流模板的信息
             node = WorkflowTemplateNode(
                 workflow_base_id=child_workflow_base_id,  # 保留模板ID用于识别
                 workflow_name=sub_data['sub_workflow_name'] or f"Workflow_{str(child_workflow_base_id)[:8]}",
                 workflow_instance_id=child_workflow_instance_id,
                 status=sub_data.get('sub_workflow_status', 'unknown'),
-                source_subdivision=sub_data  # 存储完整的subdivision信息
+                source_subdivision=sub_data,  # 存储完整的subdivision信息
+                # 🔧 新增：合并所需的完整数据
+                original_node_id=original_node_info.get('node_id'),
+                original_task_id=original_node_info.get('original_task_id'),
+                original_node_name=original_node_info.get('name'),
+                original_node_position={
+                    'x': original_node_info.get('position_x', 0),
+                    'y': original_node_info.get('position_y', 0)
+                } if original_node_info.get('position_x') is not None else None,
+                merge_node_key=subdivision_id  # 使用subdivision_id作为合并标识
             )
             
             # 使用subdivision_id作为节点的key，确保每个subdivision都有独立节点
@@ -227,6 +256,76 @@ class WorkflowTemplateTree:
             logger.error(f"创建根节点失败: {e}")
             return None
     
+    async def _batch_get_original_nodes_info(self, subdivisions: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """批量查询原始节点信息，避免重复数据库查询"""
+        from ..repositories.base import BaseRepository
+        
+        if not subdivisions:
+            return {}
+            
+        try:
+            db = BaseRepository("workflow_template_tree").db
+            
+            # 提取所有subdivision_id
+            subdivision_ids = [str(sub['subdivision_id']) for sub in subdivisions]
+            logger.info(f"🔍 批量查询 {len(subdivision_ids)} 个subdivision的原始节点信息")
+            
+            # 构建批量查询SQL
+            placeholders = ','.join(['%s'] * len(subdivision_ids))
+            
+            # 批量查询subdivision -> original_task -> node信息
+            original_nodes = await db.fetch_all(f"""
+                SELECT 
+                    CAST(ts.subdivision_id AS CHAR) as subdivision_id,
+                    ts.original_task_id,
+                    ti.task_instance_id,
+                    ni.node_instance_id,
+                    n.node_id, 
+                    n.position_x, 
+                    n.position_y, 
+                    n.name, 
+                    n.type, 
+                    n.task_description,
+                    n.workflow_id, 
+                    w.name as workflow_name
+                FROM task_subdivision ts
+                JOIN task_instance ti ON ts.original_task_id = ti.task_instance_id  
+                JOIN node_instance ni ON ti.node_instance_id = ni.node_instance_id
+                JOIN node n ON ni.node_id = n.node_id
+                JOIN workflow w ON n.workflow_id = w.workflow_id
+                WHERE ts.subdivision_id IN ({placeholders})
+                AND ts.is_deleted = FALSE
+            """, *subdivision_ids)
+            
+            # 构建subdivision_id -> 原始节点信息的映射
+            result = {}
+            for node_info in original_nodes:
+                subdivision_id = node_info['subdivision_id']
+                result[subdivision_id] = {
+                    'original_task_id': node_info['original_task_id'],
+                    'node_id': node_info['node_id'],
+                    'position_x': node_info['position_x'],
+                    'position_y': node_info['position_y'],
+                    'name': node_info['name'],
+                    'type': node_info['type'],
+                    'task_description': node_info['task_description'],
+                    'workflow_id': node_info['workflow_id'],
+                    'workflow_name': node_info['workflow_name']
+                }
+            
+            logger.info(f"✅ 批量查询完成: 找到 {len(result)} 个原始节点信息")
+            
+            # 调试：显示缺失的subdivision
+            missing_subdivisions = set(subdivision_ids) - set(result.keys())
+            if missing_subdivisions:
+                logger.warning(f"⚠️ 缺失原始节点信息的subdivision: {list(missing_subdivisions)}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ 批量查询原始节点信息失败: {e}")
+            return {}
+    
     def _build_hierarchy_from_subdivisions(self, subdivisions: List[Dict[str, Any]], 
                                          root_workflow_instance_id: str):
         """根据subdivision数据构建层级关系 - subdivision作为边的信息"""
@@ -239,7 +338,7 @@ class WorkflowTemplateTree:
             parent_workflow_instance_id = str(sub.get('root_workflow_instance_id', ''))
             
             # 构建替换信息 - 需要包含被替换的节点信息
-            replacement_info = {
+            source_subdivision = {
                 'subdivision_id': subdivision_id,
                 'original_node_id': sub.get('original_task_id'),  # 添加被替换的节点ID
                 'original_node_name': sub.get('original_node_name', ''),
@@ -265,8 +364,8 @@ class WorkflowTemplateTree:
             child_node = self.nodes.get(subdivision_id)
             
             if parent_node and child_node and child_node.parent_node is None:
-                parent_node.add_child_replacement(child_node, replacement_info)
-                logger.info(f"    📎 建立替换关系: {parent_node.workflow_name}[{replacement_info['original_node_name']}] -> {child_node.workflow_name}")
+                parent_node.add_child_replacement(child_node, sub)
+                logger.info(f"    📎 建立替换关系: {parent_node.workflow_name}[{sub.get('original_node_name', '')}] -> {child_node.workflow_name}")
             else:
                 if not parent_node:
                     logger.warning(f"    ⚠️ 找不到父工作流模板: {parent_workflow_instance_id}")
@@ -300,14 +399,141 @@ class WorkflowTemplateTree:
             is_root_last = (i == len(self.roots) - 1)
             print_node(root, "", is_root_last)
     
+    def get_merge_candidates_with_tree_data(self) -> List[Dict[str, Any]]:
+        """获取可合并的候选节点 - 直接从树数据生成，无需查询subdivision表"""
+        candidates = []
+        
+        # 获取所有非根节点（这些节点代表可合并的工作流）
+        for node_key, node in self.nodes.items():
+            if node.parent_node is not None:  # 排除根节点
+                # 使用tree中已有的完整数据构建候选项
+                candidate = {
+                    'merge_node_key': node.merge_node_key or node_key,  # 合并标识
+                    'subdivision_id': node.merge_node_key or node_key,  # 兼容字段
+                    'parent_subdivision_id': self._find_node_key(node.parent_node) if node.parent_node else None,
+                    'workflow_instance_id': node.workflow_instance_id or "",
+                    'workflow_base_id': node.workflow_base_id,
+                    'node_name': node.original_node_name or node.workflow_name,
+                    'depth': node.depth,
+                    'can_merge': True,
+                    'merge_reason': "基于工作流模板树",
+                    # 合并所需的完整数据
+                    'original_node_id': node.original_node_id,
+                    'original_task_id': node.original_task_id,
+                    'original_node_position': node.original_node_position,
+                    'status': node.status,
+                    'tree_node': node  # 直接引用树节点，避免后续查询
+                }
+                candidates.append(candidate)
+        
+        # 按深度从高到低排序（深度优先，叶子节点先合并）
+        candidates.sort(key=lambda c: c['depth'], reverse=True)
+        
+        logger.info(f"🔍 从工作流模板树获得 {len(candidates)} 个合并候选项")
+        return candidates
+    
+    def _find_node_key(self, target_node: WorkflowTemplateNode) -> Optional[str]:
+        """根据节点对象查找对应的key"""
+        for key, node in self.nodes.items():
+            if node is target_node:
+                return key
+        return None
+    
+    def calculate_recursive_merge_path(self, selected_node_keys: List[str]) -> List[Dict[str, Any]]:
+        """
+        计算递归合并路径 - 基于工作流模板树结构
+        
+        从选中的叶子节点开始，沿着树的路径向上递归到根节点
+        返回需要合并的完整路径上的所有节点
+        """
+        logger.info(f"🌳 计算递归合并路径: {len(selected_node_keys)} 个选中节点")
+        logger.info(f"🔍 [Debug] 选中的节点keys: {selected_node_keys}")
+        
+        # 🔧 调试：显示树中所有可用的keys
+        available_keys = list(self.nodes.keys())
+        logger.info(f"🔍 [Debug] 树中可用的keys数量: {len(available_keys)}")
+        logger.info(f"🔍 [Debug] 树中前5个keys示例: {available_keys[:5]}")
+        
+        # 🔧 调试：检查key格式差异
+        if selected_node_keys and available_keys:
+            selected_sample = selected_node_keys[0]
+            available_sample = available_keys[0]
+            logger.info(f"🔍 [Debug] 选中key示例: '{selected_sample}' (长度: {len(selected_sample)})")
+            logger.info(f"🔍 [Debug] 可用key示例: '{available_sample}' (长度: {len(available_sample)})")
+        
+        recursive_candidates = []
+        processed_keys = set()
+        
+        for selected_key in selected_node_keys:
+            if selected_key not in self.nodes:
+                logger.warning(f"⚠️ 未找到选中的节点: {selected_key}")
+                
+                # 🔧 调试：尝试模糊匹配以发现问题
+                potential_matches = []
+                for available_key in available_keys:
+                    if selected_key in available_key or available_key in selected_key:
+                        potential_matches.append(available_key)
+                
+                if potential_matches:
+                    logger.info(f"🔍 [Debug] 可能匹配的keys: {potential_matches[:3]}")
+                else:
+                    logger.warning(f"🔍 [Debug] 没有找到任何可能匹配的keys")
+                continue
+                
+            logger.info(f"🔍 追踪节点路径: {selected_key}")
+            
+            # 从当前节点向上追踪到根节点
+            current_node = self.nodes[selected_key]
+            path_nodes = []
+            
+            while current_node is not None:
+                current_key = self._find_node_key(current_node)
+                
+                if current_key and current_key not in processed_keys:
+                    # 只有非根节点才需要合并（根节点代表初始工作流）
+                    if current_node.parent_node is not None:
+                        path_nodes.append({
+                            'merge_node_key': current_key,
+                            'subdivision_id': current_key,  # 兼容字段
+                            'workflow_instance_id': current_node.workflow_instance_id or "",
+                            'workflow_base_id': current_node.workflow_base_id,
+                            'node_name': current_node.original_node_name or current_node.workflow_name,
+                            'depth': current_node.depth,
+                            'can_merge': True,
+                            'merge_reason': f"递归合并路径节点",
+                            # 合并所需的完整数据
+                            'original_node_id': current_node.original_node_id,
+                            'original_task_id': current_node.original_task_id,
+                            'original_node_position': current_node.original_node_position,
+                            'status': current_node.status,
+                            'tree_node': current_node  # 直接引用树节点
+                        })
+                        processed_keys.add(current_key)
+                        logger.info(f"   ✅ 添加到递归路径: {current_node.workflow_name} (深度: {current_node.depth})")
+                
+                # 向上移动到父节点
+                current_node = current_node.parent_node
+            
+            recursive_candidates.extend(path_nodes)
+        
+        # 按深度从高到低排序（从叶子到根）
+        recursive_candidates.sort(key=lambda c: c['depth'], reverse=True)
+        
+        logger.info(f"🔄 递归合并路径计算完成:")
+        for candidate in recursive_candidates:
+            logger.info(f"   - {candidate['node_name']} (深度: {candidate['depth']})")
+        
+        return recursive_candidates
+    
     def get_all_nodes(self) -> List[WorkflowTemplateNode]:
         """获取所有节点的扁平列表"""
         return list(self.nodes.values())
     
     def get_merge_candidates(self) -> List[WorkflowTemplateNode]:
-        """获取可合并的候选节点 - 按深度从高到低排序"""
+        """获取可合并的候选节点 - 按深度从高到低排序，包括根节点"""
         all_nodes = self.get_all_nodes()
-        # 从最深层开始（叶子节点优先合并）
+        # 从最深层开始，包括根节点（深度0）
+        # 根节点最后合并，因为它需要所有子工作流先完成合并
         return sorted(all_nodes, key=lambda n: n.depth, reverse=True)
     
     def get_max_depth(self) -> int:
@@ -394,7 +620,7 @@ class WorkflowTemplateTree:
                         "data": {
                             "relationship": "workflow_replacement",
                             "original_node_id": child_key,
-                            "replacement_info": {
+                            "source_subdivision": {
                                 'subdivision_id': child_key,
                                 'original_node_name': original_node_name,
                                 'task_title': sub_data.get('task_title', ''),

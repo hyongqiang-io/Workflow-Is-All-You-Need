@@ -6,7 +6,10 @@
       "Bash(./start-dev-simple.sh:*)",
       "Bash(python3:*)",
       "Bash(curl:*)",
-      "Bash(mysql:*)"
+      "Bash(mysql:*)",
+      "Bash(python:*)",
+      "Bash(sed:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": [],

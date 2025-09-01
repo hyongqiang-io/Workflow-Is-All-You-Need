@@ -261,21 +261,23 @@ export class WorkflowTemplateConnectionManager {
   }
 
   /**
-   * 执行工作流合并
+   * 执行工作流合并 - 支持递归合并
    */
-  async executeWorkflowMerge(workflowInstanceId: string, selectedSubdivisions: string[]): Promise<{
+  async executeWorkflowMerge(workflowInstanceId: string, selectedNodes: string[]): Promise<{
     success: boolean;
     data?: any;
     message?: string;
   }> {
     try {
-      console.log('🚀 [API] 执行工作流合并:', { workflowInstanceId, selectedSubdivisions });
+      console.log('🚀 [递归合并] 执行工作流合并:', { workflowInstanceId, selectedNodes });
       
       const response = await templateConnectionAPI.post(
         `/workflow-merge/${workflowInstanceId}/execute`,
         {
-          selected_subdivisions: selectedSubdivisions,
+          selected_nodes: selectedNodes,  // 🔧 使用新的节点选择字段
+          selected_subdivisions: selectedNodes, // 🔧 向后兼容
           merge_config: {
+            recursive: true,  // 启用递归合并
             from_lowest_level: true,
             preserve_connections: true,
             remove_start_end_nodes: true
@@ -283,7 +285,7 @@ export class WorkflowTemplateConnectionManager {
         }
       );
 
-      console.log('✅ [API] 合并执行响应:', response.data);
+      console.log('✅ [递归合并] 合并执行响应:', response.data);
       
       if (response.data.success) {
         return {
@@ -298,7 +300,7 @@ export class WorkflowTemplateConnectionManager {
       }
       
     } catch (error: any) {
-      console.error('❌ [API] 工作流合并失败:', error);
+      console.error('❌ [递归合并] 工作流合并失败:', error);
       return {
         success: false,
         message: error.response?.data?.detail || error.message || '工作流合并失败'

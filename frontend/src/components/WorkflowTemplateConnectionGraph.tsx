@@ -61,11 +61,11 @@ const WorkflowNodeComponent: React.FC<{ data: any }> = ({ data }) => {
   return (
     <div 
       style={{
-        border: `3px solid ${isSelected ? '#ff6b35' : statusColor}`,
+        border: `3px solid ${isSelected ? '#722ed1' : statusColor}`, // 🔧 选中时使用紫色边框
         borderRadius: '16px',
         padding: '20px',
         backgroundColor: isSelected 
-          ? '#fff7e6' 
+          ? '#f9f0ff' // 🔧 选中时使用紫色背景
           : getStatusBackground(data.status),
         minWidth: isMainWorkflow ? '250px' : '220px',
         maxWidth: isMainWorkflow ? '300px' : '280px',
@@ -73,7 +73,7 @@ const WorkflowNodeComponent: React.FC<{ data: any }> = ({ data }) => {
         boxShadow: isMainWorkflow 
           ? '0 12px 32px rgba(114,46,209,0.3)' 
           : isSelected 
-          ? '0 8px 24px rgba(255,107,53,0.4)'
+          ? '0 8px 24px rgba(114,46,209,0.4)' // 🔧 选中时使用紫色阴影
           : `0 6px 16px rgba(0,0,0,0.15)`,
         position: 'relative',
         transition: 'all 0.3s ease',
@@ -82,9 +82,10 @@ const WorkflowNodeComponent: React.FC<{ data: any }> = ({ data }) => {
         opacity: isInMergeMode && !canMerge ? 0.5 : 1
       }}
       onClick={() => {
-        const nodeId = data.id || data.workflow_instance_id; // 备用ID获取方式
+        // 🔧 修复：使用正确的节点ID（应该是从nodes数组中获取的实际ID）
+        const actualNodeId = data.actualNodeId || data.id || data.workflow_instance_id;
         console.log('🖱️ [NodeClick] 节点点击:', { 
-          nodeId, 
+          actualNodeId, 
           dataId: data.id,
           workflowInstanceId: data.workflow_instance_id,
           isInMergeMode, 
@@ -93,9 +94,9 @@ const WorkflowNodeComponent: React.FC<{ data: any }> = ({ data }) => {
           isSelected 
         });
         
-        if (isInMergeMode && !isMainWorkflow) {
+        if (isInMergeMode && !isMainWorkflow && canMerge) {
           // 合并模式下：非主工作流都可以选择
-          data.onNodeSelection?.(nodeId, !isSelected);
+          data.onNodeSelection?.(actualNodeId, !isSelected);
         } else {
           // 普通点击逻辑
           data.onNodeClick?.(data);
@@ -111,7 +112,7 @@ const WorkflowNodeComponent: React.FC<{ data: any }> = ({ data }) => {
           width: '24px',
           height: '24px',
           borderRadius: '50%',
-          backgroundColor: isSelected ? '#ff6b35' : '#e8e8e8',
+          backgroundColor: isSelected ? '#722ed1' : '#e8e8e8', // 🔧 选中时使用紫色
           border: '2px solid white',
           display: 'flex',
           alignItems: 'center',
@@ -301,19 +302,152 @@ export const WorkflowTemplateConnectionGraph: React.FC<Props> = ({
   }, [workflowInstanceId, mergeMode]);
 
 
-  // 节点选择处理
+  // 构建节点层级关系映射
+  const buildNodeHierarchy = useCallback(() => {
+    const nodeMap = new Map<string, any>();
+    const parentChildMap = new Map<string, string[]>(); // parent -> children
+    const childParentMap = new Map<string, string>(); // child -> parent
+    
+    // 建立节点映射
+    nodes.forEach(node => {
+      nodeMap.set(node.id, node);
+    });
+    
+    // 建立父子关系映射
+    edges.forEach(edge => {
+      const parentId = edge.source;
+      const childId = edge.target;
+      
+      // parent -> children
+      if (!parentChildMap.has(parentId)) {
+        parentChildMap.set(parentId, []);
+      }
+      parentChildMap.get(parentId)!.push(childId);
+      
+      // child -> parent  
+      childParentMap.set(childId, parentId);
+    });
+    
+    return { nodeMap, parentChildMap, childParentMap };
+  }, [nodes, edges]);
+
+  // 获取从节点到根节点的完整路径
+  const getPathToRoot = useCallback((nodeId: string, childParentMap: Map<string, string>): string[] => {
+    const path: string[] = [];
+    let currentId: string | undefined = nodeId;
+    
+    while (currentId) {
+      path.push(currentId);
+      currentId = childParentMap.get(currentId);
+    }
+    
+    return path;
+  }, []);
+
+  // 获取节点的所有下游子节点
+  const getDownstreamNodes = useCallback((nodeId: string, childParentMap: Map<string, string>): string[] => {
+    const downstream: string[] = [];
+    const visited = new Set<string>();
+    
+    // 找到所有以当前节点为父节点的子节点
+    edges.forEach(edge => {
+      if (edge.source === nodeId && !visited.has(edge.target)) {
+        downstream.push(edge.target);
+        visited.add(edge.target);
+        // 递归获取子节点的下游节点
+        const childDownstream = getDownstreamNodes(edge.target, childParentMap);
+        childDownstream.forEach(childNodeId => {
+          if (!visited.has(childNodeId)) {
+            downstream.push(childNodeId);
+            visited.add(childNodeId);
+          }
+        });
+      }
+    });
+    
+    return downstream;
+  }, [edges]);
+
+  // 递归节点选择处理 - 实现递归选择到根节点，以及下游节点清理
   const handleNodeSelection = useCallback((nodeId: string, isSelected: boolean) => {
+    console.log('🔘 [MergeMode] 节点选择:', { nodeId, isSelected });
+    
+    const { childParentMap } = buildNodeHierarchy();
+    
     setSelectedNodes(prev => {
       const newSelected = new Set(prev);
+      
       if (isSelected) {
-        newSelected.add(nodeId);
+        // 🔧 新增：检查是否有下游节点已被选中
+        const downstreamNodes = getDownstreamNodes(nodeId, childParentMap);
+        const hasSelectedDownstream = downstreamNodes.some(downId => newSelected.has(downId));
+        
+        if (hasSelectedDownstream) {
+          console.log('🚨 [下游清理] 发现下游已选中节点，清理下游选择:', downstreamNodes.filter(id => newSelected.has(id)));
+          // 清理所有下游已选中的节点
+          downstreamNodes.forEach(downId => {
+            if (newSelected.has(downId)) {
+              newSelected.delete(downId);
+              console.log('❌ [下游清理] 移除下游节点:', downId);
+            }
+          });
+        }
+        
+        // 选中节点：选中从当前节点到根节点的完整路径
+        const pathToRoot = getPathToRoot(nodeId, childParentMap);
+        console.log('🔄 [递归选择] 选中路径:', pathToRoot);
+        
+        pathToRoot.forEach(id => {
+          // 检查是否是主工作流节点
+          const node = nodes.find(n => n.id === id);
+          if (node && !node.data?.isMainWorkflow) {
+            newSelected.add(id);
+            console.log('✅ [递归选择] 添加节点:', id, node.data?.label);
+          } else if (node?.data?.isMainWorkflow) {
+            console.log('⏭️ [递归选择] 跳过主工作流节点:', id);
+          }
+        });
       } else {
+        // 取消选中节点：只取消选中当前节点，但检查是否会破坏路径完整性
         newSelected.delete(nodeId);
+        console.log('❌ [递归选择] 移除节点:', nodeId);
+        
+        // 检查并清理受影响的子节点路径
+        // 如果一个节点被取消选中，那么它的所有子节点也应该检查路径完整性
+        const nodesToCheck = new Set([nodeId]);
+        const visited = new Set<string>();
+        
+        while (nodesToCheck.size > 0) {
+          const currentId = nodesToCheck.values().next().value;
+          nodesToCheck.delete(currentId);
+          
+          if (visited.has(currentId)) continue;
+          visited.add(currentId);
+          
+          // 找到所有将这个节点作为父节点的子节点
+          edges.forEach(edge => {
+            if (edge.source === currentId && newSelected.has(edge.target)) {
+              // 检查这个子节点到根的路径是否还完整
+              const childPath = getPathToRoot(edge.target, childParentMap);
+              const pathBroken = childPath.some(pathNodeId => {
+                const pathNode = nodes.find(n => n.id === pathNodeId);
+                return pathNode && !pathNode.data?.isMainWorkflow && !newSelected.has(pathNodeId);
+              });
+              
+              if (pathBroken) {
+                console.log('💔 [路径检查] 路径中断，移除子节点:', edge.target);
+                newSelected.delete(edge.target);
+                nodesToCheck.add(edge.target); // 递归检查这个子节点的子节点
+              }
+            }
+          });
+        }
       }
-      console.log('🔘 [MergeMode] 节点选择更新:', Array.from(newSelected));
+      
+      console.log('🔘 [最终选择] 节点选择更新:', Array.from(newSelected));
       return newSelected;
     });
-  }, []);
+  }, [buildNodeHierarchy, getPathToRoot, nodes, edges, getDownstreamNodes]);
 
   // 切换合并模式
   const toggleMergeMode = useCallback(() => {
@@ -378,7 +512,8 @@ export const WorkflowTemplateConnectionGraph: React.FC<Props> = ({
             mergeMode,
             canMerge,
             candidatesCount: mergeCandidates.length,
-            nodeType: nodeData.type
+            nodeType: nodeData.type,
+            isSelected
           });
           
           return {
@@ -387,6 +522,7 @@ export const WorkflowTemplateConnectionGraph: React.FC<Props> = ({
             position: nodeData.position,
             data: {
               ...nodeData.data,
+              actualNodeId: nodeId, // 🔧 修复：确保正确的节点ID传递
               isSelected,
               isInMergeMode: mergeMode,
               canMerge,

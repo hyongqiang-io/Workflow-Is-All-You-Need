@@ -99,29 +99,26 @@ async def execute_workflow_merge(
         
         # 获取请求参数
         selected_subdivisions = request.get("selected_subdivisions", [])
+        selected_nodes = request.get("selected_nodes", [])  # 支持前端传递的节点ID
         merge_config = request.get("merge_config", {})
         
-        if not selected_subdivisions:
+        # 🔧 兼容前端节点选择：如果传递了selected_nodes，优先使用
+        selected_merges = selected_nodes if selected_nodes else selected_subdivisions
+        
+        if not selected_merges:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="未选择要合并的subdivision"
+                detail="未选择要合并的节点"
             )
         
-        # 验证subdivision ID格式
-        for subdivision_id in selected_subdivisions:
-            try:
-                uuid.UUID(subdivision_id)
-            except ValueError:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"无效的subdivision ID格式: {subdivision_id}"
-                )
+        logger.info(f"📋 [合并请求] 选择的合并项: {selected_merges}")
         
-        # 执行合并
+        # 执行递归合并（默认启用递归模式）
         merge_result = await merge_service.execute_merge(
             workflow_uuid, 
-            selected_subdivisions,
-            current_user.user_id
+            selected_merges,
+            current_user.user_id,
+            recursive=True  # 默认启用递归合并
         )
         
         if merge_result["success"]:
