@@ -498,6 +498,6 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=port,
-        reload=True,  # 禁用自动重载以防止服务自动关闭
+        reload=True,
         log_level="info"
     )

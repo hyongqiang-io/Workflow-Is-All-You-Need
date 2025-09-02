@@ -1095,22 +1095,22 @@ const Todo: React.FC = () => {
                       </Button>
                     ),
                     // 有细分结果可以编辑的任务显示编辑按钮
-                    hasSubdivisionResult(item) && (
-                      <Button 
-                        key="edit-subdivision-result" 
-                        type="primary"
-                        size="small"
-                        icon={<EditOutlined />}
-                        onClick={() => handleEditSubdivisionResult(item)}
-                        style={{ 
-                          backgroundColor: '#fa8c16', 
-                          borderColor: '#fa8c16',
-                          fontWeight: 'bold'
-                        }}
-                      >
-                        编辑细分结果
-                      </Button>
-                    ),
+                    // hasSubdivisionResult(item) && (
+                    //   <Button 
+                    //     key="edit-subdivision-result" 
+                    //     type="primary"
+                    //     size="small"
+                    //     icon={<EditOutlined />}
+                    //     onClick={() => handleEditSubdivisionResult(item)}
+                    //     style={{ 
+                    //       backgroundColor: '#fa8c16', 
+                    //       borderColor: '#fa8c16',
+                    //       fontWeight: 'bold'
+                    //     }}
+                    //   >
+                    //     编辑细分结果
+                    //   </Button>
+                    // ),
                     // 有子工作流的任务显示查看进度按钮
                     hasSubWorkflow(item) && (
                       <Button 

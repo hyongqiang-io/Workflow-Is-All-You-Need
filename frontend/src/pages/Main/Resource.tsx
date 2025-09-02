@@ -847,70 +847,70 @@ const Resource: React.FC = () => {
                 </div>
               )
             },
-            {
-              title: '类型',
-              dataIndex: 'agent_type',
-              key: 'agent_type',
-              width: 100,
-              render: (type: string) => (
-                <Tag color={type === 'custom' ? 'blue' : 'green'}>
-                  {type === 'custom' ? '自定义' : '导入'}
-                </Tag>
-              )
-            },
-            {
-              title: '状态',
-              dataIndex: 'status',
-              key: 'status',
-              width: 100,
-              render: (status: string) => (
-                <Tag color={getStatusColor(status)}>
-                  {getStatusText(status)}
-                </Tag>
-              )
-            },
-            {
-              title: '能力',
-              dataIndex: 'capabilities',
-              key: 'capabilities',
-              render: (capabilities: string[]) => (
-                <div>
-                  {(Array.isArray(capabilities) ? capabilities : []).slice(0, 2).map((capability, index) => (
-                    <Tag key={index} style={{ marginBottom: '4px' }}>
-                      {capability}
-                    </Tag>
-                  ))}
-                  {capabilities && capabilities.length > 2 && (
-                    <Tag>+{capabilities.length - 2}</Tag>
-                  )}
-                </div>
-              )
-            },
-            {
-              title: '工具',
-              dataIndex: 'tools',
-              key: 'tools',
-              render: (tools: string[]) => (
-                <div>
-                  {(Array.isArray(tools) ? tools : []).slice(0, 2).map((tool, index) => (
-                    <Tag key={index} color="purple" style={{ marginBottom: '4px' }}>
-                      <ToolOutlined style={{ marginRight: '4px' }} />
-                      {tool}
-                    </Tag>
-                  ))}
-                  {tools && tools.length > 2 && (
-                    <Tag color="purple">+{tools.length - 2}</Tag>
-                  )}
-                </div>
-              )
-            },
-            {
-              title: '创建时间',
-              dataIndex: 'created_at',
-              key: 'created_at',
-              width: 120,
-              render: (date: string) => date ? new Date(date).toLocaleDateString() : '-'
-            },
+            // {
+            //   title: '类型',
+            //   dataIndex: 'agent_type',
+            //   key: 'agent_type',
+            //   width: 100,
+            //   render: (type: string) => (
+            //     <Tag color={type === 'custom' ? 'blue' : 'green'}>
+            //       {type === 'custom' ? '自定义' : '导入'}
+            //     </Tag>
+            //   )
+            // },
+            // {
+            //   title: '状态',
+            //   dataIndex: 'status',
+            //   key: 'status',
+            //   width: 100,
+            //   render: (status: string) => (
+            //     <Tag color={getStatusColor(status)}>
+            //       {getStatusText(status)}
+            //     </Tag>
+            //   )
+            // },
+            // {
+            //   title: '能力',
+            //   dataIndex: 'capabilities',
+            //   key: 'capabilities',
+            //   render: (capabilities: string[]) => (
+            //     <div>
+            //       {(Array.isArray(capabilities) ? capabilities : []).slice(0, 2).map((capability, index) => (
+            //         <Tag key={index} style={{ marginBottom: '4px' }}>
+            //           {capability}
+            //         </Tag>
+            //       ))}
+            //       {capabilities && capabilities.length > 2 && (
+            //         <Tag>+{capabilities.length - 2}</Tag>
+            //       )}
+            //     </div>
+            //   )
+            // },
+            // {
+            //   title: '工具',
+            //   dataIndex: 'tools',
+            //   key: 'tools',
+            //   render: (tools: string[]) => (
+            //     <div>
+            //       {(Array.isArray(tools) ? tools : []).slice(0, 2).map((tool, index) => (
+            //         <Tag key={index} color="purple" style={{ marginBottom: '4px' }}>
+            //           <ToolOutlined style={{ marginRight: '4px' }} />
+            //           {tool}
+            //         </Tag>
+            //       ))}
+            //       {tools && tools.length > 2 && (
+            //         <Tag color="purple">+{tools.length - 2}</Tag>
+            //       )}
+            //     </div>
+            //   )
+            // },
+            // {
+            //   title: '创建时间',
+            //   dataIndex: 'created_at',
+            //   key: 'created_at',
+            //   width: 120,
+            //   render: (date: string) => date ? new Date(date).toLocaleDateString() : '-'
+            // },
             {
               title: '操作',
               key: 'action',
@@ -1343,7 +1343,7 @@ const Resource: React.FC = () => {
             />
           </Form.Item>
           
-          <Form.Item
+          {/* <Form.Item
             name="capabilities"
             label="能力标签"
           >
@@ -1363,7 +1363,7 @@ const Resource: React.FC = () => {
               rows={6} 
               placeholder="请输入JSON格式的配置信息（可选）" 
             />
-          </Form.Item>
+          </Form.Item> */}
           
           {/* 工具绑定编辑器 */}
           <Form.Item
@@ -1581,7 +1581,7 @@ const Resource: React.FC = () => {
             <Input.Password placeholder="请输入API密钥" />
           </Form.Item>
 
-          <Form.Item
+          {/* <Form.Item
             name="tool_config"
             label="工具配置"
             help="JSON格式的工具配置，例如：{&quot;tools&quot;: [&quot;calculator&quot;, &quot;search&quot;]}"
@@ -1590,7 +1590,7 @@ const Resource: React.FC = () => {
               rows={3} 
               placeholder='{"tools": ["calculator", "search"]}'
             />
-          </Form.Item>
+          </Form.Item> */}
 
           {/* 新的工具绑定选择器 */}
           <Form.Item
