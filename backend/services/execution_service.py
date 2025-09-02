@@ -206,7 +206,8 @@ class ExecutionEngine:
                     workflow_context, 
                     instance_id, 
                     request.workflow_base_id, 
-                    nodes
+                    nodes,
+                    request  # 传递请求对象以便访问context_data
                 )
                 logger.trace(f"✅ 节点实例和依赖关系创建完成")
             except Exception as e:
@@ -3273,7 +3274,8 @@ class ExecutionEngine:
                                                     workflow_context:WorkflowExecutionContext, 
                                                     workflow_instance_id: uuid.UUID, 
                                                     workflow_base_id: uuid.UUID,
-                                                    nodes: List[Dict[str, Any]]):
+                                                    nodes: List[Dict[str, Any]],
+                                                    execute_request):
         """使用新上下文管理器创建节点实例（修复版：真正的分阶段处理，避免时序问题）"""
         try:
             from ..repositories.instance.node_instance_repository import NodeInstanceRepository
@@ -3416,12 +3418,14 @@ class ExecutionEngine:
                 
                 logger.info(f"🚀 [START节点] {node['name']} - 标记为完成，传递初始上下文")
                 
-                # START节点传递初始上下文
+                # START节点传递初始上下文，包含任务描述和上下文数据
                 initial_context = {
                     'workflow_start': True,
                     'start_time': datetime.utcnow().isoformat(),
                     'start_node': node['name'],
-                    'workflow_instance_id': str(workflow_instance_id)
+                    'workflow_instance_id': str(workflow_instance_id),
+                    'task_description': node.get('task_description', ''),  # 添加任务描述
+                    'context_data': execute_request.context_data if hasattr(execute_request, 'context_data') and execute_request.context_data else {}  # 添加上下文数据
                 }
                 
                 # 统一使用workflow_context而不是self.context_manager
@@ -3904,7 +3908,7 @@ class ExecutionEngine:
     
     async def get_user_tasks(self, user_id: uuid.UUID, 
                            status: Optional[TaskInstanceStatus] = None,
-                           limit: int = 50) -> List[Dict[str, Any]]:
+                           limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """获取用户的任务列表"""
         try:
             logger.info(f"🔍 [任务查询] 开始查询用户任务:")

@@ -72,6 +72,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   loadTasks: async (status?: string) => {
     set({ loading: true, error: null });
     try {
+      // 不传递limit参数，让后端返回所有任务
       const response: any = await taskAPI.getUserTasks(status);
       
       // 检查响应格式并处理数据

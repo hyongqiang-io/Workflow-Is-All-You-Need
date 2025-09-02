@@ -477,13 +477,10 @@ const WorkflowPage: React.FC = () => {
         <div>
           <div style={{ fontWeight: 'bold', fontSize: '14px' }}>
             {text}
-            {record.isCurrentVersion && <Tag color="blue" style={{ marginLeft: 8, fontSize: '12px' }}>当前版本</Tag>}
+            {record.isCurrentVersion && <Tag color="blue" style={{ marginLeft: 8, fontSize: '12px' }}>v{record.version}</Tag>}
           </div>
           <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
-            {record.description || '暂无描述'}
-          </div>
-          <div style={{ fontSize: '11px', color: '#999', marginTop: '2px' }}>
-            版本 v{record.version}
+            {record.description ? `工作流描述: ${record.description}` : '暂无描述'}
           </div>
         </div>
       )

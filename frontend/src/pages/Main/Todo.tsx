@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Card, List, Tag, Button, Modal, Form, Input, Select, message, Space, Collapse, Typography, Divider, Alert, Spin } from 'antd';
-import { SaveOutlined, BranchesOutlined, EditOutlined, EyeOutlined } from '@ant-design/icons';
+import { Card, List, Tag, Button, Modal, Form, Input, Select, message, Space, Collapse, Typography, Divider, Alert, Spin, Row, Col, Pagination } from 'antd';
+import { SaveOutlined, BranchesOutlined, EditOutlined, EyeOutlined, SearchOutlined, FilterOutlined, ClearOutlined } from '@ant-design/icons';
 import { useTaskStore } from '../../stores/taskStore';
 import { useAuthStore } from '../../stores/authStore';
-import { taskSubdivisionApi } from '../../services/api';
+import { taskSubdivisionApi, executionAPI } from '../../services/api';
 import TaskSubdivisionModal from '../../components/TaskSubdivisionModal';
 import SubdivisionResultEditModal from '../../components/SubdivisionResultEditModal';
 import TaskFlowViewer from '../../components/TaskFlowViewer';
@@ -31,6 +31,20 @@ const Todo: React.FC = () => {
     getTaskDraft
   } = useTaskStore();
   
+  // 工作流实例信息缓存
+  const [workflowCache, setWorkflowCache] = useState<{[key: string]: any}>({});
+  
+  // 筛选和搜索状态
+  const [searchText, setSearchText] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [workflowFilter, setWorkflowFilter] = useState<string>('all');
+  const [filteredTasks, setFilteredTasks] = useState<any[]>([]);
+  
+  // 分页状态
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [paginatedTasks, setPaginatedTasks] = useState<any[]>([]);
+  
   const [submitModalVisible, setSubmitModalVisible] = useState(false);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [helpModalVisible, setHelpModalVisible] = useState(false);
@@ -55,11 +69,121 @@ const Todo: React.FC = () => {
     }
   }, [user, loadTasks]);
 
+  // 加载工作流信息
+  useEffect(() => {
+    const loadWorkflowInfo = async () => {
+      const workflowIds = [...new Set(tasks.map(task => task.workflow_instance_id))];
+      const newWorkflowCache = { ...workflowCache };
+      
+      for (const workflowId of workflowIds) {
+        if (!workflowCache[workflowId] && workflowId) {
+          try {
+            const response = await executionAPI.getWorkflowInstanceDetail(workflowId);
+            const responseData = response as any;
+            if (responseData && responseData.success && responseData.data) {
+              // 优先使用工作流模板名称，然后是工作流名称，最后是实例名称
+              const templateName = responseData.data.workflow_name || 
+                                 responseData.data.name || 
+                                 responseData.data.workflow_instance_name || 
+                                 '未知工作流';
+              newWorkflowCache[workflowId] = {
+                name: templateName,
+                status: responseData.data.status || '未知状态'
+              };
+            } else {
+              newWorkflowCache[workflowId] = {
+                name: '未知工作流',
+                status: '未知状态'
+              };
+            }
+          } catch (error) {
+            console.warn(`加载工作流信息失败 ${workflowId}:`, error);
+            newWorkflowCache[workflowId] = {
+              name: '加载失败',
+              status: '未知状态'
+            };
+          }
+        }
+      }
+      
+      if (Object.keys(newWorkflowCache).length !== Object.keys(workflowCache).length) {
+        setWorkflowCache(newWorkflowCache);
+      }
+    };
+
+    if (tasks.length > 0) {
+      loadWorkflowInfo();
+    }
+  }, [tasks]);
+
   useEffect(() => {
     if (error) {
       message.error(error);
     }
   }, [error]);
+
+  // 筛选和搜索逻辑
+  useEffect(() => {
+    let filtered = [...tasks];
+    
+    // 状态筛选
+    if (statusFilter !== 'all') {
+      filtered = filtered.filter(task => task.status.toLowerCase() === statusFilter);
+    }
+    
+    // 工作流筛选
+    if (workflowFilter !== 'all') {
+      filtered = filtered.filter(task => {
+        const contextWorkflow = task.context_data?.workflow;
+        const cachedWorkflow = workflowCache[task.workflow_instance_id];
+        const workflowName = contextWorkflow?.name || 
+                           contextWorkflow?.workflow_instance_name ||
+                           cachedWorkflow?.name || '';
+        return workflowName === workflowFilter;
+      });
+    }
+    
+    // 搜索文本筛选
+    if (searchText.trim()) {
+      const searchLower = searchText.toLowerCase();
+      filtered = filtered.filter(task => {
+        // 搜索任务标题和描述
+        const titleMatch = task.task_title?.toLowerCase().includes(searchLower);
+        const descMatch = task.task_description?.toLowerCase().includes(searchLower);
+        
+        // 搜索工作流名称
+        const contextWorkflow = task.context_data?.workflow;
+        const cachedWorkflow = workflowCache[task.workflow_instance_id];
+        const workflowName = contextWorkflow?.name || 
+                           contextWorkflow?.workflow_instance_name ||
+                           cachedWorkflow?.name || '';
+        const workflowMatch = workflowName.toLowerCase().includes(searchLower);
+        
+        return titleMatch || descMatch || workflowMatch;
+      });
+    }
+    
+    setFilteredTasks(filtered);
+    // 筛选条件变化时重置到第一页
+    setCurrentPage(1);
+  }, [tasks, searchText, statusFilter, workflowFilter, workflowCache]);
+
+  // 分页逻辑
+  useEffect(() => {
+    const startIndex = (currentPage - 1) * pageSize;
+    const endIndex = startIndex + pageSize;
+    setPaginatedTasks(filteredTasks.slice(startIndex, endIndex));
+  }, [filteredTasks, currentPage, pageSize]);
+
+  // 处理分页变化
+  const handlePageChange = (page: number, size?: number) => {
+    setCurrentPage(page);
+    if (size && size !== pageSize) {
+      setPageSize(size);
+      // 重置到第一页
+      setCurrentPage(1);
+    }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -127,6 +251,14 @@ const Todo: React.FC = () => {
       default:
         return '未知';
     }
+  };
+
+  // 清空所有筛选
+  const clearFilters = () => {
+    setSearchText('');
+    setStatusFilter('all');
+    setWorkflowFilter('all');
+    setCurrentPage(1); // 重置到第一页
   };
 
   // 检查任务是否可以拆解
@@ -823,187 +955,343 @@ const Todo: React.FC = () => {
     <div>
       <h2 style={{ marginBottom: '24px' }}>我的待办</h2>
       
-      <Card>
-        <List
-          loading={loading}
-          dataSource={tasks}
-          renderItem={(item) => (
-            <List.Item
-              actions={[
-                // PENDING/ASSIGNED状态可以开始任务
-                (item.status.toLowerCase() === 'pending' || item.status.toLowerCase() === 'assigned') && (
-                  <Button 
-                    key="start" 
-                    type="primary" 
-                    size="small"
-                    onClick={() => handleStartTask(item)}
-                  >
-                    开始任务
-                  </Button>
-                ),
-                // PENDING/ASSIGNED状态的人工任务可以拆解
-                canSubdivideTask(item) && (
-                  <Button 
-                    key="subdivide" 
-                    type="primary"
-                    size="small"
-                    icon={<BranchesOutlined />}
-                    onClick={() => handleSubdivideTask(item)}
-                    style={{ 
-                      backgroundColor: '#722ed1', 
-                      borderColor: '#722ed1',
-                      fontWeight: 'bold'
-                    }}
-                  >
-                    拆解任务
-                  </Button>
-                ),
-                // 有细分结果可以编辑的任务显示编辑按钮
-                hasSubdivisionResult(item) && (
-                  <Button 
-                    key="edit-subdivision-result" 
-                    type="primary"
-                    size="small"
-                    icon={<EditOutlined />}
-                    onClick={() => handleEditSubdivisionResult(item)}
-                    style={{ 
-                      backgroundColor: '#fa8c16', 
-                      borderColor: '#fa8c16',
-                      fontWeight: 'bold'
-                    }}
-                  >
-                    编辑细分结果
-                  </Button>
-                ),
-                // 有子工作流的任务显示查看进度按钮
-                hasSubWorkflow(item) && (
-                  <Button 
-                    key="view-sub-workflow" 
-                    type="primary"
-                    size="small"
-                    icon={<EyeOutlined />}
-                    onClick={() => handleViewSubWorkflowProgress(item)}
-                    style={{ 
-                      backgroundColor: '#52c41a', 
-                      borderColor: '#52c41a',
-                      fontWeight: 'bold'
-                    }}
-                  >
-                    查看子工作流进度
-                  </Button>
-                ),
-                // PENDING/ASSIGNED状态可以拒绝任务
-                (item.status.toLowerCase() === 'pending' || item.status.toLowerCase() === 'assigned') && (
-                  <Button 
-                    key="reject" 
-                    danger
-                    size="small"
-                    onClick={() => handleRejectTask(item)}
-                  >
-                    拒绝任务
-                  </Button>
-                ),
-                // IN_PROGRESS状态可以提交结果
-                item.status.toLowerCase() === 'in_progress' && (
-                  <Button 
-                    key="submit" 
-                    type="primary" 
-                    size="small"
-                    icon={<SaveOutlined />}
-                    onClick={() => handleSubmit(item)}
-                  >
-                    提交结果
-                  </Button>
-                ),
-                // IN_PROGRESS状态可以暂停任务
-                item.status.toLowerCase() === 'in_progress' && (
-                  <Button 
-                    key="pause" 
-                    size="small"
-                    onClick={() => handlePauseTask(item)}
-                  >
-                    暂停任务
-                  </Button>
-                ),
-                // 进行中、已分配、待分配状态可以取消任务
-                (item.status.toLowerCase() === 'in_progress' || 
-                 item.status.toLowerCase() === 'assigned' || 
-                 item.status.toLowerCase() === 'pending') && (
-                  <Button 
-                    key="cancel" 
-                    danger
-                    size="small"
-                    onClick={() => handleCancelTask(item)}
-                  >
-                    取消任务
-                  </Button>
-                ),
-                // 已完成和已取消状态可以删除任务
-                (item.status.toLowerCase() === 'completed' || item.status.toLowerCase() === 'cancelled') && (
-                  <Button 
-                    key="delete" 
-                    danger
-                    size="small"
-                    onClick={() => {
-                      console.log('🔍 删除按钮被点击，任务状态:', item.status);
-                      handleDeleteTask(item);
-                    }}
-                  >
-                    删除任务
-                  </Button>
-                ),
-                // 所有状态都可以查看详情
-                <Button key="view" type="link" size="small" onClick={() => handleViewDetails(item)}>
-                  查看详情
-                </Button>
-              ].filter(Boolean)}
+      {/* 筛选和搜索区域 */}
+      <Card style={{ marginBottom: '16px' }} size="small">
+        <Row gutter={16} align="middle">
+          <Col span={8}>
+            <Input
+              placeholder="搜索任务名称或工作流..."
+              prefix={<SearchOutlined />}
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              allowClear
+            />
+          </Col>
+          <Col span={4}>
+            <Select
+              value={statusFilter}
+              onChange={setStatusFilter}
+              style={{ width: '100%' }}
+              placeholder="按状态筛选"
             >
-              <List.Item.Meta
-                title={
-                  <div>
-                    {item.task_title}
-                    <Tag color={getStatusColor(item.status)} style={{ marginLeft: '8px' }}>
-                      {getStatusText(item.status)}
-                    </Tag>
-                    {/* <Tag color={getPriorityColor(item.priority)}>
-                      {getPriorityText(item.priority)}优先级
-                    </Tag> */}
-                  </div>
-                }
-                description={
-                  <div>
-                    <div>{item.task_description}</div>
-                    {/* 显示上游上下文信息 */}
-                    {item.input_data && (item.input_data.immediate_upstream || item.input_data.workflow_global) && (
-                      <div style={{ marginTop: '8px' }}>
-                        <Alert
-                          message="包含上游上下文数据"
-                          description={`上游节点数: ${item.input_data.node_info?.upstream_node_count || 0}个`}
-                          type="info"
-                          showIcon
-                          style={{ fontSize: '12px' }}
-                        />
+              <Select.Option value="all">全部状态</Select.Option>
+              <Select.Option value="pending">待分配</Select.Option>
+              <Select.Option value="assigned">已分配</Select.Option>
+              <Select.Option value="in_progress">进行中</Select.Option>
+              <Select.Option value="completed">已完成</Select.Option>
+              {/* <Select.Option value="failed">失败</Select.Option> */}
+              <Select.Option value="cancelled">已取消</Select.Option>
+              {/* <Select.Option value="overdue">已逾期</Select.Option> */}
+            </Select>
+          </Col>
+          <Col span={6}>
+            <Select
+              value={workflowFilter}
+              onChange={setWorkflowFilter}
+              style={{ width: '100%' }}
+              placeholder="按工作流筛选"
+              showSearch
+              optionFilterProp="children"
+            >
+              <Select.Option value="all">全部工作流</Select.Option>
+              {/* 动态生成工作流选项 - 按工作流名称去重 */}
+              {(() => {
+                // 收集所有唯一的工作流名称
+                const workflowNames = new Set<string>();
+                const workflowOptions: Array<{name: string, count: number}> = [];
+                
+                tasks.forEach(task => {
+                  const contextWorkflow = task.context_data?.workflow;
+                  const cachedWorkflow = workflowCache[task.workflow_instance_id];
+                  const workflowName = contextWorkflow?.name || 
+                                     contextWorkflow?.workflow_instance_name ||
+                                     cachedWorkflow?.name || 
+                                     `工作流 ${task.workflow_instance_id?.slice(0, 8)}...`;
+                  
+                  if (workflowName && !workflowNames.has(workflowName)) {
+                    workflowNames.add(workflowName);
+                    // 计算该工作流名称的任务数量
+                    const count = tasks.filter(t => {
+                      const tContextWorkflow = t.context_data?.workflow;
+                      const tCachedWorkflow = workflowCache[t.workflow_instance_id];
+                      const tWorkflowName = tContextWorkflow?.name || 
+                                           tContextWorkflow?.workflow_instance_name ||
+                                           tCachedWorkflow?.name || 
+                                           `工作流 ${t.workflow_instance_id?.slice(0, 8)}...`;
+                      return tWorkflowName === workflowName;
+                    }).length;
+                    
+                    workflowOptions.push({ name: workflowName, count });
+                  }
+                });
+                
+                // 按任务数量倒序排列
+                return workflowOptions
+                  .sort((a, b) => b.count - a.count)
+                  .map(option => (
+                    <Select.Option key={option.name} value={option.name}>
+                      {option.name} ({option.count}个任务)
+                    </Select.Option>
+                  ));
+              })()}
+            </Select>
+          </Col>
+          <Col span={4}>
+            <Space>
+              <Button 
+                icon={<ClearOutlined />} 
+                onClick={clearFilters}
+                disabled={searchText === '' && statusFilter === 'all' && workflowFilter === 'all'}
+              >
+                清空
+              </Button>
+            </Space>
+          </Col>
+          <Col span={2}>
+            <div style={{ fontSize: '12px', color: '#666', textAlign: 'right' }}>
+              共 {filteredTasks.length} / {tasks.length} 个任务
+              <br />
+              第 {Math.min((currentPage - 1) * pageSize + 1, filteredTasks.length)}-{Math.min(currentPage * pageSize, filteredTasks.length)} 条
+            </div>
+          </Col>
+        </Row>
+      </Card>
+      
+      <Card>
+        {filteredTasks.length > 0 ? (
+          <>
+            <List
+              loading={loading}
+              dataSource={paginatedTasks}
+              renderItem={(item) => (
+                <List.Item
+                  actions={[
+                    // PENDING/ASSIGNED状态可以开始任务
+                    (item.status.toLowerCase() === 'pending' || item.status.toLowerCase() === 'assigned') && (
+                      <Button 
+                        key="start" 
+                        type="primary" 
+                        size="small"
+                        onClick={() => handleStartTask(item)}
+                      >
+                        开始任务
+                      </Button>
+                    ),
+                    // PENDING/ASSIGNED状态的人工任务可以拆解
+                    canSubdivideTask(item) && (
+                      <Button 
+                        key="subdivide" 
+                        type="primary"
+                        size="small"
+                        icon={<BranchesOutlined />}
+                        onClick={() => handleSubdivideTask(item)}
+                        style={{ 
+                          backgroundColor: '#722ed1', 
+                          borderColor: '#722ed1',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        拆解任务
+                      </Button>
+                    ),
+                    // 有细分结果可以编辑的任务显示编辑按钮
+                    hasSubdivisionResult(item) && (
+                      <Button 
+                        key="edit-subdivision-result" 
+                        type="primary"
+                        size="small"
+                        icon={<EditOutlined />}
+                        onClick={() => handleEditSubdivisionResult(item)}
+                        style={{ 
+                          backgroundColor: '#fa8c16', 
+                          borderColor: '#fa8c16',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        编辑细分结果
+                      </Button>
+                    ),
+                    // 有子工作流的任务显示查看进度按钮
+                    hasSubWorkflow(item) && (
+                      <Button 
+                        key="view-sub-workflow" 
+                        type="primary"
+                        size="small"
+                        icon={<EyeOutlined />}
+                        onClick={() => handleViewSubWorkflowProgress(item)}
+                        style={{ 
+                          backgroundColor: '#52c41a', 
+                          borderColor: '#52c41a',
+                          fontWeight: 'bold'
+                        }}
+                      >
+                        查看子工作流进度
+                      </Button>
+                    ),
+                    // PENDING/ASSIGNED状态可以拒绝任务
+                    (item.status.toLowerCase() === 'pending' || item.status.toLowerCase() === 'assigned') && (
+                      <Button 
+                        key="reject" 
+                        danger
+                        size="small"
+                        onClick={() => handleRejectTask(item)}
+                      >
+                        拒绝任务
+                      </Button>
+                    ),
+                    // IN_PROGRESS状态可以提交结果
+                    item.status.toLowerCase() === 'in_progress' && (
+                      <Button 
+                        key="submit" 
+                        type="primary" 
+                        size="small"
+                        icon={<SaveOutlined />}
+                        onClick={() => handleSubmit(item)}
+                      >
+                        提交结果
+                      </Button>
+                    ),
+                    // IN_PROGRESS状态可以暂停任务
+                    item.status.toLowerCase() === 'in_progress' && (
+                      <Button 
+                        key="pause" 
+                        size="small"
+                        onClick={() => handlePauseTask(item)}
+                      >
+                        暂停任务
+                      </Button>
+                    ),
+                    // 进行中、已分配、待分配状态可以取消任务
+                    (item.status.toLowerCase() === 'in_progress' || 
+                     item.status.toLowerCase() === 'assigned' || 
+                     item.status.toLowerCase() === 'pending') && (
+                      <Button 
+                        key="cancel" 
+                        danger
+                        size="small"
+                        onClick={() => handleCancelTask(item)}
+                      >
+                        取消任务
+                      </Button>
+                    ),
+                    // 已完成和已取消状态可以删除任务
+                    (item.status.toLowerCase() === 'completed' || item.status.toLowerCase() === 'cancelled') && (
+                      <Button 
+                        key="delete" 
+                        danger
+                        size="small"
+                        onClick={() => {
+                          console.log('🔍 删除按钮被点击，任务状态:', item.status);
+                          handleDeleteTask(item);
+                        }}
+                      >
+                        删除任务
+                      </Button>
+                    ),
+                    // 所有状态都可以查看详情
+                    <Button key="view" type="link" size="small" onClick={() => handleViewDetails(item)}>
+                      查看详情
+                    </Button>
+                  ].filter(Boolean)}
+                >
+                  <List.Item.Meta
+                    title={
+                      <div>
+                        {item.task_title}
+                        <Tag color={getStatusColor(item.status)} style={{ marginLeft: '8px' }}>
+                          {getStatusText(item.status)}
+                        </Tag>
                       </div>
-                    )}
-                    <div style={{ marginTop: '8px', fontSize: '12px', color: '#666' }}>
-                      <Space>
-                        {/* <span>任务ID: {item.task_instance_id}</span> */}
-                        <span>创建时间: {item.created_at}</span>
-                        {item.started_at && <span>开始时间: {item.started_at}</span>}
-                        {item.completed_at && <span>完成时间: {item.completed_at}</span>}
-                      </Space>
-                    </div>
-                    {item.result_summary && (
-                      <div style={{ marginTop: '8px', padding: '8px', background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: '4px' }}>
-                        <strong>提交结果:</strong> {item.result_summary}
+                    }
+                    description={
+                      <div>
+                        <div>{item.task_description}</div>
+                        {/* 显示上游上下文信息 */}
+                        {item.input_data && (item.input_data.immediate_upstream || item.input_data.workflow_global) && (
+                          <div style={{ marginTop: '8px' }}>
+                            <Alert
+                              message="包含上游上下文数据"
+                              description={`上游节点数: ${item.input_data.node_info?.upstream_node_count || 0}个`}
+                              type="info"
+                              showIcon
+                              style={{ fontSize: '12px' }}
+                            />
+                          </div>
+                        )}
+                        <div style={{ marginTop: '8px', fontSize: '12px', color: '#666' }}>
+                          <Space>
+                            {/* 显示工作流信息 - 优先使用context_data，然后使用缓存的信息 */}
+                            {(() => {
+                              const contextWorkflow = item.context_data?.workflow;
+                              const cachedWorkflow = workflowCache[item.workflow_instance_id];
+                              
+                              if (contextWorkflow?.name || contextWorkflow?.workflow_instance_name) {
+                                return (
+                                  <span style={{ color: '#1890ff' }}>
+                                    工作流: {contextWorkflow.name || contextWorkflow.workflow_instance_name}
+                                  </span>
+                                );
+                              } else if (cachedWorkflow?.name) {
+                                return (
+                                  <span style={{ color: '#1890ff' }}>
+                                    工作流: {cachedWorkflow.name}
+                                  </span>
+                                );
+                              } else if (item.workflow_instance_id) {
+                                return (
+                                  <span style={{ color: '#999' }}>
+                                    工作流: 加载中...
+                                  </span>
+                                );
+                              }
+                              return null;
+                            })()}
+                            <span>创建时间: {item.created_at}</span>
+                            {item.started_at && <span>开始时间: {item.started_at}</span>}
+                            {item.completed_at && <span>完成时间: {item.completed_at}</span>}
+                          </Space>
+                        </div>
+                        {item.result_summary && (
+                          <div style={{ marginTop: '8px', padding: '8px', background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: '4px' }}>
+                            <strong>提交结果:</strong> {item.result_summary}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+            {/* 分页组件 */}
+            <div style={{ marginTop: '16px', textAlign: 'center' }}>
+              <Pagination
+                current={currentPage}
+                pageSize={pageSize}
+                total={filteredTasks.length}
+                showSizeChanger
+                showQuickJumper
+                showTotal={(total, range) => 
+                  `第 ${range[0]}-${range[1]} 条/共 ${total} 条`
                 }
+                pageSizeOptions={['10', '20', '30', '50', '100']}
+                onChange={handlePageChange}
+                onShowSizeChange={handlePageChange}
               />
-            </List.Item>
-          )}
-        />
+            </div>
+          </>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>📋</div>
+            <div style={{ fontSize: '16px', color: '#666', marginBottom: '8px' }}>
+              {tasks.length === 0 ? '暂无待办任务' : '没有找到匹配的任务'}
+            </div>
+            {tasks.length > 0 && filteredTasks.length === 0 && (
+              <div style={{ fontSize: '14px', color: '#999' }}>
+                尝试调整筛选条件或清空筛选
+              </div>
+            )}
+          </div>
+        )}
       </Card>
 
       {/* 任务详情模态框 */}

@@ -1824,8 +1824,9 @@ class WorkflowMergeService:
                                                     new_workflow_base_id: uuid.UUID,
                                                     tree_mapping: Dict[str, Dict], 
                                                     node_id_mapping: Dict[str, uuid.UUID]) -> Dict[str, int]:
-        """递归展开替换节点 - 修复版：真正理解递归替换的含义"""
+        """递归展开替换节点 - 修复版：避免重复处理相同节点"""
         replaced_nodes = 0
+        processed_originals = set()  # 🔧 关键修复：跟踪已处理的原始节点
         
         logger.info(f"🔄 [真递归理解] 重新理解递归替换")
         logger.info(f"📊 [候选分析] 待替换候选项: {len(tree_mapping)}")
@@ -1870,8 +1871,26 @@ class WorkflowMergeService:
             for i, node in enumerate(final_business_nodes):
                 logger.info(f"     最终节点{i+1}: {node['name']} (ID: {node.get('node_id', 'NEW')[:8] if node.get('node_id') else 'NEW'}...)")
             
-            # 复制最终展开的业务节点
+            # 🔧 关键修复：只处理尚未被处理过的原始节点
+            # 检查这些最终节点是否已经被其他候选项处理过
+            nodes_to_process = []
             for node in final_business_nodes:
+                node_id = node.get('node_id')
+                if node_id and node_id not in processed_originals:
+                    nodes_to_process.append(node)
+                    processed_originals.add(node_id)
+                    logger.info(f"     ✅ [待处理] 节点 {node['name']} 将被处理")
+                elif node_id:
+                    logger.info(f"     ⏭️ [跳过] 节点 {node['name']} 已被其他候选项处理")
+                else:
+                    # 没有node_id的新节点，直接处理
+                    nodes_to_process.append(node)
+                    logger.info(f"     ✅ [新节点] 节点 {node['name']} 将被处理")
+            
+            logger.info(f"   📊 [过滤后] 实际需要处理的节点: {len(nodes_to_process)}个")
+            
+            # 复制过滤后的业务节点
+            for node in nodes_to_process:
                 new_node_id = uuid.uuid4()
                 new_node_base_id = uuid.uuid4()
                 

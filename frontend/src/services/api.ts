@@ -230,7 +230,7 @@ export const agentAPI = {
 // 任务相关API
 export const taskAPI = {
   // 获取用户任务列表
-  getUserTasks: (status?: string, limit: number = 50) =>
+  getUserTasks: (status?: string, limit?: number) =>
     api.get('/execution/tasks/my', { params: { status, limit } }),
 
   // 获取任务详情

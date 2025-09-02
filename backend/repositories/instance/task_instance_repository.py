@@ -326,7 +326,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
     
     async def get_human_tasks_for_user(self, user_id: uuid.UUID, 
                                      status: Optional[TaskInstanceStatus] = None,
-                                     limit: int = 50) -> List[Dict[str, Any]]:
+                                     limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """获取用户的人工任务"""
         try:
             logger.info(f"🗃️ [数据库查询] 查询用户人工任务:")
@@ -335,7 +335,7 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
             logger.info(f"   - 状态过滤: {status.value if status else '全部'}")
             
             if status:
-                query = """
+                base_query = """
                     SELECT ti.*, 
                            p.name as processor_name, p.type as processor_type,
                            wi.workflow_instance_name as workflow_instance_name,
@@ -354,13 +354,20 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                             ELSE 4 
                         END,
                         ti.created_at DESC
-                    LIMIT $4
                 """
-                logger.info(f"🗃️ [数据库查询] 执行带状态过滤的查询")
-                results = await self.db.fetch_all(query, user_id, TaskInstanceType.HUMAN.value, 
-                                                status.value, limit)
+                
+                if limit is not None:
+                    query = base_query + " LIMIT $4"
+                    logger.info(f"🗃️ [数据库查询] 执行带状态过滤的查询 (限制: {limit})")
+                    results = await self.db.fetch_all(query, user_id, TaskInstanceType.HUMAN.value, 
+                                                    status.value, limit)
+                else:
+                    query = base_query
+                    logger.info(f"🗃️ [数据库查询] 执行带状态过滤的查询 (无限制)")
+                    results = await self.db.fetch_all(query, user_id, TaskInstanceType.HUMAN.value, 
+                                                    status.value)
             else:
-                query = """
+                base_query = """
                     SELECT ti.*, 
                            p.name as processor_name, p.type as processor_type,
                            wi.workflow_instance_name as workflow_instance_name,
@@ -378,10 +385,16 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                             ELSE 4 
                         END,
                         ti.created_at DESC
-                    LIMIT $3
                 """
-                logger.info(f"🗃️ [数据库查询] 执行无状态过滤的查询")
-                results = await self.db.fetch_all(query, user_id, TaskInstanceType.HUMAN.value, limit)
+                
+                if limit is not None:
+                    query = base_query + " LIMIT $3"
+                    logger.info(f"🗃️ [数据库查询] 执行无状态过滤的查询 (限制: {limit})")
+                    results = await self.db.fetch_all(query, user_id, TaskInstanceType.HUMAN.value, limit)
+                else:
+                    query = base_query
+                    logger.info(f"🗃️ [数据库查询] 执行无状态过滤的查询 (无限制)")
+                    results = await self.db.fetch_all(query, user_id, TaskInstanceType.HUMAN.value)
             
             logger.info(f"🗃️ [数据库查询] 查询完成，返回 {len(results)} 条记录")
             

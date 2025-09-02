@@ -1030,7 +1030,7 @@ async def debug_get_all_tasks(
 @router.get("/tasks/my")
 async def get_my_tasks(
     task_status: Optional[TaskInstanceStatus] = None,
-    limit: int = 50,
+    limit: Optional[int] = None,
     current_user: CurrentUser = Depends(get_current_user_context)
 ):
     """获取我的任务列表"""
