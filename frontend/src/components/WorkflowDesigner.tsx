@@ -11,15 +11,15 @@ import ReactFlow, {
   MiniMap,
   NodeTypes,
   ReactFlowProvider,
-  useReactFlow,
   Panel,
   Handle,
   Position,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Card, Button, Modal, Form, Input, Select, Space, message, Drawer, List, Tag, Tooltip, Badge } from 'antd';
-import { PlusOutlined, SettingOutlined, PlayCircleOutlined, SaveOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
-import { workflowAPI, nodeAPI, processorAPI, executionAPI } from '../services/api';
+import { Card, Button, Modal, Form, Input, Select, Space, message, Tag, Tooltip, Badge } from 'antd';
+import { PlusOutlined, PlayCircleOutlined, SaveOutlined, DeleteOutlined, ReloadOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
+import { nodeAPI, processorAPI, executionAPI } from '../services/api';
+import { validateWorkflow, canSaveWorkflow, type ValidationResult } from '../utils/workflowValidation';
 
 // 添加额外的样式来修复React Flow容器问题
 const reactFlowStyle = `
@@ -205,6 +205,10 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
   const [executionStatus, setExecutionStatus] = useState<any>(null);
   const [statusUpdateInterval, setStatusUpdateInterval] = useState<NodeJS.Timeout | null>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+  
+  // 新增：工作流验证相关状态
+  const [validationResult, setValidationResult] = useState<ValidationResult>({ isValid: true, errors: [], warnings: [] });
+  const [canSave, setCanSave] = useState(true);
 
   useEffect(() => {
     // 抑制 ResizeObserver 错误
@@ -271,6 +275,13 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
       setStatusUpdateInterval(interval);
     }
   }, [executionStatus]);
+
+  // 新增：实时验证工作流
+  useEffect(() => {
+    const validation = validateWorkflow(nodes, edges);
+    setValidationResult(validation);
+    setCanSave(canSaveWorkflow(nodes, edges));
+  }, [nodes, edges]);
 
   const loadProcessors = async () => {
     try {
@@ -751,6 +762,12 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
       return;
     }
 
+    // 验证工作流
+    if (!canSave) {
+      message.error(`工作流验证失败：${validationResult.errors.join('；')}`);
+      return;
+    }
+
     const loadingMessage = message.loading('正在保存工作流...', 0);
     
     try {
@@ -853,7 +870,7 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
       // 调用外部保存回调
       if (onSave) {
         console.log('调用外部保存回调...');
-        await onSave(nodes, edges);
+        onSave(nodes, edges);
       }
       
     } catch (error: any) {
@@ -1097,14 +1114,20 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
                       添加节点
                     </Button>
                   </Tooltip>
-                  <Tooltip title="保存工作流">
-                    <Button icon={<SaveOutlined />} onClick={handleSave}>
+                  <Tooltip title={canSave ? "保存工作流" : `工作流验证失败：${validationResult.errors.join('；')}`}>
+                    <Button 
+                      icon={<SaveOutlined />} 
+                      onClick={handleSave}
+                      disabled={!canSave}
+                      type={canSave ? "default" : "default"}
+                      danger={!canSave}
+                    >
                       保存
                     </Button>
                   </Tooltip>
                 </>
               )}
-              <Tooltip title="执行工作流">
+              {/* <Tooltip title="执行工作流">
                 <Button 
                   type="primary" 
                   icon={<PlayCircleOutlined />} 
@@ -1114,7 +1137,7 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
                 >
                   执行
                 </Button>
-              </Tooltip>
+              </Tooltip> */}
               {executionStatus && (
                 <Tooltip title="刷新状态">
                   <Button 
@@ -1133,14 +1156,60 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
             </Space>
           }
         >
-          {/* 统计信息 */}
+          {/* 统计信息和验证状态 */}
           <div style={{ padding: '8px', background: '#f9f9f9', fontSize: '12px', marginBottom: '8px', borderRadius: '4px' }}>
-            <span>节点: {nodes.length}</span>
-            <span style={{ marginLeft: '16px' }}>连线: {edges.length}</span>
-            {workflowId && <span style={{ marginLeft: '16px', color: '#52c41a' }}>已连接</span>}
-            <span style={{ marginLeft: '16px', color: readOnly ? '#ff4d4f' : '#52c41a' }}>
-              {readOnly ? '只读模式' : '编辑模式'}
-            </span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <span>节点: {nodes.length}</span>
+                <span style={{ marginLeft: '16px' }}>连线: {edges.length}</span>
+                {workflowId && <span style={{ marginLeft: '16px', color: '#52c41a' }}>已连接</span>}
+                <span style={{ marginLeft: '16px', color: readOnly ? '#ff4d4f' : '#52c41a' }}>
+                  {readOnly ? '只读模式' : '编辑模式'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {validationResult.isValid ? (
+                  <Tag color="success" style={{ fontSize: '11px' }}>
+                    ✓ 验证通过
+                  </Tag>
+                ) : (
+                  <Tooltip title={
+                    <div>
+                      <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>验证错误:</div>
+                      {validationResult.errors.map((error, index) => (
+                        <div key={index} style={{ fontSize: '12px' }}>• {error}</div>
+                      ))}
+                      {validationResult.warnings.length > 0 && (
+                        <>
+                          <div style={{ fontWeight: 'bold', marginTop: '8px', marginBottom: '4px' }}>警告:</div>
+                          {validationResult.warnings.map((warning, index) => (
+                            <div key={index} style={{ fontSize: '12px' }}>• {warning}</div>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  }>
+                    <Tag color="error" style={{ fontSize: '11px', cursor: 'pointer' }}>
+                      <ExclamationCircleOutlined /> {validationResult.errors.length} 个错误
+                    </Tag>
+                  </Tooltip>
+                )}
+                {validationResult.warnings.length > 0 && validationResult.isValid && (
+                  <Tooltip title={
+                    <div>
+                      <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>警告:</div>
+                      {validationResult.warnings.map((warning, index) => (
+                        <div key={index} style={{ fontSize: '12px' }}>• {warning}</div>
+                      ))}
+                    </div>
+                  }>
+                    <Tag color="warning" style={{ fontSize: '11px', cursor: 'pointer' }}>
+                      ⚠ {validationResult.warnings.length} 个警告
+                    </Tag>
+                  </Tooltip>
+                )}
+              </div>
+            </div>
           </div>
           
           <div style={{ height: '500px', width: '100%', border: '1px solid #d9d9d9', borderRadius: '6px', position: 'relative' }}>
@@ -1283,7 +1352,7 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
               </Option>
               
               {/* 从API加载的处理器 */}
-              {Array.isArray(processors) && processors.map((processor, index) => {
+              {Array.isArray(processors) && processors.map((processor) => {
                 const processorType = processor.type || processor.entity_type || 'unknown';
                 const processorName = processor.name || processor.agent_name || processor.username || '未命名处理器';
                 const processorValue = processor.processor_id || processor.id;
