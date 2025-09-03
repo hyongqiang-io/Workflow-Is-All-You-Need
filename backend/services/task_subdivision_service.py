@@ -155,14 +155,19 @@ class TaskSubdivisionService:
             node_count = node_count_result.get('count', 0) if node_count_result else 0
             
             if node_count == 0:
-                logger.warning(f"⚠️ 选择的工作流模板 {template.name} 没有有效节点，将创建新模板")
-                # 继续执行创建新模板的逻辑
+                logger.warning(f"⚠️ 选择的工作流模板 {template.name} 没有有效节点")
+                raise ValidationError(f"选择的工作流模板 '{template.name}' 是空模板，请选择包含有效节点的工作流模板或创建新模板")
             else:
                 logger.info(f"✅ 找到现有工作流模板: {template.name} (包含 {node_count} 个有效节点)")
                 return provided_template_id
         
         # 情况2：创建新的工作流模板
         logger.info(f"🔄 创建新的工作流模板: {subdivision_name}")
+        
+        # 验证工作流数据是否有效
+        nodes_data = workflow_data.get('nodes', [])
+        if not nodes_data:
+            raise ValidationError("创建新工作流模板需要提供有效的节点数据，请在工作流设计器中添加节点后再提交")
         
         # 创建工作流模板
         template_create = WorkflowCreate(

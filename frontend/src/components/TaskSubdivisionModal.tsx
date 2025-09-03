@@ -227,7 +227,7 @@ const TaskSubdivisionModal: React.FC<TaskSubdivisionModalProps> = ({
         subdivision_name: workflowSelectionMode === 'create' ? values.subdivision_name : `使用模板_${Date.now()}`,
         subdivision_description: values.subdivision_description || '',
         sub_workflow_base_id: templateId, // 🔧 明确指定使用的模板ID
-        sub_workflow_data: subWorkflowData, // 只有创建新模板时才有数据
+        sub_workflow_data: workflowSelectionMode === 'create' ? subWorkflowData : {}, // 🔧 只有创建新模板时才传递工作流数据
         execute_immediately: values.execute_immediately !== false,
         task_context: {
           original_task_title: values.task_title || taskTitle,

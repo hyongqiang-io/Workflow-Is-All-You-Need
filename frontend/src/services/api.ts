@@ -535,8 +535,8 @@ export const executionAPI = {
     api.get(`/execution/workflows/${instanceId}/task-flow`),
 
   // 获取工作流执行实例列表
-  getWorkflowInstances: (workflowBaseId: string, limit: number = 20) =>
-    api.get(`/execution/workflows/${workflowBaseId}/instances`, { params: { limit } }),
+  getWorkflowInstances: (workflowBaseId: string) =>
+    api.get(`/execution/workflows/${workflowBaseId}/instances`),
 
   // 获取工作流任务流程 - 统一接口（支持主工作流和子工作流）
   getWorkflowTaskFlow: (workflowInstanceId: string) => 

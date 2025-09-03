@@ -115,6 +115,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
 }) => {
   const [instances, setInstances] = useState<WorkflowInstance[]>([]);
   const [loading, setLoading] = useState(false);
+  const [pageSize, setPageSize] = useState(10); // 添加页面大小状态
   const [detailVisible, setDetailVisible] = useState(false);
   const [selectedInstance, setSelectedInstance] = useState<WorkflowInstance | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -871,7 +872,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
         }}
         width={1400}
         style={{ top: 20 }}
-        styles={{ body: { height: '85vh', overflow: 'hidden' } }}
+        styles={{ body: { height: '85vh', overflow: 'auto' } }}
         footer={[
           <div key="footer-content" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
             <div style={{ fontSize: '12px', color: '#666' }}>
@@ -968,6 +969,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
           }}
           loading={loading}
           size="small"
+          scroll={{ y: 'calc(85vh - 200px)' }} // 设置表格可滚动高度
           pagination={{
             showSizeChanger: true,
             showQuickJumper: true,
@@ -977,8 +979,12 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                 statusFilter === 'completed' ? '已完成' : '失败';
               return `显示 ${range[0]}-${range[1]} 条，共 ${total} 条${statusText}记录`;
             },
-            pageSize: 10,
-            pageSizeOptions: ['10', '20', '50']
+            pageSize: pageSize,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            onShowSizeChange: (current, size) => {
+              console.log('🔄 分页大小变化:', { current, size });
+              setPageSize(size);
+            }
           }}
           rowClassName={(record) => {
             if (record.status === 'running') return 'running-row';

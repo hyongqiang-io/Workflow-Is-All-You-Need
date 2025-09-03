@@ -393,7 +393,6 @@ async def get_workflow_status(
 @router.get("/workflows/{workflow_base_id}/instances")
 async def get_workflow_instances(
     workflow_base_id: uuid.UUID,
-    limit: int = 20,
     current_user: CurrentUser = Depends(get_current_user_context)
 ):
     """获取工作流的执行实例列表"""
@@ -436,10 +435,9 @@ async def get_workflow_instances(
         AND wi.is_deleted = 0
         GROUP BY wi.workflow_instance_id, wi.workflow_instance_name, wi.status, wi.executor_id, wi.created_at, wi.updated_at, wi.input_data, wi.output_data, wi.error_message, wi.workflow_base_id, w.name, u.username
         ORDER BY wi.created_at DESC
-        LIMIT %s
         """
         
-        instances = await workflow_instance_repo.db.fetch_all(query, workflow_base_id, limit)
+        instances = await workflow_instance_repo.db.fetch_all(query, workflow_base_id)
         
         # 格式化返回数据
         formatted_instances = []
