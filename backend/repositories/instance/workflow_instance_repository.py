@@ -357,7 +357,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             logger.error(f"获取运行中实例失败: {e}")
             return []
     
-    async def get_instances_by_status(self, statuses: List[str], limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_instances_by_status(self, statuses: List[str], limit: int = 1000) -> List[Dict[str, Any]]:
         """按状态获取工作流实例"""
         try:
             # 构建状态占位符

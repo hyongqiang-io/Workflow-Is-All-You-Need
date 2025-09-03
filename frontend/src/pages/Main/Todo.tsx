@@ -975,7 +975,7 @@ const Todo: React.FC = () => {
               placeholder="按状态筛选"
             >
               <Select.Option value="all">全部状态</Select.Option>
-              <Select.Option value="pending">待分配</Select.Option>
+              {/* <Select.Option value="pending">待分配</Select.Option> */}
               <Select.Option value="assigned">已分配</Select.Option>
               <Select.Option value="in_progress">进行中</Select.Option>
               <Select.Option value="completed">已完成</Select.Option>
@@ -1304,7 +1304,8 @@ const Todo: React.FC = () => {
             关闭
           </Button>
         ]}
-        width={800}
+        width="90%"
+        style={{ maxWidth: '1000px', top: 20 }}
       >
         {currentTask && (
           <div>
@@ -2296,11 +2297,12 @@ const Todo: React.FC = () => {
             关闭
           </Button>
         ]}
-        width={1200}
-        style={{ top: 20 }}
+        width="95%"
+        style={{ maxWidth: '1400px', top: 20 }}
+        styles={{ body: { height: '80vh', overflow: 'auto', padding: '16px' } }}
       >
         {currentSubWorkflowId && user && (
-          <div style={{ height: '70vh' }}>
+          <div style={{ height: '100%' }}>
             <Alert
               message="子工作流执行状态"
               description={`正在查看任务"${currentTask?.task_title}"的子工作流执行进度。您可以实时查看各个节点的执行状态和任务分配情况。`}
@@ -2311,6 +2313,7 @@ const Todo: React.FC = () => {
             <TaskFlowViewer
               workflowId={currentSubWorkflowId}
               currentUserId={user.user_id}
+              disableNodeClick={true} // 禁用子工作流进度中的节点点击
               onTaskAction={(taskId, action) => {
                 console.log(`子工作流任务操作: ${taskId} - ${action}`);
                 // 这里可以添加子工作流任务操作的处理逻辑

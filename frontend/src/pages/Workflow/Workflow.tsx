@@ -659,7 +659,7 @@ const WorkflowPage: React.FC = () => {
           >
             <TextArea rows={3} placeholder="请输入工作流描述" />
           </Form.Item>
-          <Form.Item
+          {/* <Form.Item
             name="category"
             label="工作流分类"
           >
@@ -669,7 +669,7 @@ const WorkflowPage: React.FC = () => {
               <Option value="automation">自动化流程</Option>
               <Option value="other">其他</Option>
             </Select>
-          </Form.Item>
+          </Form.Item> */}
         </Form>
       </Modal>
 

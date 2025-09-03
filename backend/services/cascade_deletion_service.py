@@ -106,13 +106,13 @@ class CascadeDeletionService:
             # 3. 删除工作流基础定义本身
             logger.info(f"📋 步骤3: 删除工作流基础定义")
             if soft_delete:
-                workflow_deleted = await self.workflow_repo.delete(
-                    workflow_base_id, "workflow_base_id", soft_delete=True
+                workflow_deleted = await self.workflow_repo.delete_workflow(
+                    workflow_base_id, soft_delete=True
                 )
             else:
-                query = "DELETE FROM workflow WHERE workflow_base_id = $1"
-                result = await self.workflow_repo.db.execute(query, workflow_base_id)
-                workflow_deleted = "1" in result
+                workflow_deleted = await self.workflow_repo.delete_workflow(
+                    workflow_base_id, soft_delete=False
+                )
             
             deletion_stats['deleted_workflow_base'] = workflow_deleted
             

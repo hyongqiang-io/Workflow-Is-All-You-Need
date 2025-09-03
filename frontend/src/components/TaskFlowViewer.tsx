@@ -102,6 +102,7 @@ interface TaskFlowViewerProps {
   workflowId: string;
   currentUserId: string;
   onTaskAction?: (taskId: string, action: 'start' | 'complete' | 'pause') => void;
+  disableNodeClick?: boolean; // 新增：是否禁用节点点击
 }
 
 // 使用主工作流的CustomInstanceNode组件，包装任务特定的功能
@@ -154,7 +155,8 @@ const nodeTypes: NodeTypes = {
 const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({ 
   workflowId, 
   currentUserId, 
-  onTaskAction 
+  onTaskAction,
+  disableNodeClick = false // 默认不禁用节点点击
 }) => {
   const [taskFlow, setTaskFlow] = useState<TaskFlow | null>(null);
   const [loading, setLoading] = useState(true);
@@ -214,6 +216,13 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
     try {
       const response: any = await executionAPI.getWorkflowTaskFlow(workflowId);
       if (response && response.success && response.data) {
+        console.log('🔄 [TaskFlowViewer] API响应数据:', {
+          hasNodes: !!(response.data.nodes && response.data.nodes.length),
+          nodesCount: response.data.nodes?.length || 0,
+          hasEdges: !!(response.data.edges && response.data.edges.length),
+          edgesCount: response.data.edges?.length || 0,
+          edges: response.data.edges
+        });
         setTaskFlow(response.data);
       } else {
         console.error('API响应格式错误:', response);
@@ -417,6 +426,49 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
     return [currentNode];
   };
 
+  // 生成默认的节点连接关系（当API没有提供edges时）
+  const generateDefaultEdges = (nodes: any[]): any[] => {
+    console.log('🔗 [TaskFlowViewer] 生成默认边连接:', nodes.length);
+    
+    if (!nodes || nodes.length < 2) {
+      console.log('📝 [TaskFlowViewer] 节点数量不足，无需生成边');
+      return [];
+    }
+
+    const defaultEdges: any[] = [];
+    
+    // 根据节点类型和执行顺序生成简单的线性连接
+    const sortedNodes = calculateExecutionOrder(nodes);
+    
+    for (let i = 0; i < sortedNodes.length - 1; i++) {
+      const currentNode = sortedNodes[i];
+      const nextNode = sortedNodes[i + 1];
+      
+      const currentId = currentNode.node_instance_id || `node-${i}`;
+      const nextId = nextNode.node_instance_id || `node-${i + 1}`;
+      
+      // 跳过end节点作为源节点
+      if (currentNode.node_type === 'end') continue;
+      
+      // 跳过start节点作为目标节点（除非它是第一个节点）
+      if (nextNode.node_type === 'start' && i > 0) continue;
+      
+      const edge = {
+        id: `default-edge-${i}`,
+        source: currentId,
+        target: nextId,
+        label: `步骤 ${i + 1}`,
+        type: 'default'
+      };
+      
+      defaultEdges.push(edge);
+      console.log(`🔗 [generateDefaultEdges] 生成边: ${currentNode.node_name} -> ${nextNode.node_name}`);
+    }
+    
+    console.log('✅ [generateDefaultEdges] 生成完成，总计:', defaultEdges.length, '条边');
+    return defaultEdges;
+  };
+
   const updateFlowView = () => {
     if (!taskFlow) return;
 
@@ -472,7 +524,9 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
             task_count: node.task_count,
             error_message: node.error_message,
             start_at: node.start_at,
-            completed_at: node.completed_at
+            completed_at: node.completed_at,
+            input_data: node.input_data,
+            output_data: node.output_data
           },
           isAssignedToMe: primaryTask?.assignee?.id === currentUserId,
           isCreator: taskFlow.creator ? currentUserId === taskFlow.creator.id : false,
@@ -492,17 +546,37 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
 
     allNodes.push(...flowNodes);
 
-    // 转换边为ReactFlow格式（使用实际的边缘数据）
-    const flowEdges: Edge[] = (taskFlow.edges || []).map(edge => ({
-      id: edge.id,
+    // 转换边为ReactFlow格式（使用实际的边缘数据或生成默认边）
+    let edgesData = taskFlow.edges;
+    
+    // 如果没有边数据，生成默认连接关系
+    if (!edgesData || edgesData.length === 0) {
+      console.log('📝 [updateFlowView] 没有边数据，生成默认连接');
+      edgesData = generateDefaultEdges(taskFlow.nodes || []);
+    }
+    
+    const flowEdges: Edge[] = (edgesData || []).map((edge, index) => ({
+      id: edge.id || `edge-${index}`,
       source: edge.source,
       target: edge.target,
       label: edge.label,
-      type: 'smoothstep',
-      style: { stroke: '#1890ff', strokeWidth: 2 }
+      type: edge.type || 'smoothstep',
+      style: { 
+        stroke: edge.type === 'default' ? '#52c41a' : '#1890ff', 
+        strokeWidth: 2,
+        strokeDasharray: edge.type === 'default' ? '5,5' : undefined
+      },
+      labelStyle: edge.type === 'default' ? { fontSize: '12px', fill: '#52c41a' } : undefined
     }));
 
     allEdges.push(...flowEdges);
+    
+    console.log('📊 [updateFlowView] 边生成完成:', {
+      originalEdges: taskFlow.edges?.length || 0,
+      generatedEdges: edgesData?.length || 0,
+      finalEdges: flowEdges.length,
+      edgesList: flowEdges.map(e => `${e.source} -> ${e.target} (${e.label})`)
+    });
 
     // 为展开的节点添加子工作流容器节点
     flowNodes.forEach((node) => {
@@ -576,7 +650,7 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
       return {
         ...prev,
         nodes: prev.nodes.map(node => 
-          node.id === taskId 
+          (node.node_instance_id || node.id) === taskId 
             ? { ...node, status: 'in_progress', started_at: new Date().toISOString() }
             : node
         )
@@ -592,7 +666,7 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
       return {
         ...prev,
         nodes: prev.nodes.map(node => 
-          node.id === taskId 
+          (node.node_instance_id || node.id) === taskId 
             ? { ...node, status: 'completed', completed_at: new Date().toISOString() }
             : node
         )
@@ -608,7 +682,7 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
       return {
         ...prev,
         nodes: prev.nodes.map(node => 
-          node.id === taskId 
+          (node.node_instance_id || node.id) === taskId 
             ? { ...node, status: 'blocked' }
             : node
         )
@@ -637,20 +711,46 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
     setSubdivisionTaskDescription('');
   };
 
-  // 直接使用主工作流的节点点击处理，无需格式转换
+  // 节点点击处理 - 可根据disableNodeClick属性禁用
   const handleNodeClick = (event: any, node: Node) => {
+    if (disableNodeClick) {
+      console.log('🚫 [TaskFlowViewer] 节点点击已被禁用 (子工作流模式)');
+      return;
+    }
+    
     console.log('🖱️ [TaskFlowViewer] 节点点击:', { event, node });
     
-    // 直接查找主工作流节点
-    let task = taskFlow?.nodes.find(n => n.id === node.id);
+    // 直接查找主工作流节点 - 使用node_instance_id匹配
+    let task = taskFlow?.nodes.find(n => (n.node_instance_id || n.id) === node.id);
     
     if (task) {
-      setSelectedTask(task);
+      // 确保包含所有需要的数据，包括input_data和output_data
+      const taskWithAllData = {
+        ...task,
+        // 基础任务信息
+        name: task.node_name || task.name || '未命名节点',
+        type: task.node_type || task.type || 'process',
+        created_at: task.created_at,
+        started_at: task.start_at,
+        completed_at: task.completed_at,
+        estimated_duration: task.estimated_duration,
+        actual_duration: task.execution_duration_seconds,
+        // 确保包含输入输出数据
+        input_data: task.input_data,
+        output_data: task.output_data
+      };
+      setSelectedTask(taskWithAllData);
+      setDetailModalVisible(true);
+    } else if (node.data && node.data.task) {
+      // 如果没有找到原始节点，尝试从node.data中获取任务信息
+      setSelectedTask(node.data.task);
       setDetailModalVisible(true);
     } else if (node.data) {
-      // 子工作流节点直接使用原始数据
+      // 最后的回退：子工作流节点直接使用原始数据
       setSelectedTask(node.data);
       setDetailModalVisible(true);
+    } else {
+      console.warn('⚠️ [TaskFlowViewer] 无法找到节点对应的任务信息:', node);
     }
   };
 
@@ -856,7 +956,8 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
         open={detailModalVisible}
         onCancel={() => setDetailModalVisible(false)}
         footer={null}
-        width={600}
+        width="90%"
+        style={{ maxWidth: '1000px', top: 20 }}
       >
         {selectedTask && (
           <Descriptions column={1} bordered>
@@ -971,6 +1072,50 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
             {selectedTask.actual_duration && (
               <Descriptions.Item label="实际耗时">
                 {formatDuration(selectedTask.actual_duration)}
+              </Descriptions.Item>
+            )}
+            
+            {/* 输入数据 */}
+            {selectedTask.input_data && (
+              <Descriptions.Item label="输入数据">
+                <div style={{
+                  maxHeight: '200px',
+                  overflowY: 'auto',
+                  border: '1px solid #d9d9d9',
+                  borderRadius: '4px',
+                  padding: '8px',
+                  backgroundColor: '#f5f5f5',
+                  fontFamily: 'monospace',
+                  fontSize: '12px',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word'
+                }}>
+                  {typeof selectedTask.input_data === 'string' 
+                    ? selectedTask.input_data 
+                    : JSON.stringify(selectedTask.input_data, null, 2)}
+                </div>
+              </Descriptions.Item>
+            )}
+            
+            {/* 输出数据 */}
+            {selectedTask.output_data && (
+              <Descriptions.Item label="输出数据">
+                <div style={{
+                  maxHeight: '200px',
+                  overflowY: 'auto',
+                  border: '1px solid #d9d9d9',
+                  borderRadius: '4px',
+                  padding: '8px',
+                  backgroundColor: '#f5f5f5',
+                  fontFamily: 'monospace',
+                  fontSize: '12px',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word'
+                }}>
+                  {typeof selectedTask.output_data === 'string' 
+                    ? selectedTask.output_data 
+                    : JSON.stringify(selectedTask.output_data, null, 2)}
+                </div>
               </Descriptions.Item>
             )}
           </Descriptions>

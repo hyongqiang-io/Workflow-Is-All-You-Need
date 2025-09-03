@@ -216,11 +216,18 @@ class WorkflowService:
             if not self._check_workflow_permission(workflow, user_id):
                 raise ValueError("只有工作流创建者可以删除工作流")
             
-            # 执行删除
-            success = await self.workflow_repository.delete_workflow(workflow_base_id)
+            # 执行级联删除
+            from .cascade_deletion_service import cascade_deletion_service
+            deletion_result = await cascade_deletion_service.delete_workflow_base_cascade(
+                workflow_base_id, soft_delete=True
+            )
             
+            success = deletion_result['deleted_workflow_base']
             if success:
-                logger.info(f"用户 {user_id} 删除了工作流: {workflow_base_id}")
+                logger.info(f"用户 {user_id} 级联删除了工作流: {workflow_base_id}")
+                logger.info(f"删除统计: 实例{deletion_result['deleted_workflow_instances']}个, "
+                           f"任务{deletion_result['deleted_tasks']}个, "
+                           f"节点{deletion_result['deleted_nodes']}个")
             
             return success
             
