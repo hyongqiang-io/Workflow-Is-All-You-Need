@@ -12,7 +12,8 @@ from .base import BaseEntity, CreateRequest, UpdateRequest
 
 class UserBase(BaseModel):
     """用户基础模型"""
-    username: str = Field(..., min_length=1, max_length=255, description="用户名")
+    username: str = Field(..., min_length=1, max_length=255, description="用户名",
+                         pattern=r'^[\u4e00-\u9fa5a-zA-Z0-9_\-\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]+$')
     email: EmailStr = Field(..., description="邮箱")
     terminal_endpoint: Optional[str] = Field(None, description="终端端点")
     profile: Optional[Dict[str, Any]] = Field(None, description="用户配置")
@@ -37,7 +38,8 @@ class UserCreate(UserBase, CreateRequest):
 
 class UserUpdate(UpdateRequest):
     """用户更新模型"""
-    username: Optional[str] = Field(None, min_length=1, max_length=255, description="用户名")
+    username: Optional[str] = Field(None, min_length=1, max_length=255, description="用户名",
+                                   pattern=r'^[\u4e00-\u9fa5a-zA-Z0-9_\-\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]+$')
     email: Optional[EmailStr] = Field(None, description="邮箱")
     terminal_endpoint: Optional[str] = Field(None, description="终端端点")
     profile: Optional[Dict[str, Any]] = Field(None, description="用户配置")
