@@ -635,6 +635,132 @@ async def get_subdivision_hierarchy(
         )
 
 
+@router.post("/subdivisions/{subdivision_id}/select", response_model=BaseResponse)
+async def select_subdivision(
+    subdivision_id: uuid.UUID = Path(..., description="要选择的细分ID"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    选择一个subdivision作为最终方案
+    
+    Args:
+        subdivision_id: 要选择的细分ID
+        current_user: 当前用户
+        
+    Returns:
+        选择结果
+    """
+    try:
+        logger.info(f"🎯 用户 {current_user.username} 选择subdivision: {subdivision_id}")
+        
+        success = await subdivision_service.select_subdivision(subdivision_id, current_user.user_id)
+        
+        if success:
+            logger.info(f"✅ subdivision选择成功: {subdivision_id}")
+            return BaseResponse(
+                success=True,
+                message="Subdivision选择成功",
+                data={"subdivision_id": str(subdivision_id), "selected": True}
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="选择subdivision失败"
+            )
+        
+    except ValidationError as e:
+        logger.warning(f"选择subdivision验证失败: {e}")
+        raise handle_validation_error(e)
+    except Exception as e:
+        logger.error(f"选择subdivision异常: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="选择subdivision失败，请稍后再试"
+        )
+
+
+@router.get("/tasks/{task_id}/selected-subdivision", response_model=BaseResponse)
+async def get_selected_subdivision(
+    task_id: uuid.UUID = Path(..., description="任务ID"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    获取任务的已选择subdivision
+    
+    Args:
+        task_id: 任务ID
+        current_user: 当前用户
+        
+    Returns:
+        已选择的subdivision信息
+    """
+    try:
+        selected_subdivision = await subdivision_service.get_selected_subdivision(task_id)
+        
+        if selected_subdivision:
+            subdivision_response = await subdivision_service._format_subdivision_response(selected_subdivision)
+            return BaseResponse(
+                success=True,
+                message="获取已选择subdivision成功",
+                data={"subdivision": subdivision_response.model_dump()}
+            )
+        else:
+            return BaseResponse(
+                success=True,
+                message="该任务没有已选择的subdivision",
+                data={"subdivision": None}
+            )
+        
+    except Exception as e:
+        logger.error(f"获取已选择subdivision异常: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="获取已选择subdivision失败"
+        )
+
+
+@router.post("/tasks/{task_id}/cleanup-subdivisions", response_model=BaseResponse)
+async def cleanup_task_subdivisions(
+    task_id: uuid.UUID = Path(..., description="任务ID"),
+    keep_count: int = Query(3, ge=1, le=10, description="保留的未选择subdivision数量"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    清理任务的未选择subdivision记录
+    
+    Args:
+        task_id: 任务ID
+        keep_count: 保留的未选择subdivision数量
+        current_user: 当前用户
+        
+    Returns:
+        清理结果
+    """
+    try:
+        logger.info(f"🧹 用户 {current_user.username} 请求清理任务subdivisions: {task_id}")
+        
+        deleted_count = await subdivision_service.cleanup_unselected_subdivisions(
+            task_id, keep_count
+        )
+        
+        return BaseResponse(
+            success=True,
+            message=f"成功清理了 {deleted_count} 个未选择的subdivision",
+            data={
+                "task_id": str(task_id),
+                "deleted_count": deleted_count,
+                "keep_count": keep_count
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"清理subdivision异常: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="清理subdivision失败，请稍后再试"
+        )
+
+
 @router.get("/subdivisions/{subdivision_id}/children", response_model=BaseResponse)  
 async def get_subdivision_children(
     subdivision_id: uuid.UUID = Path(..., description="父级细分ID"),

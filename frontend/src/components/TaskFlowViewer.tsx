@@ -56,6 +56,9 @@ interface TaskNode {
   retry_count?: number;
   task_count?: number;
   error_message?: string;
+  // 任务数据字段
+  input_data?: any;
+  output_data?: any;
 }
 
 interface TaskFlow {
@@ -79,6 +82,7 @@ interface TaskFlow {
     source: string;
     target: string;
     label?: string;
+    type?: string;
   }>;
   current_user_role?: 'creator' | 'assignee' | 'viewer';
   assigned_tasks?: TaskNode[];

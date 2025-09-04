@@ -1029,6 +1029,45 @@ export const taskSubdivisionApi = {
       console.error('❌ 删除任务细分失败:', error);
       throw error;
     }
+  },
+
+  // 选择subdivision作为最终方案
+  selectSubdivision: async (subdivisionId: string) => {
+    console.log('🔄 选择subdivision:', subdivisionId);
+    try {
+      const response = await api.post(`/task-subdivision/subdivisions/${subdivisionId}/select`);
+      console.log('✅ 选择subdivision成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 选择subdivision失败:', error);
+      throw error;
+    }
+  },
+
+  // 获取已选择的subdivision
+  getSelectedSubdivision: async (taskId: string) => {
+    console.log('🔄 获取已选择subdivision:', taskId);
+    try {
+      const response = await api.get(`/task-subdivision/tasks/${taskId}/selected-subdivision`);
+      console.log('✅ 获取已选择subdivision成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 获取已选择subdivision失败:', error);
+      throw error;
+    }
+  },
+
+  // 清理未选择的subdivision记录
+  cleanupUnselectedSubdivisions: async (taskId: string, keepCount: number = 3) => {
+    console.log('🔄 清理未选择subdivision:', taskId, { keepCount });
+    try {
+      const response = await api.post(`/task-subdivision/tasks/${taskId}/cleanup-subdivisions?keep_count=${keepCount}`);
+      console.log('✅ 清理未选择subdivision成功:', response);
+      return response;
+    } catch (error: any) {
+      console.error('❌ 清理未选择subdivision失败:', error);
+      throw error;
+    }
   }
 };
 

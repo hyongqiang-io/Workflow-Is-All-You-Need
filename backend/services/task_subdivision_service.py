@@ -461,6 +461,163 @@ class TaskSubdivisionService:
             import traceback
             logger.error(f"错误堆栈: {traceback.format_exc()}")
     
+    # ============ subdivision选择管理方法 ============
+    
+    async def select_subdivision(self, subdivision_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """
+        选择一个subdivision作为最终方案，并将同任务的其他subdivision设为非选择状态
+        
+        Args:
+            subdivision_id: 要选择的subdivision ID
+            user_id: 操作用户ID
+            
+        Returns:
+            bool: 操作是否成功
+        """
+        try:
+            logger.info(f"🎯 选择subdivision: {subdivision_id}")
+            
+            # 1. 验证subdivision存在且有权限
+            subdivision = await self.subdivision_repo.get_subdivision_by_id(subdivision_id)
+            if not subdivision:
+                raise ValidationError("细分不存在")
+                
+            if str(subdivision.get('subdivider_id')) != str(user_id):
+                raise ValidationError("只能选择自己创建的细分")
+            
+            original_task_id = subdivision['original_task_id']
+            
+            # 2. 转换为字符串，避免字符集冲突
+            subdivision_id_str = str(subdivision_id)
+            user_id_str = str(user_id)
+            original_task_id_str = str(original_task_id)
+            
+            logger.info(f"   原始任务ID: {original_task_id_str}")
+            logger.info(f"   操作用户ID: {user_id_str}")
+            
+            # 3. 开启事务，确保原子操作
+            async with self.subdivision_repo.db.transaction():
+                # 清除同任务的其他subdivision的选择状态
+                clear_query = """
+                UPDATE task_subdivision 
+                SET is_selected = FALSE, selected_at = NULL, updated_at = NOW()
+                WHERE original_task_id = %s AND subdivision_id != %s
+                """
+                
+                clear_result = await self.subdivision_repo.db.execute(
+                    clear_query, 
+                    original_task_id_str, subdivision_id_str
+                )
+                logger.info(f"   清除其他subdivision选择状态，影响 {clear_result} 行")
+                
+                # 设置当前subdivision为选择状态
+                select_query = """
+                UPDATE task_subdivision 
+                SET is_selected = TRUE, selected_at = NOW(), updated_at = NOW()
+                WHERE subdivision_id = %s
+                """
+                
+                select_result = await self.subdivision_repo.db.execute(
+                    select_query, 
+                    subdivision_id_str
+                )
+                logger.info(f"   设置当前subdivision为选择状态，影响 {select_result} 行")
+                
+                if select_result == 0:
+                    raise ValueError("更新subdivision选择状态失败")
+            
+            logger.info(f"✅ subdivision选择成功: {subdivision_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"选择subdivision失败: {e}")
+            raise
+    
+    async def get_selected_subdivision(self, task_id: uuid.UUID) -> Optional[Dict[str, Any]]:
+        """获取任务的已选择subdivision"""
+        try:
+            query = """
+            SELECT 
+                ts.*,
+                u.username as subdivider_name,
+                w.name as sub_workflow_name,
+                (SELECT COUNT(*) FROM node n 
+                 WHERE n.workflow_base_id = ts.sub_workflow_base_id 
+                 AND n.is_deleted = FALSE) as total_sub_nodes,
+                (SELECT COUNT(*) FROM node_instance ni 
+                 JOIN node n ON ni.node_id = n.node_id
+                 WHERE n.workflow_base_id = ts.sub_workflow_base_id 
+                 AND ni.workflow_instance_id = ts.sub_workflow_instance_id
+                 AND ni.status = 'completed'
+                 AND ni.is_deleted = FALSE) as completed_sub_nodes
+            FROM task_subdivision ts
+            LEFT JOIN "user" u ON ts.subdivider_id = u.user_id
+            LEFT JOIN workflow w ON ts.sub_workflow_base_id = w.workflow_base_id 
+                AND w.is_current_version = TRUE
+            WHERE ts.original_task_id = %s 
+                AND ts.is_selected = TRUE 
+                AND ts.is_deleted = FALSE
+            """
+            
+            result = await self.subdivision_repo.db.fetch_one(query, task_id)
+            return dict(result) if result else None
+            
+        except Exception as e:
+            logger.error(f"获取已选择subdivision失败: {e}")
+            raise
+    
+    async def cleanup_unselected_subdivisions(self, task_id: uuid.UUID, 
+                                           keep_count: int = 3) -> int:
+        """
+        清理未选择的subdivision记录，保留最近的几个
+        
+        Args:
+            task_id: 任务ID
+            keep_count: 保留的记录数（除了已选择的）
+            
+        Returns:
+            int: 清理的记录数
+        """
+        try:
+            logger.info(f"🧹 开始清理任务 {task_id} 的未选择subdivision")
+            
+            # 获取要删除的subdivision IDs
+            query = """
+            SELECT subdivision_id 
+            FROM task_subdivision 
+            WHERE original_task_id = %s 
+                AND is_selected = FALSE 
+                AND is_deleted = FALSE
+            ORDER BY subdivision_created_at DESC
+            OFFSET %s
+            """
+            
+            to_delete_result = await self.subdivision_repo.db.fetch_all(
+                query, task_id, keep_count
+            )
+            
+            if not to_delete_result:
+                logger.info("没有需要清理的subdivision")
+                return 0
+            
+            to_delete_ids = [row['subdivision_id'] for row in to_delete_result]
+            
+            # 软删除这些记录
+            deleted_count = 0
+            for subdivision_id in to_delete_ids:
+                success = await self.subdivision_repo.delete_subdivision(
+                    subdivision_id, soft_delete=True
+                )
+                if success:
+                    deleted_count += 1
+            
+            logger.info(f"✅ 清理完成，删除了 {deleted_count} 个未选择的subdivision")
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"清理未选择subdivision失败: {e}")
+            raise
+
     # ============ 保持兼容性的方法 ============
     
     async def get_task_subdivisions(self, task_id: uuid.UUID) -> List[TaskSubdivisionResponse]:
@@ -503,6 +660,8 @@ class TaskSubdivisionService:
             subdivision_name=subdivision['subdivision_name'],
             subdivision_description=subdivision['subdivision_description'],
             status=TaskSubdivisionStatus(subdivision['status']),
+            is_selected=subdivision.get('is_selected', False),
+            selected_at=subdivision.get('selected_at').isoformat() if subdivision.get('selected_at') else None,
             parent_task_description=subdivision.get('parent_task_description', ''),
             context_passed=subdivision.get('context_passed', ''),
             subdivision_created_at=subdivision['subdivision_created_at'].isoformat(),

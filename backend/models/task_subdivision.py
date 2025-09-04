@@ -48,6 +48,10 @@ class TaskSubdivision(TaskSubdivisionBase, BaseEntity):
     # 链式细分支持
     parent_subdivision_id: Optional[uuid.UUID] = Field(None, description="父级细分ID，支持嵌套细分")
     
+    # 选择状态 - 用于标识用户最终选择的subdivision
+    is_selected: bool = Field(default=False, description="是否为用户最终选择的细分方案")
+    selected_at: Optional[datetime] = Field(None, description="选择时间")
+    
     # 上下文传递
     parent_task_description: str = Field(..., description="父任务描述")
     context_passed: str = Field(default="", description="传递给子工作流的上下文")
@@ -86,6 +90,10 @@ class TaskSubdivisionResponse(TaskSubdivisionBase):
     sub_workflow_base_id: uuid.UUID
     sub_workflow_instance_id: Optional[uuid.UUID] = None
     status: TaskSubdivisionStatus
+    
+    # 选择状态
+    is_selected: bool
+    selected_at: Optional[str] = None
     
     # 上下文信息
     parent_task_description: str

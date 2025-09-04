@@ -45,6 +45,8 @@ class TaskSubdivisionRepository(BaseRepository[TaskSubdivision]):
                 "parent_task_description": "",  # 将在后续更新
                 "context_passed": subdivision_data.context_to_pass,
                 "parent_subdivision_id": subdivision_data.parent_subdivision_id,  # 链式细分支持
+                "is_selected": False,  # 默认未选择
+                "selected_at": None,
                 "subdivision_created_at": now_utc(),
                 "created_at": now_utc(),
                 "updated_at": now_utc(),

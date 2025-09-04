@@ -61,14 +61,32 @@ class WorkflowRepository(BaseRepository[Workflow]):
     async def update_workflow(self, workflow_base_id: uuid.UUID, 
                              workflow_data: WorkflowUpdate,
                              editor_user_id: Optional[uuid.UUID] = None) -> Optional[Dict[str, Any]]:
-        """更新工作流（创建新版本）"""
+        """更新工作流（仅在真正有变化时创建新版本）"""
         try:
             # 获取当前版本的工作流信息
             current_workflow = await self.get_workflow_by_base_id(workflow_base_id)
             if not current_workflow:
                 raise ValueError("工作流不存在")
             
-            # 生成新的workflow_id和版本号
+            # 🔧 新增：检查是否真的有变化
+            has_changes = False
+            new_name = workflow_data.name if workflow_data.name is not None else current_workflow.get('name')
+            new_description = workflow_data.description if workflow_data.description is not None else current_workflow.get('description')
+            
+            if workflow_data.name is not None and workflow_data.name != current_workflow.get('name'):
+                has_changes = True
+                logger.info(f"检测到名称变化: '{current_workflow.get('name')}' -> '{workflow_data.name}'")
+            
+            if workflow_data.description is not None and workflow_data.description != current_workflow.get('description'):
+                has_changes = True  
+                logger.info(f"检测到描述变化: '{current_workflow.get('description')}' -> '{workflow_data.description}'")
+            
+            # 如果没有变化，直接返回当前版本
+            if not has_changes:
+                logger.info(f"工作流无变化，返回当前版本: {workflow_base_id} v{current_workflow.get('version')}")
+                return current_workflow
+            
+            # 有变化才创建新版本
             new_workflow_id = uuid.uuid4()
             current_version = current_workflow.get('version', 1)
             # 🔧 确保版本号是整数类型
@@ -76,11 +94,7 @@ class WorkflowRepository(BaseRepository[Workflow]):
                 current_version = int(current_version)
             new_version = current_version + 1
             
-            # 准备新版本数据
-            new_name = workflow_data.name if workflow_data.name is not None else current_workflow.get('name')
-            new_description = workflow_data.description if workflow_data.description is not None else current_workflow.get('description')
-            
-            logger.info(f"开始创建工作流新版本: {workflow_base_id} v{new_version}")
+            logger.info(f"检测到变化，开始创建工作流新版本: {workflow_base_id} v{new_version}")
             
             # 开始事务处理
             try:

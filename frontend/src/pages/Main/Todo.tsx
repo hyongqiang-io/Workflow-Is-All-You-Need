@@ -556,10 +556,26 @@ const Todo: React.FC = () => {
         return;
       }
       
+      // 1. 首先标记该subdivision为选择状态
+      console.log('🎯 标记subdivision为选择状态:', subdivisionId);
+      try {
+        const selectResponse = await taskSubdivisionApi.selectSubdivision(subdivisionId);
+        const selectResponseData = selectResponse as any;
+        
+        if (!selectResponseData?.success) {
+          console.warn('⚠️ 标记subdivision选择状态失败，但继续处理结果选择');
+        } else {
+          console.log('✅ subdivision标记选择成功');
+        }
+      } catch (selectError: any) {
+        console.warn('⚠️ 标记subdivision选择状态时出错:', selectError);
+        // 不阻断流程，继续处理结果选择
+      }
+      
       console.log('🔍 正在获取子工作流的实际执行结果...');
       message.loading('正在获取子工作流执行结果...', 0);
       
-      // 调用新的API端点获取完整的子工作流执行结果
+      // 2. 获取子工作流执行结果
       const response = await taskSubdivisionApi.getSubdivisionWorkflowResults(subdivisionId);
       message.destroy(); // 销毁loading消息
       
@@ -704,12 +720,32 @@ const Todo: React.FC = () => {
 
   const handleSubmitConfirm = async () => {
     try {
+      // 防护检查
+      if (!currentTask) {
+        message.error('当前任务信息丢失，请重新打开提交窗口');
+        return;
+      }
+      
+      if (!currentTask.task_instance_id) {
+        console.error('❌ currentTask缺少task_instance_id:', currentTask);
+        message.error('任务ID缺失，无法提交。请刷新页面重试');
+        return;
+      }
+      
+      console.log('🔄 提交任务结果:', {
+        task_instance_id: currentTask.task_instance_id,
+        task_title: currentTask.task_title
+      });
+      
       const values = await submitForm.validateFields();
       await submitTaskResult(currentTask.task_instance_id, values.result, values.notes);
       message.success('任务提交成功');
       setSubmitModalVisible(false);
+      setCurrentTask(null);
+      loadTasks(); // 重新加载任务列表
     } catch (error) {
       console.error('提交失败:', error);
+      message.error('提交失败，请重试');
     }
   };
 

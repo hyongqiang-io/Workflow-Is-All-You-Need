@@ -161,7 +161,7 @@ class WorkflowTemplateConnectionService:
                 FROM task_subdivision ts
                 JOIN task_instance ti ON ts.original_task_id = ti.task_instance_id
                 JOIN node_instance ni ON ti.node_instance_id = ni.node_instance_id
-                JOIN node n ON ni.node_id = n.node_id
+                LEFT JOIN node n ON ni.node_id = n.node_id  -- 🔧 修复：改为LEFT JOIN，兼容空版本工作流
                 LEFT JOIN workflow sw ON ts.sub_workflow_base_id = sw.workflow_base_id AND sw.is_current_version = TRUE
                 LEFT JOIN workflow_instance swi ON ts.sub_workflow_instance_id = swi.workflow_instance_id
                 WHERE ti.workflow_instance_id = %s
@@ -304,7 +304,7 @@ class WorkflowTemplateConnectionService:
             FROM task_subdivision ts
             JOIN task_instance ti ON ts.original_task_id = ti.task_instance_id
             JOIN node_instance ni ON ti.node_instance_id = ni.node_instance_id
-            JOIN node n ON ni.node_id = n.node_id
+            LEFT JOIN node n ON ni.node_id = n.node_id  -- 🔧 修复：改为LEFT JOIN，兼容空版本工作流
             LEFT JOIN workflow_instance swi ON ts.sub_workflow_instance_id = swi.workflow_instance_id
             WHERE n.workflow_base_id = $1
             AND ts.is_deleted = FALSE
