@@ -140,11 +140,23 @@ class BaseRepository(ABC, Generic[T]):
                     return merged_data
             
             if result:
-                logger.info(f"更新了表 {self.table_name} 中的记录 {record_id}")
+                # logger.info(f"更新了表 {self.table_name} 中的记录 {record_id}")
                 return result
             else:
-                logger.warning(f"更新记录失败，可能记录不存在: {record_id}")
-                return None
+                # MySQL不支持RETURNING，但UPDATE可能成功了，尝试查询验证
+                logger.debug(f"UPDATE未返回结果，验证是否更新成功: {self.table_name}.{record_id}")
+                try:
+                    # 尝试查询记录确认是否存在并更新
+                    verification_result = await self.get_by_id(record_id, id_column)
+                    if verification_result:
+                        # logger.info(f"✅ 更新成功 (通过查询验证): 表 {self.table_name} 记录 {record_id}")
+                        return verification_result
+                    else:
+                        logger.warning(f"更新记录失败，记录不存在: {record_id}")
+                        return None
+                except Exception as verify_e:
+                    logger.warning(f"更新后验证查询失败: {verify_e}")
+                    return None
                 
         except Exception as e:
             logger.error(f"更新记录失败: {e}")

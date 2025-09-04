@@ -1188,15 +1188,15 @@ const Todo: React.FC = () => {
                       </Button>
                     ),
                     // IN_PROGRESS状态可以暂停任务
-                    item.status.toLowerCase() === 'in_progress' && (
-                      <Button 
-                        key="pause" 
-                        size="small"
-                        onClick={() => handlePauseTask(item)}
-                      >
-                        暂停任务
-                      </Button>
-                    ),
+                    // item.status.toLowerCase() === 'in_progress' && (
+                    //   <Button 
+                    //     key="pause" 
+                    //     size="small"
+                    //     onClick={() => handlePauseTask(item)}
+                    //   >
+                    //     暂停任务
+                    //   </Button>
+                    // ),
                     // 进行中、已分配、待分配状态可以取消任务
                     (item.status.toLowerCase() === 'in_progress' || 
                      item.status.toLowerCase() === 'assigned' || 
