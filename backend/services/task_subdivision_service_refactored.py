@@ -171,8 +171,8 @@ class TaskSubdivisionServiceRefactored:
             # 构造执行请求
             from ..models.instance import WorkflowExecuteRequest
             execute_request = WorkflowExecuteRequest(
-                workflow_base_id=template_id,
-                workflow_instance_name=f"细分执行_{subdivision_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                workflow_base_id=str(template_id),  # 修复: UUID转字符串
+                workflow_instance_name=f"细分执行_{str(subdivision_id)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                 input_data={},
                 context_data={
                     "subdivision_context": context,

@@ -26,8 +26,13 @@ class DatabaseManager:
             'password': self.settings.database.password,
             'db': self.settings.database.database,
             'charset': getattr(self.settings.database, 'charset', 'utf8mb4'),
-            'autocommit': True,
-            'connect_timeout': 60,
+            'autocommit': True,   # 🔧 修复：恢复自动提交，避免单个操作不提交
+            'connect_timeout': 10,
+            # 改用init_command设置锁等待时间
+            'init_command': (
+                'SET SESSION innodb_lock_wait_timeout=5; '  # 减少锁等待时间为5秒
+                'SET SESSION lock_wait_timeout=5'           # 设置表级锁等待时间
+            )
         }
     
     def _convert_postgresql_query(self, query: str) -> str:
@@ -233,6 +238,13 @@ class DatabaseManager:
                 result = await cursor.fetchone()
                 return result[0] if result else None
     
+    async def call_function(self, function_name: str, *args) -> Any:
+        """调用数据库函数 - 兼容PostgreSQL接口"""
+        # MySQL函数调用语法
+        placeholders = ', '.join(['%s' for _ in args])
+        query = f"SELECT {function_name}({placeholders})"
+        return await self.fetch_val(query, *args)
+    
     async def execute_transaction(self, queries: List[Tuple[str, tuple]]) -> None:
         """执行事务 - 兼容PostgreSQL接口"""
         async with self.get_connection() as conn:
@@ -247,12 +259,23 @@ class DatabaseManager:
                     await conn.connection.rollback()
                     raise
     
-    async def call_function(self, function_name: str, *args) -> Any:
-        """调用数据库函数 - 兼容PostgreSQL接口"""
-        # MySQL函数调用语法
-        placeholders = ', '.join(['%s' for _ in args])
-        query = f"SELECT {function_name}({placeholders})"
-        return await self.fetch_val(query, *args)
+    @asynccontextmanager
+    async def transaction(self):
+        """数据库事务上下文管理器"""
+        async with self.get_connection() as conn:
+            try:
+                # 开始事务
+                await conn.connection.begin()
+                logger.debug("🔄 事务开始")
+                yield conn
+                # 提交事务
+                await conn.connection.commit()
+                logger.debug("✅ 事务提交成功")
+            except Exception as e:
+                # 回滚事务
+                await conn.connection.rollback()
+                logger.error(f"❌ 事务回滚: {e}")
+                raise
     
     def _extract_table_name_from_insert(self, query: str) -> Optional[str]:
         """从INSERT语句中提取表名"""
@@ -398,9 +421,20 @@ class MySQLConnectionWrapper:
             result = await cursor.fetchone()
             return result[0] if result else None
     
+    @asynccontextmanager
     async def transaction(self):
-        """事务上下文管理器"""
-        return self.connection
+        """事务上下文管理器 - 提供真正的事务支持"""
+        async with self.connection.cursor() as cursor:
+            try:
+                await cursor.execute("START TRANSACTION")
+                logger.debug("事务开始")
+                yield self
+                await cursor.execute("COMMIT")
+                logger.debug("事务提交成功")
+            except Exception as e:
+                await cursor.execute("ROLLBACK")
+                logger.error(f"事务回滚: {e}")
+                raise
     
     async def close(self):
         """关闭连接"""

@@ -1165,16 +1165,16 @@ const Todo: React.FC = () => {
                       </Button>
                     ),
                     // PENDING/ASSIGNED状态可以拒绝任务
-                    (item.status.toLowerCase() === 'pending' || item.status.toLowerCase() === 'assigned') && (
-                      <Button 
-                        key="reject" 
-                        danger
-                        size="small"
-                        onClick={() => handleRejectTask(item)}
-                      >
-                        拒绝任务
-                      </Button>
-                    ),
+                    // (item.status.toLowerCase() === 'pending' || item.status.toLowerCase() === 'assigned') && (
+                    //   <Button 
+                    //     key="reject" 
+                    //     danger
+                    //     size="small"
+                    //     onClick={() => handleRejectTask(item)}
+                    //   >
+                    //     拒绝任务
+                    //   </Button>
+                    // ),
                     // IN_PROGRESS状态可以提交结果
                     item.status.toLowerCase() === 'in_progress' && (
                       <Button 
@@ -2223,7 +2223,7 @@ const Todo: React.FC = () => {
       </Modal>
 
       {/* 拒绝任务模态框 */}
-      <Modal
+      {/* <Modal
         title="拒绝任务"
         open={rejectModalVisible}
         onOk={handleRejectConfirm}
@@ -2251,7 +2251,7 @@ const Todo: React.FC = () => {
             />
           </Form.Item>
         </Form>
-      </Modal>
+      </Modal> */}
 
       {/* 取消任务模态框 */}
       <Modal

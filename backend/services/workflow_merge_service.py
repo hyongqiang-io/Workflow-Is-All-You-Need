@@ -9,7 +9,7 @@
 """
 
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass
 from loguru import logger
 
@@ -90,7 +90,7 @@ class WorkflowMergeService:
             raise
     
     async def execute_merge(self, workflow_instance_id: uuid.UUID, 
-                          selected_merges: List[str], 
+                          selected_merges: List[Any], 
                           creator_id: uuid.UUID, 
                           recursive: bool = True) -> Dict[str, Any]:
         """执行工作流合并 - 重构版本，完全基于workflow_template_tree，默认启用递归合并"""
@@ -119,16 +119,18 @@ class WorkflowMergeService:
             # 🔧 基于tree计算合并候选项（智能递归路径计算）
             logger.info(f"🔄 [智能递归] 计算递归合并路径...")
             
-            # 🔧 修复：处理前端传递的template_前缀
+            # 🔧 修复：处理前端传递的template_前缀，同时处理UUID类型
             cleaned_selected_merges = []
             for merge_id in selected_merges:
-                if merge_id.startswith('template_'):
+                # 🔧 修复：确保merge_id是字符串，如果是UUID就转换
+                merge_id_str = str(merge_id)
+                if merge_id_str.startswith('template_'):
                     # 移除template_前缀
-                    cleaned_id = merge_id.replace('template_', '')
+                    cleaned_id = merge_id_str.replace('template_', '')
                     cleaned_selected_merges.append(cleaned_id)
-                    logger.info(f"   🔧 清理节点ID: {merge_id} -> {cleaned_id}")
+                    logger.info(f"   🔧 清理节点ID: {merge_id_str} -> {cleaned_id}")
                 else:
-                    cleaned_selected_merges.append(merge_id)
+                    cleaned_selected_merges.append(merge_id_str)
             
             tree_candidates = tree.calculate_recursive_merge_path(cleaned_selected_merges)
             

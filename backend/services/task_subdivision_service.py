@@ -200,28 +200,77 @@ class TaskSubdivisionService:
         try:
             logger.info(f"🚀 从模板创建工作流实例: {template_id}")
             
-            # 构造执行请求
+            # 🔍 [调试] 参数类型检查
+            logger.info(f"🔍 [UUID调试] template_id类型: {type(template_id)}, 值: {template_id}")
+            logger.info(f"🔍 [UUID调试] subdivision_id类型: {type(subdivision_id)}, 值: {subdivision_id}")
+            logger.info(f"🔍 [UUID调试] executor_id类型: {type(executor_id)}, 值: {executor_id}")
+            
+            # 构造执行请求 - 确保UUID转换为字符串
             from ..models.instance import WorkflowExecuteRequest
+            template_id_str = str(template_id)
+            subdivision_id_str = str(subdivision_id)
+            
+            logger.info(f"🔍 [UUID调试] 转换后 template_id_str类型: {type(template_id_str)}, 值: {template_id_str}")
+            logger.info(f"🔍 [UUID调试] 转换后 subdivision_id_str类型: {type(subdivision_id_str)}, 值: {subdivision_id_str}")
+            
             execute_request = WorkflowExecuteRequest(
-                workflow_base_id=template_id,
-                workflow_instance_name=f"细分执行_{subdivision_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                workflow_base_id=template_id_str,  # 修复: UUID转字符串
+                workflow_instance_name=f"细分执行_{subdivision_id_str}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                 input_data={},
                 context_data={
                     "subdivision_context": context,
-                    "subdivision_id": str(subdivision_id),
+                    "subdivision_id": subdivision_id_str,
                     "execution_type": "task_subdivision"
                 }
             )
             
+            logger.info(f"🔍 [UUID调试] execute_request对象创建完成")
+            
             # 执行工作流（从模板创建实例）
-            result = await execution_engine.execute_workflow(execute_request, executor_id)
+            logger.info(f"🔍 [UUID调试] 准备调用 execution_engine.execute_workflow")
+            logger.info(f"🔍 [UUID调试] executor_id类型: {type(executor_id)}, 值: {executor_id}")
+            
+            try:
+                result = await execution_engine.execute_workflow(execute_request, executor_id)
+                logger.info(f"🔍 [UUID调试] execution_engine.execute_workflow 执行成功")
+                logger.info(f"🔍 [UUID调试] 返回结果类型: {type(result)}")
+            except Exception as exec_error:
+                logger.error(f"🔍 [UUID调试] execution_engine.execute_workflow 执行失败: {exec_error}")
+                logger.error(f"🔍 [UUID调试] 异常类型: {type(exec_error)}")
+                import traceback
+                logger.error(f"🔍 [UUID调试] 异常堆栈: {traceback.format_exc()}")
+                raise
             
             # 提取实例ID
-            instance_id = self._extract_instance_id(result)
+            logger.info(f"🔍 [UUID调试] 准备提取实例ID，result: {type(result)}")
+            try:
+                instance_id = self._extract_instance_id(result)
+                logger.info(f"🔍 [UUID调试] 实例ID提取结果: {type(instance_id)}, 值: {instance_id}")
+            except Exception as extract_error:
+                logger.error(f"🔍 [UUID调试] 提取实例ID失败: {extract_error}")
+                logger.error(f"🔍 [UUID调试] 提取异常类型: {type(extract_error)}")
+                import traceback
+                logger.error(f"🔍 [UUID调试] 提取异常堆栈: {traceback.format_exc()}")
+                raise
             
             if instance_id:
+                # 🔍 [调试] 回调注册参数检查
+                logger.info(f"🔍 [UUID调试] 准备注册完成回调")
+                logger.info(f"🔍 [UUID调试] subdivision_id类型: {type(subdivision_id)}, 值: {subdivision_id}")
+                logger.info(f"🔍 [UUID调试] instance_id类型: {type(instance_id)}, 值: {instance_id}")
+                logger.info(f"🔍 [UUID调试] executor_id类型: {type(executor_id)}, 值: {executor_id}")
+                
                 # 注册完成回调
-                await self._register_completion_callback(subdivision_id, instance_id, executor_id)
+                try:
+                    await self._register_completion_callback(subdivision_id, instance_id, executor_id)
+                    logger.info(f"🔍 [UUID调试] 完成回调注册成功")
+                except Exception as callback_error:
+                    logger.error(f"🔍 [UUID调试] 完成回调注册失败: {callback_error}")
+                    logger.error(f"🔍 [UUID调试] 回调异常类型: {type(callback_error)}")
+                    import traceback
+                    logger.error(f"🔍 [UUID调试] 回调异常堆栈: {traceback.format_exc()}")
+                    raise
+                
                 logger.info(f"✅ 工作流实例创建并启动成功: {instance_id}")
                 return instance_id
             else:
@@ -336,9 +385,17 @@ class TaskSubdivisionService:
         try:
             if isinstance(result, dict):
                 if 'instance_id' in result:
-                    return uuid.UUID(result['instance_id'])
+                    instance_id = result['instance_id']
+                    if isinstance(instance_id, uuid.UUID):
+                        return instance_id
+                    else:
+                        return uuid.UUID(instance_id)
                 elif 'workflow_instance_id' in result:
-                    return uuid.UUID(result['workflow_instance_id'])
+                    workflow_id = result['workflow_instance_id']
+                    if isinstance(workflow_id, uuid.UUID):
+                        return workflow_id
+                    else:
+                        return uuid.UUID(workflow_id)
             elif hasattr(result, 'workflow_instance_id'):
                 return result.workflow_instance_id
             elif isinstance(result, str):

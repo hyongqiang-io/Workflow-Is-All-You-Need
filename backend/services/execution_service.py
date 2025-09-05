@@ -124,143 +124,266 @@ class ExecutionEngine:
     
     async def execute_workflow(self, request: WorkflowExecuteRequest, 
                              executor_id: uuid.UUID) -> Dict[str, Any]:
-        """执行工作流"""
+        """执行工作流 - 解耦重构版本（修复锁超时问题）"""
+        
+        # 🔍 [调试] 参数类型检查
+        logger.info(f"🔍 [UUID调试] execute_workflow入口参数检查:")
+        logger.info(f"🔍 [UUID调试] request.workflow_base_id类型: {type(request.workflow_base_id)}, 值: {request.workflow_base_id}")
+        logger.info(f"🔍 [UUID调试] executor_id类型: {type(executor_id)}, 值: {executor_id}")
+        
+        # 🔧 修复锁超时：缩小事务范围，只包含数据创建
+        workflow_data = None
+        async with self.workflow_instance_repo.db.transaction() as conn:
+            try:
+                logger.trace(f"🔄 [编排器] 开始工作流编排: {request.workflow_base_id}")
+                
+                # 1. 幂等性检查
+                existing = await self._check_workflow_idempotency(
+                    conn, request, executor_id
+                )
+                if existing:
+                    return existing
+                
+                # 2. 数据层：创建工作流数据（纯数据操作 - 快速完成）
+                workflow_data = await self._create_workflow_data(
+                    conn, request, executor_id
+                )
+                
+                logger.trace(f"✅ [编排器] 数据层创建完成，事务即将提交")
+                
+                # 事务在此处自动提交，释放锁
+                
+            except Exception as e:
+                logger.error(f"❌ [编排器] 数据创建失败: {e}")
+                import traceback
+                logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
+                raise
+        
+        # 3. 上下文层：注册执行上下文（事务外 - 避免长时间持锁）
         try:
-            logger.trace(f"开始执行工作流: {request.workflow_base_id}, 执行者: {executor_id}")
-            # 1. 验证工作流是否存在且可执行
-            logger.trace(f"步骤1: 查询工作流 {request.workflow_base_id}")
-            workflow = await self.workflow_repo.get_workflow_by_base_id(request.workflow_base_id)
-            if not workflow:
-                logger.error(f"工作流不存在: {request.workflow_base_id}")
-                raise ValueError("工作流不存在")
+            await self._register_execution_context(workflow_data)
+            logger.trace(f"✅ [编排器] 工作流编排完成")
+            return workflow_data
+        except Exception as e:
+            logger.error(f"❌ [编排器] 上下文注册失败: {e}")
+            # 数据已创建成功，返回基本信息
+            workflow_data['message'] += f" (注意: 上下文注册失败，可能影响自动执行: {str(e)})"
+            return workflow_data
+    
+    async def _check_workflow_idempotency(self, conn, request: WorkflowExecuteRequest, 
+                                        executor_id: uuid.UUID) -> Optional[Dict[str, Any]]:
+        """幂等性检查 - 纯查询逻辑"""
+        logger.trace(f"🔍 [幂等检查] 检查重复执行")
+        
+        existing_check_query = """
+            SELECT workflow_instance_id, status, workflow_instance_name, created_at
+            FROM `workflow_instance` 
+            WHERE workflow_base_id = %s 
+            AND executor_id = %s 
+            AND workflow_instance_name = %s
+            AND status IN ('RUNNING', 'PENDING')
+            AND is_deleted = FALSE
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+        
+        existing = await conn.fetchrow(
+            existing_check_query, 
+            request.workflow_base_id, 
+            executor_id, 
+            request.workflow_instance_name
+        )
+        
+        if existing:
+            logger.info(f"🔄 [幂等检查] 发现已存在的运行中实例: {existing['workflow_instance_id']}")
+            return {
+                'instance_id': existing['workflow_instance_id'],
+                'status': 'already_running',
+                'message': f'工作流实例 "{request.workflow_instance_name}" 已在运行中',
+                'existing_instance': {
+                    'id': existing['workflow_instance_id'],
+                    'name': existing['workflow_instance_name'],
+                    'status': existing['status'],
+                    'created_at': existing['created_at']
+                }
+            }
+        
+        return None
+    
+    async def _create_workflow_data(self, conn, request: WorkflowExecuteRequest, 
+                                  executor_id: uuid.UUID) -> Dict[str, Any]:
+        """数据层：纯数据创建操作"""
+        from ..models.instance import NodeInstanceStatus
+        from ..models.node import NodeType
+        import uuid, json
+        from ..utils.helpers import now_utc
+        
+        logger.trace(f"🏗️ [数据层] 开始创建工作流数据")
+        
+        # 1. 验证工作流
+        workflow = await self.workflow_repo.get_workflow_by_base_id(request.workflow_base_id)
+        if not workflow:
+            raise ValueError("工作流不存在")
+        workflow_id = workflow['workflow_id']
+        
+        # 2. 创建工作流实例
+        instance_id = uuid.uuid4()
+        create_instance_query = """
+            INSERT INTO `workflow_instance` 
+            (workflow_instance_id, workflow_id, workflow_base_id, executor_id, workflow_instance_name, 
+             input_data, context_data, status, created_at, is_deleted)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        await conn.execute(
+            create_instance_query,
+            instance_id, workflow_id, request.workflow_base_id, executor_id, 
+            request.workflow_instance_name,
+            json.dumps(request.input_data or {}), json.dumps(request.context_data or {}),
+            'RUNNING', now_utc(), False
+        )
+        
+        # 3. 批量创建节点实例和对应的任务实例
+        nodes = await self._get_workflow_nodes_by_version_id(workflow_id)
+        if not nodes:
+            raise ValueError(f"工作流 {workflow_id} 没有节点")
+        
+        node_instances = []
+        start_nodes_count = 0
+        created_tasks_count = 0
+        
+        for node in nodes:
+            node_instance_id = uuid.uuid4()
             
-            # 🔧 修复：使用具体的workflow_id而不是base_id
-            workflow_id = workflow['workflow_id']
-            logger.trace(f"✅ 工作流查询成功: {workflow.get('name', 'Unknown')} (版本ID: {workflow_id})")
+            # 创建节点实例
+            create_node_query = """
+                INSERT INTO `node_instance`
+                (node_instance_id, workflow_instance_id, node_id, node_base_id, 
+                 node_instance_name, task_description, status, input_data, output_data,
+                 error_message, retry_count, created_at, is_deleted)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
             
-            # 1.5. 检查是否已有正在运行的实例
-            logger.trace(f"步骤1.5: 检查是否已有正在运行的工作流实例")
-            
-            # 2. 创建工作流实例
-            logger.trace(f"步骤2: 创建工作流实例 '{request.workflow_instance_name}'")
-            instance_data = WorkflowInstanceCreate(
-                workflow_base_id=request.workflow_base_id,
-                executor_id=executor_id,
-                workflow_instance_name=request.workflow_instance_name,
-                input_data=request.input_data,
-                context_data=request.context_data
+            await conn.execute(
+                create_node_query,
+                node_instance_id, instance_id, node['node_id'], node['node_base_id'],
+                f"{node['name']}_instance", node.get('task_description', ''),
+                NodeInstanceStatus.PENDING.value, json.dumps({}), json.dumps({}),
+                None, 0, now_utc(), False
             )
             
-            instance = await self.workflow_instance_repo.create_instance(instance_data)
-            if not instance:
-                logger.error("创建工作流实例失败")
-                raise RuntimeError("创建工作流实例失败")
+            node_instances.append({
+                'node_instance_id': node_instance_id,
+                'node_id': node['node_id'],
+                'node_name': node['name'],
+                'node_type': node['type']
+            })
             
-            instance_id = instance['workflow_instance_id']
-            logger.trace(f"✅ 工作流实例创建成功: {request.workflow_instance_name} (ID: {instance_id})")
+            if node['type'] == NodeType.START.value:
+                start_nodes_count += 1
             
-            # 3. 获取工作流的所有节点（使用具体版本ID）
-            logger.trace(f"步骤3: 查询工作流版本 {workflow_id} 的所有节点")
-            nodes = await self._get_workflow_nodes_by_version_id(workflow_id)
+            # 🔧 修复Critical Bug: 不要在此处创建任务实例！
+            # 任务实例应该只在节点准备执行时才创建，而不是在工作流创建时全部创建
+            # 这样可以确保只有满足依赖关系的节点才会有分配的任务
             
-            if not nodes:
-                logger.error(f"工作流没有节点: {workflow_id}")
-                raise ValueError("工作流没有节点")
+            # 注释掉原来的任务创建逻辑，改为节点执行时再创建
+            # TODO: 在节点触发时动态创建任务实例
+        
+        logger.trace(f"✅ [数据层] 创建完成: 实例={instance_id}, 节点={len(node_instances)}, 任务={created_tasks_count}")
+        
+        return {
+            'workflow_instance_id': instance_id,
+            'workflow_id': workflow_id,
+            'workflow_name': workflow.get('name', 'Unknown'),
+            'workflow_instance_name': request.workflow_instance_name,
+            'status': 'RUNNING',
+            'executor_id': executor_id,
+            'nodes_count': len(nodes),
+            'tasks_count': created_tasks_count,
+            'start_nodes_count': start_nodes_count,
+            'created_at': now_utc().isoformat(),
+            'node_instances': node_instances,
+            'message': f'工作流实例 "{request.workflow_instance_name}" 创建成功，包含 {len(nodes)} 个节点，{created_tasks_count} 个任务'
+        }
+    
+    async def _register_execution_context(self, workflow_data: Dict[str, Any]):
+        """上下文层：纯执行逻辑注册"""
+        instance_id = workflow_data['workflow_instance_id']
+        
+        try:
+            logger.trace(f"🔗 [上下文层] 开始注册执行上下文: {instance_id}")
             
-            logger.trace(f"✅ 找到 {len(nodes)} 个节点:")
-            for i, node in enumerate(nodes, 1):
-                logger.trace(f"   节点{i}: {node['name']} (类型: {node['type']}, 具体ID: {node['node_id']})")
+            # 1. 初始化上下文管理器
+            await self.context_manager.initialize_workflow_context(instance_id)
             
-            # 4. 获取节点连接关系
-            logger.trace(f"步骤4: 查询工作流节点连接关系")
-            connections = []
-            try:
-                if hasattr(self.node_repo, 'get_workflow_connections'):
-                    connections = await self.node_repo.get_workflow_connections(request.workflow_base_id)
-                    logger.trace(f"✅ 找到 {len(connections)} 个连接:")
-                    for i, conn in enumerate(connections, 1):
-                        logger.trace(f"   连接{i}: {conn.get('from_node_name', 'Unknown')} -> {conn.get('to_node_name', 'Unknown')}")
-                else:
-                    logger.warning("节点仓库不支持获取连接关系")
-            except Exception as e:
-                logger.warning(f"获取工作流连接失败: {e}")
-                connections = []
+            # 2. 获取上下文实例
+            from ..services.workflow_execution_context import get_context_manager
+            context_manager = get_context_manager()
+            workflow_context = await context_manager.get_or_create_context(instance_id)
             
-            # 5. 初始化工作流上下文
-            logger.trace(f"步骤5: 初始化工作流上下文")
-            try:
-                await self.context_manager.initialize_workflow_context(instance_id)
-                logger.trace(f"✅ 工作流上下文初始化成功")
-            except Exception as e:
-                logger.error(f"工作流上下文初始化失败: {e}")
-                raise
+            # 3. 使用已有数据注册节点依赖（无需查询数据库）
+            registered_count = 0
+            start_nodes_triggered = 0
             
-            # 6. 创建节点实例和注册依赖关系（不创建任务实例）
-            logger.trace(f"步骤6: 创建节点实例和依赖关系")
-            try:
-                # 获取工作流执行上下文
-                context_manager = get_context_manager()
-                workflow_context = await context_manager.get_or_create_context(instance_id)
+            for node_instance in workflow_data['node_instances']:
+                node_instance_id = node_instance['node_instance_id']
+                node_id = node_instance['node_id']
+                node_type = node_instance['node_type']
                 
-                await self._create_node_instances_with_new_context(
-                    workflow_context, 
-                    instance_id, 
-                    request.workflow_base_id, 
-                    nodes,
-                    request  # 传递请求对象以便访问context_data
+                # 获取上游节点（基于node_id查询） - 🔧 修复参数顺序
+                upstream_node_instances = await self._get_upstream_node_instances(
+                    node_id, instance_id
                 )
-                logger.trace(f"✅ 节点实例和依赖关系创建完成")
-            except Exception as e:
-                logger.error(f"创建节点实例和依赖关系失败: {e}")
-                raise
+                
+                # 注册到上下文
+                await workflow_context.register_node_dependencies(
+                    node_instance_id=node_instance_id,
+                    node_id=node_id,
+                    upstream_nodes=upstream_node_instances
+                )
+                
+                registered_count += 1
+                if node_type == 'START':
+                    start_nodes_triggered += 1
+                
+                logger.trace(f"✅ [上下文层] 注册节点: {node_instance['node_name']}")
             
-            # 7. 统一架构下启动工作流执行
-            logger.info(f"🎯 [统一架构] 使用新上下文启动工作流执行")
-            logger.trace(f"  - START节点已在_create_node_instances_with_new_context中完成")
-            logger.trace(f"  - 下游PROCESSOR节点将通过上下文回调机制自动触发")
+            logger.trace(f"📊 [上下文层] 注册完成: {registered_count} 个节点")
             
-            # 检查上下文管理器中的状态
-            workflow_context = await context_manager.get_context(instance_id)
-            if workflow_context:
-                status = await workflow_context.get_workflow_status()
-                logger.info(f"🔍 [统一架构] 当前工作流状态: {status}")
+            # 4. 触发准备好的节点
+            triggered_nodes = await workflow_context.scan_and_trigger_ready_nodes()
+            
+            expected_start_nodes = workflow_data['start_nodes_count']
+            if triggered_nodes:
+                logger.trace(f"🚀 [上下文层] 成功触发 {len(triggered_nodes)} 个节点")
+                logger.trace(f"   - 预期START节点: {expected_start_nodes}")
+                logger.trace(f"   - 触发的节点: {triggered_nodes}")
+                
+                # 🔧 修复Critical Bug: 将触发的节点实际提交执行
+                for node_instance_id in triggered_nodes:
+                    try:
+                        await self._execute_node_with_new_context(workflow_context, node_instance_id)
+                        logger.trace(f"✅ [执行提交] 启动节点执行: {node_instance_id}")
+                    except Exception as e:
+                        logger.error(f"❌ [执行提交] 启动节点执行失败 {node_instance_id}: {e}")
+                        
             else:
-                logger.warning(f"⚠️ [统一架构] 未找到工作流上下文: {instance_id}")
-            
-            # 禁用旧架构的通知机制，避免冲突
-            logger.info(f"🚫 [统一架构] 跳过旧架构的START节点状态确认，使用新上下文机制")
-            
-            # 输出执行启动的完整状态
-            print(f"\n🚀 【工作流启动成功】")
-            print(f"工作流: {workflow.get('name', 'Unknown')}")
-            print(f"实例名称: {request.workflow_instance_name}")
-            print(f"实例ID: {instance_id} - 新架构")
-            print(f"执行者: {executor_id}")
-            print(f"节点数量: {len(nodes)}")
-            print(f"状态: RUNNING")
-            print(f"架构: 新一代上下文管理")
-            print(f"启动时间: {now_utc().strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"请关注后续的任务分配日志...")
-            print("=" * 60)
-            
-            # 生成工作流执行摘要（延迟一点，让任务创建完成）
-            try:
-                import asyncio
-                await asyncio.sleep(1)  # 等待1秒让任务创建完成
-                await self._log_workflow_execution_summary(instance_id)
-            except Exception as e:
-                logger.warning(f"生成执行摘要失败: {e}")
-            
-            return {
-                'workflow_instance_id': instance_id,
-                'instance_id': instance_id,
-                'status': WorkflowInstanceStatus.RUNNING.value,
-                'message': '工作流开始执行'
-            }
-            
+                logger.warning(f"⚠️ [上下文层] 未触发任何节点")
+                logger.warning(f"   - 预期START节点: {expected_start_nodes}")  
+                logger.warning(f"   - 注册的节点: {registered_count}")
+                
+                # 调试信息
+                logger.trace(f"🔍 [调试] 上下文状态:")
+                logger.trace(f"   - 节点依赖数量: {len(workflow_context.node_dependencies)}")
+                for node_id, deps in workflow_context.node_dependencies.items():
+                    ready = deps.get('ready_to_execute', False)
+                    upstream = deps.get('upstream_nodes', [])
+                    logger.trace(f"   - 节点 {node_id}: ready={ready}, upstream={len(upstream)}")
+                
         except Exception as e:
-            logger.error(f"启动工作流执行失败: {e}")
-            raise
+            logger.error(f"❌ [上下文层] 注册失败: {e}")
+            import traceback
+            logger.error(f"   - 详细堆栈: {traceback.format_exc()}")
+            # 不抛出异常，数据已创建成功
     
     async def _get_workflow_nodes_by_version_id(self, workflow_id: uuid.UUID) -> List[Dict[str, Any]]:
         """通过工作流版本ID获取所有节点（修复版本 - 使用当前版本逻辑）"""
@@ -2320,9 +2443,13 @@ class ExecutionEngine:
     async def _log_task_assignment_event(self, task_id: uuid.UUID, assigned_user_id: Optional[uuid.UUID], task_title: str):
         """记录任务分配事件"""
         try:
+            from datetime import datetime
             event_data = {
                 'event_type': 'task_assigned',
-                'status': 'success'
+                'status': 'success',
+                'timestamp': datetime.now().isoformat(),
+                'task_id': str(task_id),
+                'assigned_user_id': str(assigned_user_id) if assigned_user_id else None
             }
             
             # 这里可以记录到事件日志表或发送到消息队列
@@ -3305,7 +3432,7 @@ class ExecutionEngine:
                 logger.info(f"📋 [节点创建 {i}/{len(nodes)}] 处理节点: {node['name']} (类型: {node['type']})")
                 logger.info(f"   - node_id: {node['node_id']}")
                 logger.info(f"   - node_base_id: {node['node_base_id']}")
-                await asyncio.sleep(1) 
+                # await asyncio.sleep(1) 
                 
                 # 创建节点实例
                 task_description = node.get('task_description') or ''  # 确保不传入None
@@ -3591,49 +3718,81 @@ class ExecutionEngine:
     async def _execute_node_with_new_context(self, workflow_context, node_instance_id: uuid.UUID):
         """使用新上下文执行节点"""
         try:
+            # 🔧 修复：通过context manager获取节点信息，而不是直接从context
+            from ..services.workflow_execution_context import get_context_manager
+            context_manager = get_context_manager()
+            
             # 检查节点是否准备好执行
-            if not workflow_context.is_node_ready_to_execute(node_instance_id):
+            if not context_manager.is_node_ready_to_execute(node_instance_id):
                 logger.warning(f"节点 {node_instance_id} 尚未准备好执行")
                 return
             
             # 获取节点信息
-            dep_info = workflow_context.get_node_dependency_info(node_instance_id)
+            dep_info = context_manager.get_node_dependency_info(node_instance_id)
             if not dep_info:
                 logger.error(f"无法获取节点 {node_instance_id} 的依赖信息")
                 return
             
-            node_id = dep_info['node_id']  # 使用node_id而不是node_base_id
+            node_id = dep_info['node_id']
+            workflow_instance_id = dep_info['workflow_instance_id']
             
             # 标记节点开始执行
-            await workflow_context.mark_node_executing(node_id, node_instance_id)
+            await context_manager.mark_node_executing(workflow_instance_id, node_id, node_instance_id)
             
-            # 获取节点的任务实例
+            # 🔧 动态创建任务实例：只有在节点准备执行时才创建任务
             tasks = await self.task_instance_repo.get_tasks_by_node_instance(node_instance_id)
             
             if not tasks:
-                # 无任务节点（如START或END节点）
-                output_data = {'message': f'Node {node_id} executed without tasks'}
-                triggered_nodes = await workflow_context.mark_node_completed(
-                    node_id, node_instance_id, output_data
-                )
-                
-                # 处理触发的下游节点
-                for triggered_node_id in triggered_nodes:
-                    await self._execute_node_with_new_context(workflow_context, triggered_node_id)
-                
-            else:
-                # 有任务的节点，启动任务执行
-                for task in tasks:
-                    await self._execute_task(task)
-                
-                logger.trace(f"节点 {node_id} 的 {len(tasks)} 个任务已启动")
+                # 检查节点类型 - START/END节点不需要任务，直接自动完成
+                node_instance_data = await self._get_node_instance_data(node_instance_id)
+                if node_instance_data:
+                    node_type = node_instance_data.get('node_type', 'PROCESSOR')
+                    node_name = node_instance_data.get('node_name', 'Unknown')
+                    node_id = node_instance_data.get('node_id', 'Unknown')
+                    
+                    # 🔧 添加详细的节点类型调试信息
+                    logger.info(f"🔍 [节点类型检查] 节点实例: {node_instance_id}")
+                    logger.info(f"    - 节点ID: {node_id}")
+                    logger.info(f"    - 节点名称: {node_name}")
+                    logger.info(f"    - 节点类型: {node_type}")
+                    logger.info(f"    - 原始数据: {node_instance_data}")
+                    
+                    if node_type.upper() in ['START', 'END']:
+                        logger.info(f"🚀 [{node_type}节点] 无需创建任务，直接自动执行: {node_instance_id}")
+                        # START/END节点直接标记为完成，使用当前上下文
+                        await self._auto_complete_system_node_with_context(workflow_context, node_instance_id, node_type.upper())
+                        return
+                    else:
+                        # 🔧 只为PROCESSOR等需要任务的节点创建任务
+                        logger.info(f"🔨 [动态任务创建] 为{node_type}节点创建任务: {node_instance_id}")
+                        task_created = await self._create_task_for_node(node_instance_id, workflow_instance_id)
+                        if task_created:
+                            # 重新查询任务
+                            tasks = await self.task_instance_repo.get_tasks_by_node_instance(node_instance_id)
+                            logger.info(f"✅ [动态任务创建] 成功创建并分配任务")
+                        else:
+                            logger.error(f"❌ [动态任务创建] 任务创建失败")
+                            return
+            
+            # 现在所有到这里的节点都应该有任务了（START/END已提前返回）
+            if not tasks:
+                logger.error(f"❌ PROCESSOR节点没有任务且创建失败: {node_instance_id}")
+                return
+            
+            # 有任务的节点，启动任务执行
+            for task in tasks:
+                await self._execute_task(task)
+            
+            logger.trace(f"节点 {node_id} 的 {len(tasks)} 个任务已启动")
             
         except Exception as e:
             logger.error(f"使用新上下文执行节点 {node_instance_id} 失败: {e}")
             # 标记节点失败
             if 'dep_info' in locals() and dep_info:
-                await workflow_context.mark_node_failed(
-                    dep_info['node_id'],  # 使用node_id而不是node_base_id
+                # 🔧 修复：使用context manager标记节点失败
+                await context_manager.mark_node_failed(
+                    workflow_instance_id,
+                    dep_info['node_id'],
                     node_instance_id,
                     {'error': str(e)}
                 )
@@ -4603,6 +4762,211 @@ class ExecutionEngine:
             logger.error(f"💥 [统一任务完成] 处理失败: {e}")
             import traceback
             logger.error(f"错误堆栈: {traceback.format_exc()}")
+    
+    async def _get_node_instance_data(self, node_instance_id: uuid.UUID) -> Optional[Dict[str, Any]]:
+        """获取节点实例数据（包含节点类型）"""
+        try:
+            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            node_repo = NodeInstanceRepository()
+            # 🔧 使用带详细信息的查询方法获取node_type
+            return await node_repo.get_instance_with_details(node_instance_id)
+        except Exception as e:
+            logger.error(f"获取节点实例数据失败: {e}")
+            return None
+    
+    async def _get_processor_info_for_node(self, node_id: uuid.UUID) -> Optional[Dict[str, Any]]:
+        """获取节点的处理器信息"""
+        try:
+            from ..repositories.node.node_repository import NodeRepository
+            node_repo = NodeRepository()
+            
+            # 查询节点及其关联的处理器信息
+            query = """
+                SELECT 
+                    n.*,
+                    np.processor_id,
+                    p.type as processor_type,
+                    p.name as processor_name,
+                    COALESCE(u.username, a.agent_name) as processor_display_name
+                FROM node n
+                LEFT JOIN node_processor np ON n.node_id = np.node_id
+                LEFT JOIN processor p ON np.processor_id = p.processor_id
+                LEFT JOIN user u ON p.user_id = u.user_id AND p.type = 'human'
+                LEFT JOIN agent a ON p.agent_id = a.agent_id AND p.type = 'agent'
+                WHERE n.node_id = $1 AND n.is_deleted = FALSE
+            """
+            
+            result = await node_repo.db.fetch_one(query, node_id)
+            if result:
+                return {
+                    'processor_id': result.get('processor_id'),
+                    'processor_type': result.get('processor_type', 'HUMAN'),
+                    'processor_name': result.get('processor_name'),
+                    'processor_display_name': result.get('processor_display_name'),
+                    'node_name': result.get('name')
+                }
+            else:
+                # 如果没有显式处理器，默认返回HUMAN类型
+                logger.warning(f"节点 {node_id} 没有分配处理器，使用默认HUMAN类型")
+                return {
+                    'processor_id': None,
+                    'processor_type': 'HUMAN',
+                    'processor_name': None,
+                    'processor_display_name': None,
+                    'node_name': 'Unknown'
+                }
+                
+        except Exception as e:
+            logger.error(f"获取节点处理器信息失败: {e}")
+            return None
+    
+    async def _auto_complete_system_node_with_context(self, workflow_context, node_instance_id: uuid.UUID, node_type: str):
+        """使用指定上下文自动完成系统节点（START/END节点）"""
+        try:
+            # 获取节点实例信息
+            node_instance_data = await self._get_node_instance_data(node_instance_id)
+            if not node_instance_data:
+                logger.error(f"无法获取节点实例信息: {node_instance_id}")
+                return
+            
+            workflow_instance_id = node_instance_data['workflow_instance_id']
+            node_id = node_instance_data['node_id']
+            
+            # 生成系统节点的输出数据
+            from datetime import datetime
+            output_data = {
+                'message': f'{node_type} node completed automatically',
+                'node_type': node_type,
+                'completion_time': str(datetime.now()),
+                'auto_completed': True
+            }
+            
+            # 使用当前上下文标记节点完成
+            await workflow_context.mark_node_completed(node_id, node_instance_id, output_data)
+            
+            logger.info(f"✅ [{node_type}节点] 自动完成: {node_instance_id}")
+            
+        except Exception as e:
+            logger.error(f"自动完成系统节点失败: {e}")
+            raise
+
+    async def _auto_complete_system_node(self, node_instance_id: uuid.UUID, node_type: str):
+        """🔧 自动完成系统节点（START/END节点）"""
+        try:
+            # 获取节点实例信息
+            node_instance_data = await self._get_node_instance_data(node_instance_id)
+            if not node_instance_data:
+                logger.error(f"无法获取节点实例信息: {node_instance_id}")
+                return
+            
+            workflow_instance_id = node_instance_data['workflow_instance_id']
+            node_id = node_instance_data['node_id']
+            
+            # 生成系统节点的输出数据
+            from datetime import datetime
+            output_data = {
+                'message': f'{node_type} node completed automatically',
+                'node_type': node_type,
+                'completion_time': str(datetime.now()),
+                'auto_completed': True
+            }
+            
+            from ..services.workflow_execution_context import get_context_manager
+            context_manager = get_context_manager()
+            
+            # 直接标记节点完成
+            await context_manager.mark_node_completed(
+                workflow_instance_id, node_id, node_instance_id, output_data
+            )
+            
+            logger.info(f"✅ [{node_type}节点] 自动完成: {node_instance_id}")
+            
+        except Exception as e:
+            logger.error(f"自动完成系统节点失败: {e}")
+            raise
+    
+    async def _create_task_for_node(self, node_instance_id: uuid.UUID, workflow_instance_id: uuid.UUID) -> Optional[Dict[str, Any]]:
+        """为节点动态创建任务实例"""
+        try:
+            # 获取节点实例信息
+            node_instance_data = await self._get_node_instance_data(node_instance_id)
+            if not node_instance_data:
+                logger.error(f"无法获取节点实例信息: {node_instance_id}")
+                return None
+            
+            node_id = node_instance_data['node_id']
+            
+            # 获取节点定义信息（包含处理器信息）
+            from ..repositories.node.node_repository import NodeRepository
+            node_repo = NodeRepository()
+            node_data = await node_repo.get_node_by_id(node_id)
+            if not node_data:
+                logger.error(f"无法获取节点定义信息: {node_id}")
+                return None
+            
+            # 获取处理器信息
+            processor_info = await self._get_processor_info_for_node(node_id)
+            if not processor_info:
+                logger.error(f"节点 {node_id} 没有分配处理器，无法创建任务")
+                return None
+            
+            # 获取工作流实例信息（用于分配用户）
+            workflow_instance = await self.workflow_instance_repo.get_instance_by_id(workflow_instance_id)
+            executor_id = workflow_instance.get('executor_id') if workflow_instance else None
+            
+            from ..models.instance import TaskInstanceStatus, TaskInstanceType
+            import uuid
+            from ..utils.helpers import now_utc
+            
+            # 确定任务类型和分配对象 - 🔧 修复 None 值处理
+            processor_type_raw = processor_info.get('processor_type')
+            processor_type = (processor_type_raw or 'HUMAN').upper()
+            
+            logger.debug(f"[动态任务] 处理器类型: {processor_type_raw} -> {processor_type}")
+            
+            if processor_type == 'HUMAN':
+                task_type = TaskInstanceType.HUMAN
+                assigned_user_id = executor_id  # 分配给工作流执行者
+                assigned_agent_id = None
+            elif processor_type == 'AGENT':
+                task_type = TaskInstanceType.AGENT
+                assigned_user_id = None
+                assigned_agent_id = processor_info.get('processor_id')
+            else:
+                task_type = TaskInstanceType.HUMAN
+                assigned_user_id = executor_id
+                assigned_agent_id = None
+            
+            # 🔧 使用TaskInstanceCreate模型而不是dict
+            from ..models.instance import TaskInstanceCreate
+            
+            task_data = TaskInstanceCreate(
+                node_instance_id=node_instance_id,
+                workflow_instance_id=workflow_instance_id,
+                processor_id=processor_info['processor_id'],
+                task_title=f"{node_data['name']} - 动态任务",
+                task_description=node_data.get('task_description') or f"{node_data['name']}节点的执行任务",
+                task_type=task_type,
+                assigned_user_id=assigned_user_id,
+                assigned_agent_id=assigned_agent_id
+            )
+            
+            logger.debug(f"[动态任务] 创建TaskInstanceCreate对象: {task_data.task_title}")
+            
+            # 创建任务实例
+            result = await self.task_instance_repo.create_task(task_data)
+            if result:
+                logger.info(f"✅ [动态任务] 成功创建任务: {task_data.task_title}")
+                if task_type == TaskInstanceType.HUMAN:
+                    logger.info(f"🎯 [动态任务] 人工任务已分配给用户: {assigned_user_id}")
+                return result
+            else:
+                logger.error(f"❌ [动态任务] 任务创建失败")
+                return None
+                
+        except Exception as e:
+            logger.error(f"为节点创建任务失败: {e}")
+            return None
 
 
 # 全局执行引擎实例

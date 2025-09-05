@@ -345,7 +345,11 @@ class WorkflowExecutionContext:
                 logger.info(f"     - 节点状态: {self.node_states.get(node_instance_id, 'UNKNOWN')}")
                 logger.info(f"     - 已完成上游: {len(deps.get('completed_upstream', set()))}/{len(deps['upstream_nodes'])}")
                 
-                if completed_node_instance_id in deps['upstream_nodes']:
+                # 🔧 修复：UUID类型一致性比较，先转换为字符串进行比较
+                completed_node_str = str(completed_node_instance_id)
+                upstream_nodes_str = [str(x) for x in deps['upstream_nodes']]
+                
+                if completed_node_str in upstream_nodes_str:
                     logger.info(f"✅ [下游触发] 找到下游节点实例: {node_instance_id}")
                     logger.info(f"   - 当前状态: {self.node_states.get(node_instance_id, 'UNKNOWN')}")
                     logger.info(f"   - 依赖状态: {len(deps.get('completed_upstream', set()))}/{len(deps['upstream_nodes'])}")
@@ -372,6 +376,11 @@ class WorkflowExecutionContext:
                     else:
                         logger.debug(f"  ℹ️ 上游节点实例 {completed_node_instance_id} 已经标记为完成")
                     
+                    # 🔧 修复：确保完成的节点状态立即更新
+                    if self.node_states.get(completed_node_instance_id) != 'COMPLETED':
+                        self.node_states[completed_node_instance_id] = 'COMPLETED'
+                        logger.info(f"  🔧 强制同步节点状态: {completed_node_instance_id} -> COMPLETED")
+                    
                     # 严格检查所有上游是否都完成
                     total_upstream = len(deps['upstream_nodes'])
                     completed_upstream = len(deps['completed_upstream'])
@@ -380,13 +389,10 @@ class WorkflowExecutionContext:
                     
                     # 只有当所有上游都完成时才触发
                     if completed_upstream == total_upstream and total_upstream > 0:
-                        # 双重检查：确保所有上游节点实例都已完成（使用node_states检查）
+                        # 🔧 修复：简化检查逻辑，直接基于completed_upstream集合
+                        # 因为我们已经在上面强制同步了状态，不需要双重检查
                         all_upstream_completed_verified = True
-                        for upstream_instance_id in deps['upstream_nodes']:
-                            if self.node_states.get(upstream_instance_id) != 'COMPLETED':
-                                logger.trace(f"  ❌ 上游节点实例 {upstream_instance_id} 状态为 {self.node_states.get(upstream_instance_id, 'UNKNOWN')}，等待")
-                                all_upstream_completed_verified = False
-                                break
+                        logger.info(f"  ✅ 所有上游节点已完成，准备触发: {node_instance_id}")
                         
                         if all_upstream_completed_verified:
                             # 防止重复触发的最终检查
@@ -400,6 +406,12 @@ class WorkflowExecutionContext:
                                 logger.trace(f"  ⚠️ 节点实例 {node_instance_id} 已在pending_triggers中，避免重复触发")
                     else:
                         logger.trace(f"  ⏳ 节点实例 {node_instance_id} 依赖未满足，等待更多上游完成")
+                else:
+                    # 🔧 修复：添加调试信息，为什么没有找到下游节点
+                    logger.info(f"   ➡️ 节点实例 {node_instance_id} 不依赖于完成节点 {completed_node_instance_id}")
+                    logger.info(f"      上游依赖类型检查: {[type(x) for x in deps['upstream_nodes']]}")
+                    logger.info(f"      完成节点类型: {type(completed_node_instance_id)}")
+                    logger.info(f"      UUID比较结果: {[str(x) == str(completed_node_instance_id) for x in deps['upstream_nodes']]}")
             
             logger.info(f"🎯 [下游触发] 触发检查完成，共触发 {len(triggered_nodes)} 个下游节点实例")
             if triggered_nodes:
@@ -412,42 +424,35 @@ class WorkflowExecutionContext:
     async def scan_and_trigger_ready_nodes(self) -> List[uuid.UUID]:
         """扫描并触发所有准备好执行的节点（用于上下文恢复后主动扫描）"""
         async with self._context_lock:
-            triggered_nodes = []
-            
             logger.info(f"🔍 [主动扫描] 开始扫描准备执行的节点...")
             logger.info(f"   - 当前节点依赖数量: {len(self.node_dependencies)}")
             logger.info(f"   - pending_triggers中的节点: {len(self.pending_triggers)}")
             
+            # 🔧 修复Bad Taste：直接返回pending_triggers中的节点，这些就是准备执行的
+            # 不要重复扫描和添加逻辑，pending_triggers就是我们的"ready nodes"队列
+            ready_nodes = list(self.pending_triggers)
+            
+            # 额外扫描其他可能遗漏的准备执行节点（没在pending_triggers中的）
             for node_instance_id, deps in self.node_dependencies.items():
                 node_state = self.node_states.get(node_instance_id, 'UNKNOWN')
                 ready_status = deps.get('ready_to_execute', False)
                 
-                # 🔧 添加详细调试信息
-                logger.info(f"   检查节点 {node_instance_id}: 状态={node_state}, 准备执行={ready_status}")
+                logger.debug(f"   检查节点 {node_instance_id}: 状态={node_state}, 准备执行={ready_status}")
                 
-                # 🔧 修复：简化状态检查，现在都是大写
+                # 如果节点准备好但不在pending_triggers中，添加进去
                 if (ready_status and 
                     node_state == 'PENDING' and 
                     node_instance_id not in self.pending_triggers):
                     
                     self.pending_triggers.add(node_instance_id)
-                    triggered_nodes.append(node_instance_id)
-                    logger.info(f"🚀 [主动扫描] 触发节点: {node_instance_id} (状态: {node_state})")
-                else:
-                    # 记录为什么节点没有被触发
-                    reasons = []
-                    if not ready_status:
-                        reasons.append("未准备执行")
-                    if node_state != 'PENDING':
-                        reasons.append(f"状态不是PENDING({node_state})")
-                    if node_instance_id in self.pending_triggers:
-                        reasons.append("已在触发队列")
-                    logger.debug(f"   ❌ 节点 {node_instance_id} 未触发: {', '.join(reasons)}")
+                    ready_nodes.append(node_instance_id)
+                    logger.info(f"🔍 [遗漏发现] 添加准备执行的节点: {node_instance_id}")
             
-            logger.info(f"✅ [主动扫描] 完成，共触发 {len(triggered_nodes)} 个节点")
-            logger.info(f"   - pending_triggers最终大小: {len(self.pending_triggers)}")
+            logger.info(f"✅ [主动扫描] 完成，共发现 {len(ready_nodes)} 个准备执行的节点")
+            if ready_nodes:
+                logger.info(f"   - 准备执行节点: {ready_nodes}")
             
-            return triggered_nodes
+            return ready_nodes
 
     async def get_ready_nodes(self) -> List[uuid.UUID]:
         """获取准备执行的节点（修复版：主动扫描准备好的节点）"""
@@ -567,14 +572,26 @@ class WorkflowExecutionContext:
     
     async def _notify_completion_callbacks(self, triggered_nodes: List[uuid.UUID]):
         """通知回调函数"""
-        for callback in self.completion_callbacks:
+        logger.debug(f"🔔 [回调通知] 开始通知 {len(self.completion_callbacks)} 个回调函数")
+        logger.debug(f"   - 工作流ID: {self.workflow_instance_id}")
+        logger.debug(f"   - 触发的节点: {triggered_nodes}")
+        
+        for i, callback in enumerate(self.completion_callbacks):
+            callback_name = getattr(callback, '__name__', f'callback_{i}')
             try:
+                logger.debug(f"🔔 [回调通知] 执行回调 #{i+1}: {callback_name}")
                 if asyncio.iscoroutinefunction(callback):
                     await callback(self.workflow_instance_id, triggered_nodes)
                 else:
                     callback(self.workflow_instance_id, triggered_nodes)
+                logger.debug(f"✅ [回调通知] 回调 #{i+1} 执行成功: {callback_name}")
             except Exception as e:
-                logger.error(f"回调函数执行失败: {e}")
+                logger.error(f"❌ [回调通知] 回调函数执行失败: {callback_name}")
+                logger.error(f"   - 错误: {e}")
+                import traceback
+                logger.error(f"   - 堆栈: {traceback.format_exc()}")
+        
+        logger.debug(f"🔔 [回调通知] 所有回调通知完成")
     
     async def _check_workflow_completion(self):
         """检查工作流是否完成"""
@@ -1520,15 +1537,27 @@ class WorkflowExecutionContextManager:
             # 🔧 新增：同步工作流实例状态
             await self._sync_workflow_instance_status(workflow_instance_id, context)
             
+            # 🔧 修复关键问题：确保从数据库恢复时也能注册全局回调
             # 注册全局回调
             if hasattr(self, '_global_callbacks'):
-                for callback in self._global_callbacks:
+                logger.info(f"🔧 [快照恢复] 注册 {len(self._global_callbacks)} 个全局回调到恢复的上下文")
+                for i, callback in enumerate(self._global_callbacks):
+                    callback_name = getattr(callback, '__name__', f'callback_{i}')
                     if callback not in context.completion_callbacks:
                         context.completion_callbacks.append(callback)
+                        logger.debug(f"   - 已注册回调: {callback_name}")
+                    else:
+                        logger.debug(f"   - 跳过重复回调: {callback_name}")
+            else:
+                logger.warning(f"⚠️ [快照恢复] 未找到全局回调列表，这可能导致END节点无法正确执行")
+                logger.warning(f"   - 建议检查ExecutionService是否正确初始化并注册了回调")
+            
+            logger.info(f"🔧 [快照恢复] 最终上下文回调数量: {len(context.completion_callbacks)}")
             
             logger.info(f"✅ 从快照成功恢复上下文: {workflow_instance_id}")
             logger.info(f"   - 已完成节点: {len(context.execution_context.get('completed_nodes', set()))}")
             logger.info(f"   - 节点依赖数: {len(context.node_dependencies)}")
+            logger.info(f"   - 注册的回调: {len(context.completion_callbacks)}")
             
             # 记录恢复时间，用于健康检查宽限期
             self._context_restored_at[workflow_instance_id] = datetime.utcnow()
@@ -1597,6 +1626,23 @@ class WorkflowExecutionContextManager:
             # 🔧 新增：同步工作流实例状态
             await self._sync_workflow_instance_status(workflow_instance_id, context)
             
+            # 🔧 修复关键问题：确保从数据库重建时也能注册全局回调
+            # 注册全局回调
+            if hasattr(self, '_global_callbacks'):
+                logger.info(f"🔧 [数据库重建] 注册 {len(self._global_callbacks)} 个全局回调到重建的上下文")
+                for i, callback in enumerate(self._global_callbacks):
+                    callback_name = getattr(callback, '__name__', f'callback_{i}')
+                    if callback not in context.completion_callbacks:
+                        context.completion_callbacks.append(callback)
+                        logger.debug(f"   - 已注册回调: {callback_name}")
+                    else:
+                        logger.debug(f"   - 跳过重复回调: {callback_name}")
+            else:
+                logger.warning(f"⚠️ [数据库重建] 未找到全局回调列表，这可能导致END节点无法正确执行")
+                logger.warning(f"   - 建议检查ExecutionService是否正确初始化并注册了回调")
+            
+            logger.info(f"🔧 [数据库重建] 最终上下文回调数量: {len(context.completion_callbacks)}")
+            
             # 记录恢复时间，用于健康检查宽限期
             self._context_restored_at[workflow_instance_id] = datetime.utcnow()
             
@@ -1654,7 +1700,7 @@ class WorkflowExecutionContextManager:
     async def restore_from_snapshot(self, workflow_instance_id: uuid.UUID, snapshot: Dict[str, Any]):
         """从快照恢复上下文（用于细分工作流隔离）"""
         try:
-            logger.info(f"🔄 从快照恢复上下文: {workflow_instance_id}")
+            # logger.info(f"🔄 从快照恢复上下文: {workflow_instance_id}")
             
             async with self._contexts_lock:
                 if workflow_instance_id not in self.contexts:
@@ -1680,7 +1726,7 @@ class WorkflowExecutionContextManager:
                 for node_id_str, state in node_states.items():
                     context.node_states[uuid.UUID(node_id_str)] = state
                 
-                logger.info(f"✅ 从快照恢复上下文成功: {workflow_instance_id}")
+                # logger.info(f"✅ 从快照恢复上下文成功: {workflow_instance_id}")
                 
         except Exception as e:
             logger.error(f"❌ 从快照恢复上下文失败: {e}")

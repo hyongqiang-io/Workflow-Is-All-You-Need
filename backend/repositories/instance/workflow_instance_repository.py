@@ -959,9 +959,9 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                                            created_by: uuid.UUID = None) -> Optional[uuid.UUID]:
         """保存工作流上下文快照"""
         try:
-            logger.info(f"💾 [持久化] 保存工作流上下文快照: {workflow_instance_id}")
-            logger.info(f"   - 快照类型: {snapshot_type}")
-            logger.info(f"   - 描述: {description or '自动快照'}")
+            # logger.info(f"💾 [持久化] 保存工作流上下文快照: {workflow_instance_id}")
+            # logger.info(f"   - 快照类型: {snapshot_type}")
+            # logger.info(f"   - 描述: {description or '自动快照'}")
             
             snapshot_id = uuid.uuid4()
             
@@ -995,12 +995,12 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             """
             
             await self.db.execute(insert_query, 
-                                snapshot_id, workflow_instance_id, snapshot_type,
+                                str(snapshot_id), str(workflow_instance_id), snapshot_type,
                                 data['context_data'], data['node_states'], 
-                                current_status, data['created_at'], created_by, 
+                                current_status, data['created_at'], str(created_by) if created_by else None, 
                                 description, False)
             
-            logger.info(f"✅ [持久化] 工作流上下文快照已保存: {snapshot_id}")
+            # logger.info(f"✅ [持久化] 工作流上下文快照已保存: {snapshot_id}")
             return snapshot_id
             
         except Exception as e:
@@ -1116,9 +1116,9 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             """
             
             await self.db.execute(insert_query,
-                                event_id, workflow_instance_id, event_type,
-                                data['event_data'], node_instance_id, 
-                                task_instance_id, user_id, data['timestamp'],
+                                str(event_id), str(workflow_instance_id), event_type,
+                                data['event_data'], str(node_instance_id) if node_instance_id else None, 
+                                str(task_instance_id) if task_instance_id else None, str(user_id) if user_id else None, data['timestamp'],
                                 sequence_number, False)
             
             logger.debug(f"📝 [事件日志] 记录工作流事件: {event_type}")
