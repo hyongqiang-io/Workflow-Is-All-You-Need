@@ -434,6 +434,10 @@ export const processorAPI = {
   createProcessor: (data: { name: string; type: 'human' | 'agent' | 'mix'; user_id?: string; agent_id?: string }) =>
     api.post('/processors/test-create', data),
 
+  // 更新处理器
+  updateProcessor: (processorId: string, data: { name?: string; type?: string; user_id?: string; agent_id?: string }) =>
+    api.put(`/processors/${processorId}`, data),
+
   // 获取处理器详情
   getProcessor: (processorId: string) => api.get(`/processors/${processorId}`),
 

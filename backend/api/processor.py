@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
 from loguru import logger
 
 from ..models.base import BaseResponse
-from ..models.processor import ProcessorType, ProcessorCreate
+from ..models.processor import ProcessorType, ProcessorCreate, ProcessorUpdate
 from ..models.agent import AgentUpdate, AgentCreate
 from ..repositories.processor.processor_repository import ProcessorRepository
 from ..repositories.user.user_repository import UserRepository
@@ -346,7 +346,8 @@ async def get_registered_processors(
                 "username": processor.get('username'),
                 "user_email": processor.get('user_email'),
                 "agent_name": processor.get('agent_name'),
-                "agent_description": processor.get('agent_description')
+                "agent_description": processor.get('agent_description'),
+                "creator_name": processor.get('creator_name')
             }
             formatted_processors.append(formatted_processor)
         
@@ -631,7 +632,95 @@ async def delete_processor(
         )
 
 
-@router.put("/agents/{agent_id}", response_model=BaseResponse)
+@router.put("/{processor_id}", response_model=BaseResponse)
+async def update_processor(
+    processor_id: uuid.UUID = Path(..., description="处理器ID"),
+    processor_data: ProcessorUpdate = ...,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    更新处理器
+    
+    Args:
+        processor_id: 处理器ID
+        processor_data: 处理器更新数据
+        current_user: 当前用户
+        
+    Returns:
+        更新结果
+    """
+    try:
+        logger.info(f"Processor更新请求: processor_id={processor_id}, user_id={current_user.user_id}")
+        
+        # 首先检查处理器是否存在
+        processor = await processor_repository.get_processor_with_details(processor_id)
+        if not processor:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="处理器不存在"
+            )
+        
+        # 检查权限：只有创建者可以编辑
+        processor_created_by = processor.get('created_by')
+        if processor_created_by is not None and str(processor_created_by) != str(current_user.user_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="权限不足：只有处理器的创建者可以编辑该处理器"
+            )
+        
+        # 历史数据（created_by为空）允许任何用户编辑
+        if processor_created_by is None:
+            logger.info(f"允许编辑历史数据处理器: {processor_id} (无创建者信息)")
+        
+        # 更新处理器
+        updated_processor = await processor_repository.update_processor(processor_id, processor_data)
+        
+        if not updated_processor:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="更新处理器失败"
+            )
+        
+        # 获取更新后的详细信息
+        updated_details = await processor_repository.get_processor_with_details(processor_id)
+        
+        return BaseResponse(
+            success=True,
+            message="处理器更新成功",
+            data={
+                "processor": {
+                    "processor_id": str(updated_details['processor_id']),
+                    "name": updated_details['name'],
+                    "type": updated_details['type'],
+                    "version": updated_details['version'],
+                    "created_at": updated_details['created_at'].isoformat() if updated_details['created_at'] else None,
+                    "user_id": str(updated_details['user_id']) if updated_details['user_id'] else None,
+                    "agent_id": str(updated_details['agent_id']) if updated_details['agent_id'] else None,
+                    "username": updated_details.get('username'),
+                    "user_email": updated_details.get('user_email'),
+                    "agent_name": updated_details.get('agent_name'),
+                    "agent_description": updated_details.get('agent_description'),
+                    "creator_name": updated_details.get('creator_name')
+                },
+                "updated_by": str(current_user.user_id)
+            }
+        )
+        
+    except ValidationError as e:
+        logger.warning(f"处理器更新验证失败: {e}")
+        raise handle_validation_error(e)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新处理器异常: {e}")
+        import traceback
+        logger.error(f"异常详情: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="更新处理器失败，请稍后再试"
+        )
+
+
 async def update_agent(
     agent_update: AgentUpdate,
     agent_id: uuid.UUID = Path(..., description="Agent ID"),

@@ -120,18 +120,30 @@ class ProcessorRepository(BaseRepository[Processor]):
             if processor_data.name is not None:
                 update_data["name"] = processor_data.name
             
+            # 处理类型变更
+            if processor_data.type is not None:
+                update_data["type"] = processor_data.type.value
+                # 验证新类型和关联的用户/Agent
+                user_id = processor_data.user_id if processor_data.user_id is not None else existing_processor['user_id']
+                agent_id = processor_data.agent_id if processor_data.agent_id is not None else existing_processor['agent_id']
+                self._validate_processor_type(processor_data.type, user_id, agent_id)
+            else:
+                # 如果类型没有变更，使用现有类型进行验证
+                current_type = ProcessorType(existing_processor['type'])
+                user_id = processor_data.user_id if processor_data.user_id is not None else existing_processor['user_id']
+                agent_id = processor_data.agent_id if processor_data.agent_id is not None else existing_processor['agent_id']
+                self._validate_processor_type(current_type, user_id, agent_id)
+            
             if processor_data.user_id is not None:
                 update_data["user_id"] = processor_data.user_id
             
             if processor_data.agent_id is not None:
                 update_data["agent_id"] = processor_data.agent_id
             
-            # 如果更新了用户或Agent，需要重新验证类型
-            current_type = ProcessorType(existing_processor['type'])
-            user_id = processor_data.user_id if processor_data.user_id is not None else existing_processor['user_id']
-            agent_id = processor_data.agent_id if processor_data.agent_id is not None else existing_processor['agent_id']
-            
-            self._validate_processor_type(current_type, user_id, agent_id)
+            # 验证引用的用户和Agent是否存在
+            final_user_id = processor_data.user_id if processor_data.user_id is not None else existing_processor['user_id']
+            final_agent_id = processor_data.agent_id if processor_data.agent_id is not None else existing_processor['agent_id']
+            await self._validate_referenced_entities(final_user_id, final_agent_id)
             
             if not update_data:
                 return existing_processor
@@ -155,10 +167,12 @@ class ProcessorRepository(BaseRepository[Processor]):
             query = """
                 SELECT p.*,
                        u.username, u.email as user_email,
-                       a.agent_name, a.description as agent_description
+                       a.agent_name, a.description as agent_description,
+                       creator.username as creator_name
                 FROM processor p
                 LEFT JOIN "user" u ON u.user_id = p.user_id AND u.is_deleted = FALSE
                 LEFT JOIN agent a ON a.agent_id = p.agent_id AND a.is_deleted = FALSE
+                LEFT JOIN "user" creator ON creator.user_id = p.created_by AND creator.is_deleted = FALSE
                 WHERE p.type = $1 AND p.is_deleted = FALSE
                 ORDER BY p.created_at DESC
             """

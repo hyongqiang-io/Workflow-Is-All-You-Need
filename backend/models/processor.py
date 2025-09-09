@@ -41,6 +41,7 @@ class ProcessorCreate(ProcessorBase, CreateRequest):
 class ProcessorUpdate(UpdateRequest):
     """处理器更新模型"""
     name: Optional[str] = Field(None, min_length=1, max_length=255, description="处理器名称")
+    type: Optional[ProcessorType] = Field(None, description="处理器类型")
     user_id: Optional[uuid.UUID] = Field(None, description="用户ID")
     agent_id: Optional[uuid.UUID] = Field(None, description="Agent ID")
 

@@ -22,6 +22,7 @@ import {
 import { resourceAPI, agentAPI, processorAPI } from '../../services/api';
 import MCPToolsManagement from '../../components/MCPToolsManagement';
 import AgentToolSelector from '../../components/AgentToolSelector';
+import { useAuthStore } from '../../stores/authStore';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -64,9 +65,11 @@ interface Processor {
   user_email?: string;
   agent_name?: string;
   agent_description?: string;
+  creator_name?: string;
 }
 
 const Resource: React.FC = () => {
+  const { user: currentUser } = useAuthStore();
   const [resources, setResources] = useState<ResourceItem[]>([]);
   const [tools, setTools] = useState<Tool[]>([]);
   const [processors, setProcessors] = useState<Processor[]>([]);
@@ -88,9 +91,12 @@ const Resource: React.FC = () => {
   
   // Processor管理相关状态
   const [createProcessorModalVisible, setCreateProcessorModalVisible] = useState(false);
+  const [editProcessorModalVisible, setEditProcessorModalVisible] = useState(false);
   const [deleteProcessorModalVisible, setDeleteProcessorModalVisible] = useState(false);
   const [processorToDelete, setProcessorToDelete] = useState<Processor | null>(null);
+  const [processorToEdit, setProcessorToEdit] = useState<Processor | null>(null);
   const [createProcessorForm] = Form.useForm();
+  const [editProcessorForm] = Form.useForm();
 
   // Agent删除相关状态
   const [deleteAgentModalVisible, setDeleteAgentModalVisible] = useState(false);
@@ -576,6 +582,69 @@ const Resource: React.FC = () => {
     setProcessorToDelete(null);
   }, []);
 
+  // 编辑Processor相关方法
+  const handleEditProcessor = useCallback((processor: Processor) => {
+    setProcessorToEdit(processor);
+    setEditProcessorModalVisible(true);
+    editProcessorForm.setFieldsValue({
+      name: processor.name,
+      type: processor.type,
+      user_id: processor.user_id,
+      agent_id: processor.agent_id
+    });
+  }, [editProcessorForm]);
+
+  const handleEditProcessorConfirm = useCallback(async () => {
+    if (!processorToEdit) return;
+    
+    try {
+      const values = await editProcessorForm.validateFields();
+      
+      const updateData: any = {};
+      if (values.name !== processorToEdit.name) {
+        updateData.name = values.name;
+      }
+      if (values.type !== processorToEdit.type) {
+        updateData.type = values.type;
+      }
+      if (values.user_id !== processorToEdit.user_id) {
+        updateData.user_id = values.user_id || null;
+      }
+      if (values.agent_id !== processorToEdit.agent_id) {
+        updateData.agent_id = values.agent_id || null;
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        message.info('没有变更需要保存');
+        setEditProcessorModalVisible(false);
+        return;
+      }
+
+      await processorAPI.updateProcessor(processorToEdit.processor_id, updateData);
+      message.success('处理器更新成功');
+      setEditProcessorModalVisible(false);
+      setProcessorToEdit(null);
+      loadProcessors();
+    } catch (error: any) {
+      console.error('更新处理器失败:', error);
+      message.error(error.response?.data?.detail || '更新处理器失败');
+    }
+  }, [processorToEdit, editProcessorForm, loadProcessors]);
+
+  const handleEditProcessorCancel = useCallback(() => {
+    setEditProcessorModalVisible(false);
+    setProcessorToEdit(null);
+  }, []);
+
+  // 权限检查：是否可编辑处理器
+  const canEditProcessor = useCallback((processor: Processor): boolean => {
+    if (!currentUser) return false;
+    // 历史数据（无创建者）允许任何用户编辑
+    if (!processor.creator_name) return true;
+    // 只有创建者可以编辑
+    return processor.creator_name === currentUser.username;
+  }, [currentUser]);
+
   // 使用 useCallback 优化工具函数
   const getStatusColor = useCallback((status: string) => {
     switch (status) {
@@ -1035,6 +1104,18 @@ const Resource: React.FC = () => {
               )
             },
             {
+              title: '创建者',
+              key: 'creator',
+              width: 120,
+              render: (text: string, record: any) => (
+                record.creator_name ? (
+                  <div>
+                    <div>{record.creator_name}</div>
+                  </div>
+                ) : '-'
+              )
+            },
+            {
               title: '创建时间',
               dataIndex: 'created_at',
               key: 'created_at',
@@ -1044,9 +1125,23 @@ const Resource: React.FC = () => {
             {
               title: '操作',
               key: 'action',
-              width: 100,
+              width: 140,
               render: (text: string, record: any) => (
                 <Space>
+                  {canEditProcessor(record) && (
+                    <Tooltip title="编辑处理器">
+                      <Button 
+                        type="link" 
+                        size="small" 
+                        icon={<EditOutlined />}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleEditProcessor(record);
+                        }}
+                      />
+                    </Tooltip>
+                  )}
                   <Tooltip title="删除处理器">
                     <Button 
                       type="link" 
@@ -1621,6 +1716,111 @@ const Resource: React.FC = () => {
           >
             <Checkbox>允许Agent自主执行任务</Checkbox>
           </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 编辑Processor模态框 */}
+      <Modal
+        title="编辑Processor"
+        open={editProcessorModalVisible}
+        onOk={handleEditProcessorConfirm}
+        onCancel={handleEditProcessorCancel}
+        width={600}
+      >
+        <Form form={editProcessorForm} layout="vertical">
+          <Form.Item
+            name="name"
+            label="Processor名称"
+            rules={[
+              { required: true, message: '请输入Processor名称' },
+              { min: 2, message: '名称至少2个字符' }
+            ]}
+          >
+            <Input placeholder="请输入Processor名称" />
+          </Form.Item>
+          
+          <Form.Item
+            name="type"
+            label="处理器类型"
+            rules={[{ required: true, message: '请选择处理器类型' }]}
+          >
+            <Select placeholder="请选择处理器类型">
+              <Option value="human">用户处理器</Option>
+              <Option value="agent">Agent处理器</Option>
+              {/* <Option value="mix">混合处理器</Option> */}
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            noStyle
+            shouldUpdate={(prevValues, currentValues) => 
+              prevValues.type !== currentValues.type
+            }
+          >
+            {({ getFieldValue }) => {
+              const processorType = getFieldValue('type');
+              
+              return (
+                <>
+                  {(processorType === 'human' || processorType === 'mix') && (
+                    <Form.Item
+                      name="user_id"
+                      label="关联用户"
+                      rules={processorType === 'human' || processorType === 'mix' ? [{ required: true, message: '请选择关联用户' }] : []}
+                    >
+                      <Select 
+                        placeholder="请选择关联用户"
+                        showSearch
+                        filterOption={(input, option) =>
+                          String(option?.children || '').toLowerCase().includes(input.toLowerCase())
+                        }
+                      >
+                        {resources
+                          .filter(r => r.type === 'human')
+                          .map(user => (
+                            <Option key={user.id} value={user.id}>
+                              {user.name} ({user.description})
+                            </Option>
+                          ))
+                        }
+                      </Select>
+                    </Form.Item>
+                  )}
+
+                  {(processorType === 'agent' || processorType === 'mix') && (
+                    <Form.Item
+                      name="agent_id"
+                      label="关联Agent"
+                      rules={processorType === 'agent' || processorType === 'mix' ? [{ required: true, message: '请选择关联Agent' }] : []}
+                    >
+                      <Select 
+                        placeholder="请选择关联Agent"
+                        showSearch
+                        filterOption={(input, option) =>
+                          String(option?.children || '').toLowerCase().includes(input.toLowerCase())
+                        }
+                      >
+                        {resources
+                          .filter(r => r.type === 'agent')
+                          .map(agent => (
+                            <Option key={agent.id} value={agent.id}>
+                              {agent.name} ({agent.description})
+                            </Option>
+                          ))
+                        }
+                      </Select>
+                    </Form.Item>
+                  )}
+                </>
+              );
+            }}
+          </Form.Item>
+
+          <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+            <Text type="secondary">
+              <strong>注意：</strong>仅Processor的创建者或历史数据（无创建者记录）允许编辑。更改类型会清空不匹配的关联。
+            </Text>
+          </div>
         </Form>
       </Modal>
     </div>
