@@ -21,7 +21,7 @@ class ProcessorRepository(BaseRepository[Processor]):
     def __init__(self):
         super().__init__("processor")
     
-    async def create_processor(self, processor_data: ProcessorCreate) -> Optional[Dict[str, Any]]:
+    async def create_processor(self, processor_data: ProcessorCreate, created_by: uuid.UUID) -> Optional[Dict[str, Any]]:
         """创建处理器"""
         try:
             # 验证处理器类型和关联的用户/Agent
@@ -39,6 +39,7 @@ class ProcessorRepository(BaseRepository[Processor]):
                 "agent_id": processor_data.agent_id,
                 "name": processor_data.name,
                 "type": processor_data.type.value,
+                "created_by": created_by,
                 "version": 1,
                 "created_at": now_utc(),
                 "is_deleted": False
@@ -90,10 +91,12 @@ class ProcessorRepository(BaseRepository[Processor]):
             query = """
                 SELECT p.*,
                        u.username, u.email as user_email,
-                       a.agent_name, a.description as agent_description
+                       a.agent_name, a.description as agent_description,
+                       creator.username as creator_name
                 FROM processor p
                 LEFT JOIN "user" u ON u.user_id = p.user_id AND u.is_deleted = FALSE
                 LEFT JOIN agent a ON a.agent_id = p.agent_id AND a.is_deleted = FALSE
+                LEFT JOIN "user" creator ON creator.user_id = p.created_by AND creator.is_deleted = FALSE
                 WHERE p.processor_id = $1 AND p.is_deleted = FALSE
             """
             result = await self.db.fetch_one(query, processor_id)

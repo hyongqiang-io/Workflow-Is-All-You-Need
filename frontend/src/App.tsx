@@ -16,6 +16,7 @@ import Resource from './pages/Main/Resource';
 import Profile from './pages/Profile/Profile';
 import TaskFlow from './pages/Workflow/TaskFlow';
 import AgentManagement from './pages/Agent/AgentManagement';
+import Help from './pages/Main/Help';
 
 // 组件
 import ProtectedRoute from './components/ProtectedRoute';
@@ -46,6 +47,7 @@ function App() {
             <Route path="workflow/:workflowId/task-flow" element={<TaskFlow />} />
             <Route path="todo" element={<Todo />} />
             <Route path="agent" element={<AgentManagement />} />
+            <Route path="help" element={<Help />} />
           </Route>
           <Route path="*" element={<Navigate to="/login" />} />
         </Routes>

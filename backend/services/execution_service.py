@@ -4131,8 +4131,23 @@ class ExecutionEngine:
             upstream_context = await self._get_upstream_context(task)
             task['upstream_context'] = upstream_context
             
+            # 🔍 添加调试日志
+            logger.info(f"🔍 [任务详情调试] 上游上下文数据:")
+            logger.info(f"   - 上游上下文键: {list(upstream_context.keys()) if upstream_context else '无数据'}")
+            if upstream_context:
+                immediate_results = upstream_context.get('immediate_upstream_results', {})
+                logger.info(f"   - immediate_upstream_results键: {list(immediate_results.keys())}")
+                for node_name, node_data in immediate_results.items():
+                    logger.info(f"   - 节点 {node_name} 的output_data: {node_data.get('output_data', {})}")
+            
             # 丰富任务信息
             task = await self._enrich_task_info(task)
+            
+            # 🔍 最终任务数据结构调试
+            logger.info(f"🔍 [任务详情调试] 最终任务数据结构:")
+            logger.info(f"   - 任务基础字段: {list(task.keys())}")
+            logger.info(f"   - upstream_context是否存在: {'upstream_context' in task}")
+            logger.info(f"   - context_data是否存在: {'context_data' in task}")
             
             logger.info(f"✅ [任务详情] 任务详情查询成功")
             return task
@@ -4840,6 +4855,34 @@ class ExecutionEngine:
                 'completion_time': str(datetime.now()),
                 'auto_completed': True
             }
+            
+            # 🔧 特殊处理START节点：添加任务描述和上下文信息
+            if node_type.upper() == 'START':
+                # 获取节点的任务描述
+                node_data = await self.node_repo.get_node_by_id(node_id)
+                if node_data:
+                    task_description = node_data.get('task_description', '')
+                    output_data.update({
+                        'message': 'START节点自动完成',
+                        'task_description': task_description,
+                        'completed_at': datetime.utcnow().isoformat()
+                    })
+                
+                # 添加工作流上下文信息
+                try:
+                    global_data = workflow_context.execution_context.get('global_data', {})
+                    workflow_context_data = global_data.get('workflow_context_data', {})
+                    
+                    if workflow_context_data:
+                        output_data['workflow_context'] = {
+                            'subdivision_context': workflow_context_data.get('subdivision_context'),
+                            'subdivision_id': workflow_context_data.get('subdivision_id'),
+                            'execution_type': workflow_context_data.get('execution_type'),
+                            'source': 'task_subdivision_workflow'
+                        }
+                        logger.info(f"📋 START节点添加上下文信息: {workflow_context_data}")
+                except Exception as ctx_error:
+                    logger.error(f"⚠️ START节点添加上下文信息失败: {ctx_error}")
             
             # 使用当前上下文标记节点完成
             await workflow_context.mark_node_completed(node_id, node_instance_id, output_data)

@@ -12,6 +12,7 @@ from ..repositories.instance.workflow_instance_repository import WorkflowInstanc
 from ..repositories.instance.node_instance_repository import NodeInstanceRepository
 from ..repositories.instance.task_instance_repository import TaskInstanceRepository
 from ..repositories.workflow.workflow_repository import WorkflowRepository
+from ..repositories.node.node_repository import NodeRepository
 from ..utils.helpers import now_utc
 
 
@@ -23,6 +24,7 @@ class CascadeDeletionService:
         self.workflow_instance_repo = WorkflowInstanceRepository()
         self.node_instance_repo = NodeInstanceRepository()
         self.task_instance_repo = TaskInstanceRepository()
+        self.node_repo = NodeRepository()
     
     async def delete_workflow_instance_cascade(self, instance_id: uuid.UUID, 
                                              soft_delete: bool = True) -> Dict[str, Any]:
@@ -194,6 +196,88 @@ class CascadeDeletionService:
             
         except Exception as e:
             logger.error(f"获取删除预览失败: {e}")
+            raise
+    
+    async def clear_processor_references(self, processor_id: uuid.UUID) -> Dict[str, Any]:
+        """清空所有工作流节点中对指定处理器的引用"""
+        try:
+            logger.info(f"🧹 开始清空处理器引用: {processor_id}")
+            
+            # 查询所有引用此处理器的节点处理器关联记录
+            query = """
+                SELECT np.node_processor_id, np.node_id, np.workflow_id, np.workflow_base_id,
+                       n.name, n.type
+                FROM node_processor np
+                LEFT JOIN node n ON np.node_id = n.node_id
+                WHERE np.processor_id = $1 AND np.is_deleted = FALSE
+            """
+            affected_records = await self.node_repo.db.fetch_all(query, str(processor_id))
+            
+            logger.info(f"   找到 {len(affected_records)} 个节点处理器关联记录")
+            
+            if len(affected_records) == 0:
+                return {
+                    'processor_id': str(processor_id),
+                    'cleared_records': 0,
+                    'affected_workflows': [],
+                    'success': True
+                }
+            
+            # 软删除node_processor记录
+            update_query = """
+                UPDATE node_processor 
+                SET is_deleted = TRUE, updated_at = $2
+                WHERE processor_id = $1 AND is_deleted = FALSE
+            """
+            
+            # 添加updated_at字段，如果表中没有则使用created_at
+            try:
+                result = await self.node_repo.db.execute(
+                    update_query, str(processor_id), now_utc()
+                )
+            except Exception as e:
+                # 如果node_processor表没有updated_at字段，使用简化版本
+                simple_update_query = """
+                    UPDATE node_processor 
+                    SET is_deleted = TRUE
+                    WHERE processor_id = $1 AND is_deleted = FALSE
+                """
+                result = await self.node_repo.db.execute(
+                    simple_update_query, str(processor_id)
+                )
+            
+            # 统计受影响的工作流
+            workflows = {}
+            for record in affected_records:
+                workflow_id = str(record['workflow_id'])
+                if workflow_id not in workflows:
+                    workflows[workflow_id] = {
+                        'workflow_id': workflow_id,
+                        'workflow_base_id': str(record['workflow_base_id']),
+                        'affected_nodes': []
+                    }
+                workflows[workflow_id]['affected_nodes'].append({
+                    'node_id': str(record['node_id']),
+                    'name': record.get('name', '未知'),
+                    'type': record.get('type', 'unknown')
+                })
+            
+            clear_result = {
+                'processor_id': str(processor_id),
+                'cleared_records': len(affected_records),
+                'affected_workflows': list(workflows.values()),
+                'success': True
+            }
+            
+            logger.info(f"✅ 处理器引用清空完成:")
+            logger.info(f"   - 处理器ID: {processor_id}")
+            logger.info(f"   - 清空的关联记录: {len(affected_records)} 个")
+            logger.info(f"   - 受影响的工作流: {len(workflows)} 个")
+            
+            return clear_result
+            
+        except Exception as e:
+            logger.error(f"清空处理器引用失败: {e}")
             raise
 
 

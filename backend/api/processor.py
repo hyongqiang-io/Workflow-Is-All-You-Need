@@ -15,6 +15,7 @@ from ..repositories.processor.processor_repository import ProcessorRepository
 from ..repositories.user.user_repository import UserRepository
 from ..repositories.agent.agent_repository import AgentRepository
 from ..utils.middleware import get_current_active_user, CurrentUser, get_current_user_context
+from ..services.cascade_deletion_service import cascade_deletion_service
 from ..utils.exceptions import ValidationError, handle_validation_error
 
 # 创建路由器
@@ -68,8 +69,11 @@ async def test_route_with_auth(current_user: CurrentUser = Depends(get_current_u
     }
 
 @router.post("/test-create", response_model=BaseResponse)
-async def test_create_processor(processor_data: ProcessorCreate):
-    """测试创建处理器 - 无需认证"""
+async def test_create_processor(
+    processor_data: ProcessorCreate,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """测试创建处理器 - 需要认证"""
     try:
         # 验证输入数据
         if processor_data.type == ProcessorType.HUMAN and not processor_data.user_id:
@@ -80,7 +84,7 @@ async def test_create_processor(processor_data: ProcessorCreate):
             raise ValidationError("mix类型处理器必须同时指定user_id和agent_id")
         
         # 创建处理器
-        new_processor = await processor_repository.create_processor(processor_data)
+        new_processor = await processor_repository.create_processor(processor_data, current_user.user_id)
         
         if not new_processor:
             raise HTTPException(
@@ -139,7 +143,7 @@ async def create_processor(
             raise ValidationError("mix类型处理器必须同时指定user_id和agent_id")
         
         # 创建处理器
-        new_processor = await processor_repository.create_processor(processor_data)
+        new_processor = await processor_repository.create_processor(processor_data, current_user.user_id)
         
         if not new_processor:
             raise HTTPException(
@@ -204,7 +208,7 @@ async def get_available_processors_test(
             for agent in agents:
                 available_processors.append({
                     "id": str(agent['agent_id']),
-                    "name": f"Agent: {agent['agent_name']}",
+                    "name": f"{agent['agent_name']}",
                     "type": "agent",
                     "entity_type": "agent",
                     "entity_id": str(agent['agent_id']),
@@ -272,7 +276,7 @@ async def get_available_processors(
             for agent in agents:
                 available_processors.append({
                     "id": str(agent['agent_id']),
-                    "name": f"Agent: {agent['agent_name']}",
+                    "name": f"{agent['agent_name']}",
                     "type": "agent",
                     "entity_type": "agent",
                     "entity_id": str(agent['agent_id']),
@@ -562,6 +566,27 @@ async def delete_processor(
         
         logger.info(f"找到处理器: {processor.get('name', '')}")
         
+        # 检查删除权限：只有创建者可以删除processor（历史数据允许删除）
+        processor_created_by = processor.get('created_by')
+        
+        # 如果有创建者信息，检查是否为创建者
+        if processor_created_by is not None and str(processor_created_by) != str(current_user.user_id):
+            logger.warning(f"权限不足: 用户 {current_user.user_id} 尝试删除非自己创建的处理器 {processor_id}")
+            logger.warning(f"处理器创建者: {processor_created_by}, 当前用户: {current_user.user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="权限不足：只有处理器的创建者可以删除该处理器"
+            )
+        
+        # 历史数据处理器（created_by为空）允许任何用户删除
+        if processor_created_by is None:
+            logger.info(f"允许删除历史数据处理器: {processor_id} (无创建者信息)")
+        
+        # 1. 先清空所有工作流节点中对该处理器的引用
+        logger.info(f"步骤1: 清空工作流节点中的处理器引用")
+        clear_result = await cascade_deletion_service.clear_processor_references(processor_id)
+        logger.info(f"清空结果: 影响了 {clear_result['cleared_records']} 个关联记录，{len(clear_result['affected_workflows'])} 个工作流")
+        
         # 检查处理器是否正在被使用（可以添加额外的检查逻辑）
         # 例如检查是否有正在进行的任务使用此处理器
         
@@ -585,7 +610,11 @@ async def delete_processor(
             data={
                 "processor_id": str(processor_id),
                 "processor_name": processor.get('name', ''),
-                "deleted_by": str(current_user.user_id)
+                "deleted_by": str(current_user.user_id),
+                "cascade_clear_result": {
+                    "cleared_records": clear_result['cleared_records'],
+                    "affected_workflows": clear_result['affected_workflows']
+                }
             }
         )
         

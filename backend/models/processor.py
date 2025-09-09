@@ -28,6 +28,7 @@ class Processor(ProcessorBase, BaseEntity):
     processor_id: uuid.UUID = Field(..., description="处理器ID")
     user_id: Optional[uuid.UUID] = Field(None, description="用户ID")
     agent_id: Optional[uuid.UUID] = Field(None, description="Agent ID")
+    created_by: Optional[uuid.UUID] = Field(None, description="创建者ID")
     version: int = Field(1, description="版本号")
 
 
@@ -49,6 +50,7 @@ class ProcessorResponse(ProcessorBase):
     processor_id: uuid.UUID
     user_id: Optional[uuid.UUID] = None
     agent_id: Optional[uuid.UUID] = None
+    created_by: Optional[uuid.UUID] = None
     version: int
     created_at: Optional[str] = None
     user_name: Optional[str] = None

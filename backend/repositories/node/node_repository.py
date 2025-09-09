@@ -267,7 +267,7 @@ class NodeRepository(BaseRepository[Node]):
                     n.*,
                     np.processor_id
                 FROM "node" n
-                LEFT JOIN node_processor np ON np.node_id = n.node_id
+                LEFT JOIN node_processor np ON np.node_id = n.node_id AND np.is_deleted = FALSE
                 WHERE n.workflow_base_id = %s 
                 AND n.is_current_version = true 
                 AND n.is_deleted = false

@@ -11,7 +11,8 @@ import {
   SettingOutlined,
   DashboardOutlined,
   BellOutlined,
-  RobotOutlined
+  RobotOutlined,
+  QuestionCircleOutlined
 } from '@ant-design/icons';
 
 const { Header, Sider, Content } = Layout;
@@ -50,6 +51,11 @@ const MainLayout: React.FC = () => {
       key: '/resource',
       icon: <TeamOutlined />,
       label: '资源管理',
+    },
+    {
+      key: '/help',
+      icon: <QuestionCircleOutlined />,
+      label: '使用说明',
     },
     {
       key: '/profile',

@@ -85,6 +85,32 @@ class WorkflowExecutionContext:
                 # TODO: 实现快照恢复
                 pass
             
+            # 🔧 新增：读取工作流实例的context_data
+            try:
+                from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+                workflow_repo = WorkflowInstanceRepository()
+                workflow_instance = await workflow_repo.get_instance_by_id(self.workflow_instance_id)
+                
+                if workflow_instance and workflow_instance.get('context_data'):
+                    # 解析context_data（可能是JSON字符串）
+                    context_data = workflow_instance['context_data']
+                    if isinstance(context_data, str):
+                        import json
+                        try:
+                            context_data = json.loads(context_data)
+                        except json.JSONDecodeError:
+                            logger.warning(f"⚠️ 工作流实例context_data不是有效的JSON: {context_data}")
+                            context_data = {}
+                    
+                    # 将context_data存储到global_data中
+                    self.execution_context['global_data']['workflow_context_data'] = context_data
+                    logger.info(f"📋 加载工作流上下文数据: {context_data}")
+                else:
+                    logger.debug(f"📋 工作流实例无context_data: {self.workflow_instance_id}")
+                    
+            except Exception as e:
+                logger.error(f"❌ 加载工作流上下文数据失败: {e}")
+            
             # 获取开始节点信息
             start_node_info = await self._get_start_node_task_descriptions()
             self.execution_context['global_data']['start_node_descriptions'] = start_node_info

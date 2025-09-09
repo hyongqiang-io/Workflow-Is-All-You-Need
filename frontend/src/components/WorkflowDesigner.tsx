@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import ReactFlow, {
   Node,
   Edge,
@@ -50,13 +50,81 @@ const { TextArea } = Input;
 const { Option } = Select;
 
 // 自定义节点类型
-const CustomNode = ({ data, selected }: { data: any; selected?: boolean }) => {
-  const getNodeColor = (type: string, status?: string) => {
+const CustomNode = ({ data, selected, processors = [] }: { data: any; selected?: boolean; processors?: any[] }) => {
+  // 调试日志
+  console.log('🔍 CustomNode Debug:', {
+    nodeId: data.id || data.nodeId,
+    processor_id: data.processor_id,
+    processors: processors,
+    processorsLength: processors.length
+  });
+
+  // 根据processor_id获取processor信息
+  const getProcessorInfo = (processorId: string) => {
+    console.log('🔍 getProcessorInfo called:', {
+      processorId,
+      hasProcessors: processors && processors.length > 0,
+      processors: processors
+    });
+    
+    if (!processorId || !processors || processors.length === 0) {
+      console.log('🔍 getProcessorInfo early return: no processorId or processors');
+      return null;
+    }
+    
+    const found = processors.find(p => {
+      const pid = p.processor_id || p.id;
+      console.log('🔍 comparing:', pid, 'with', processorId);
+      return pid === processorId;
+    });
+    
+    console.log('🔍 found processor:', found);
+    if (found) {
+      console.log('🔍 processor type details:', {
+        type: found.type,
+        entity_type: found.entity_type,
+        name: found.name,
+        username: found.username,
+        agent_name: found.agent_name
+      });
+    }
+    return found;
+  };
+
+  // 根据processor类型获取颜色
+  const getProcessorColor = (processorType: string) => {
+    switch (processorType) {
+      case 'human':
+        return '#faad14'; // 红色
+      case 'agent':
+        return '#1890ff'; // 蓝色
+      default:
+        return '#808080'; // 灰色 (未填充processor的默认颜色)
+    }
+  };
+  const getNodeColor = (type: string, processorInfo?: any, status?: string) => {
     // 根据节点类型设置颜色
     if (type === 'start') return '#52c41a';
     if (type === 'end') return '#722ed1';
     
-    // 处理器节点根据状态设置颜色
+    // 处理器节点根据processor类型设置颜色
+    if (type === 'processor' && processorInfo) {
+      switch (processorInfo.type) {
+        case 'human':
+          return '#faad14'; // 黄色 - 人工处理器
+        case 'agent':
+          return '#1890ff'; // 蓝色 - Agent处理器
+        default:
+          return '#808080'; // 灰色 - 未知处理器类型
+      }
+    }
+    
+    // 处理器节点但无处理器信息时，使用灰色
+    if (type === 'processor') {
+      return '#808080'; // 灰色 - 未填充处理器
+    }
+    
+    // 其他情况根据状态设置颜色
     switch (status) {
       case 'completed':
         return '#52c41a';
@@ -71,12 +139,28 @@ const CustomNode = ({ data, selected }: { data: any; selected?: boolean }) => {
     }
   };
 
-  const getNodeBackground = (type: string, status?: string) => {
+  const getNodeBackground = (type: string, processorInfo?: any, status?: string) => {
     // 根据节点类型设置背景色
     if (type === 'start') return '#f6ffed';
     if (type === 'end') return '#f9f0ff';
     
-    // 处理器节点根据状态设置背景
+    // 处理器节点根据processor类型设置背景色
+    if (type === 'processor' && processorInfo) {
+      switch (processorInfo.type) {
+        case 'human':
+          return '#fffbe6'; // 浅黄色背景 - 人工处理器
+        case 'agent':
+          return '#e6f7ff'; // 浅蓝色背景 - Agent处理器
+        default:
+          return '#CCCCCC'; // 浅灰色背景 - 未知处理器类型
+      }
+    }
+    
+    if (type === 'processor') {
+      return '#CCCCCC'; // 浅灰色背景 - 未填充处理器
+    }
+    
+    // 其他情况根据状态设置背景色
     switch (status) {
       case 'completed':
         return '#f6ffed';
@@ -104,13 +188,16 @@ const CustomNode = ({ data, selected }: { data: any; selected?: boolean }) => {
     }
   };
 
+  // 获取processor信息用于样式计算
+  const processorInfoForStyle = getProcessorInfo(data.processor_id);
+  
   return (
     <div
       style={{
         padding: '12px',
         borderRadius: '8px',
-        border: `2px solid ${selected ? '#1890ff' : getNodeColor(data.type, data.status)}`,
-        backgroundColor: getNodeBackground(data.type, data.status),
+        border: `2px solid ${selected ? '#1890ff' : getNodeColor(data.type, processorInfoForStyle, data.status)}`,
+        backgroundColor: getNodeBackground(data.type, processorInfoForStyle, data.status),
         minWidth: '160px',
         textAlign: 'center',
         boxShadow: selected ? '0 0 0 2px rgba(24, 144, 255, 0.2)' : '0 2px 8px rgba(0,0,0,0.1)',
@@ -126,20 +213,33 @@ const CustomNode = ({ data, selected }: { data: any; selected?: boolean }) => {
       <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>
         {getNodeTypeText(data.type)}
       </div>
-      {data.status && data.type === 'processor' && (
-        <Badge 
-          status={data.status === 'completed' ? 'success' : 
-                 data.status === 'running' ? 'processing' : 
-                 data.status === 'failed' ? 'error' : 'default'} 
-          text={
-            <Tag color={getNodeColor(data.type, data.status)} style={{ marginTop: '4px' }}>
-              {data.status === 'completed' ? '已完成' :
-               data.status === 'running' ? '运行中' :
-               data.status === 'failed' ? '失败' :
-               data.status === 'pending' ? '待处理' : data.status}
-            </Tag>
-          }
-        />
+      {data.type === 'processor' && (
+        (() => {
+          const processorInfo = getProcessorInfo(data.processor_id);
+          const processorColor = processorInfo ? getProcessorColor(processorInfo.type) : '#808080';
+          const processorName = processorInfo ? 
+            (processorInfo.name || processorInfo.agent_name || processorInfo.username || '未命名处理器') : 
+            '未填充';
+          
+          console.log('🔍 Badge rendering:', {
+            processor_id: data.processor_id,
+            processorInfo,
+            processorColor,
+            processorName,
+            processorType: processorInfo?.type
+          });
+          
+          return (
+            <Badge 
+              status={processorInfo ? 'success' : 'default'} 
+              text={
+                <Tag color={processorColor} style={{ marginTop: '4px' }}>
+                  {processorName}
+                </Tag>
+              }
+            />
+          );
+        })()
       )}
       {data.description && (
         <div style={{ fontSize: '11px', color: '#999', marginTop: '4px' }}>
@@ -179,10 +279,6 @@ const CustomNode = ({ data, selected }: { data: any; selected?: boolean }) => {
   );
 };
 
-const nodeTypes: NodeTypes = {
-  custom: CustomNode,
-};
-
 interface WorkflowDesignerProps {
   workflowId?: string;
   onSave?: (nodes: Node[], edges: Edge[]) => void;
@@ -205,6 +301,11 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
   const [executionStatus, setExecutionStatus] = useState<any>(null);
   const [statusUpdateInterval, setStatusUpdateInterval] = useState<NodeJS.Timeout | null>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+  
+  // 创建动态nodeTypes，传递processors数据，使用useMemo确保稳定引用
+  const nodeTypes: NodeTypes = useMemo(() => ({
+    custom: (props: any) => <CustomNode {...props} processors={processors} />,
+  }), [processors]);
   
   // 新增：工作流验证相关状态
   const [validationResult, setValidationResult] = useState<ValidationResult>({ isValid: true, errors: [], warnings: [] });
@@ -339,14 +440,14 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
       console.log('最终处理器数据:', processorsData);
       
       // 如果仍然没有处理器数据，使用默认处理器
-      if (!processorsData || processorsData.length === 0) {
-        console.log('使用默认处理器数据');
-        processorsData = [
-          { processor_id: 'fallback-gpt4', name: 'GPT-4 处理器', type: 'agent' },
-          { processor_id: 'fallback-claude', name: 'Claude 处理器', type: 'agent' },
-          { processor_id: 'fallback-human', name: '人工处理器', type: 'human' },
-        ];
-      }
+      // if (!processorsData || processorsData.length === 0) {
+      //   console.log('使用默认处理器数据');
+      //   processorsData = [
+      //     { processor_id: 'fallback-gpt4', name: 'GPT-4 处理器', type: 'agent' },
+      //     { processor_id: 'fallback-claude', name: 'Claude 处理器', type: 'agent' },
+      //     { processor_id: 'fallback-human', name: '人工处理器', type: 'human' },
+      //   ];
+      // }
       
       setProcessors(processorsData);
     } catch (error) {
@@ -623,7 +724,9 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
       console.log('🔍 DEBUG: 选择的processor信息:');
       console.log('  - processor_id:', values.processor_id);
       console.log('  - 找到的processor:', selectedProcessor);
+      console.log('  - processor type:', selectedProcessor?.type);
       console.log('  - 当前所有processors:', processors);
+      console.log('  - processors中的human类型:', processors.filter(p => p.type === 'human'));
     }
     
     if (!workflowId) {
@@ -1338,7 +1441,7 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
               }}
             >
               {/* 默认处理器选项 */}
-              <Option value="default-agent">
+              {/* <Option value="default-agent">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>默认AI处理器</span>
                   <Tag color="blue">agent</Tag>
@@ -1347,9 +1450,9 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
               <Option value="default-human">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>默认人工处理器</span>
-                  <Tag color="green">human</Tag>
+                  <Tag color="yellow">human</Tag>
                 </div>
-              </Option>
+              </Option> */}
               
               {/* 从API加载的处理器 */}
               {Array.isArray(processors) && processors.map((processor) => {
@@ -1370,8 +1473,7 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
                 const getTypeColor = (type: string) => {
                   switch (type.toLowerCase()) {
                     case 'agent': return 'blue';
-                    case 'human': return 'green';
-                    case 'mix': return 'orange';
+                    case 'human': return 'orange';
                     default: return 'default';
                   }
                 };
@@ -1391,7 +1493,7 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
               })}
               
               {/* 静态备选处理器 */}
-              <Option value="gpt-4">
+              {/* <Option value="gpt-4">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>GPT-4处理器</span>
                   <Tag color="blue">agent</Tag>
@@ -1408,7 +1510,7 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
                   <span>人工审核</span>
                   <Tag color="green">human</Tag>
                 </div>
-              </Option>
+              </Option> */}
             </Select>
           </Form.Item>
         </Form>

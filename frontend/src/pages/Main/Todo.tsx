@@ -266,9 +266,9 @@ const Todo: React.FC = () => {
     const status = task.status?.toLowerCase();
     const taskType = task.task_type?.toLowerCase();
     
-    console.log('🔍 拆解检查 - 任务:', task.task_title);
-    console.log('   - 状态:', status);
-    console.log('   - 类型:', taskType);
+    // console.log('🔍 拆解检查 - 任务:', task.task_title);
+    // console.log('   - 状态:', status);
+    // console.log('   - 类型:', taskType);
     
     // 待分配、已分配或进行中状态的人工任务或混合任务可以拆解
     // 增加了in_progress状态，允许在执行过程中拆解任务
