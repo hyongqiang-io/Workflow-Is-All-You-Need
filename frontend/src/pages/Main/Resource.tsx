@@ -983,31 +983,15 @@ const Resource: React.FC = () => {
             {
               title: '操作',
               key: 'action',
-              width: 220,
+              width: 140,
               render: (text: string, record: ResourceItem) => (
                 <Space>
-                  <Tooltip title="查看详情">
-                    <Button 
-                      type="link" 
-                      size="small" 
-                      icon={<EyeOutlined />}
-                      onClick={() => handleViewAgent(record)}
-                    />
-                  </Tooltip>
                   <Tooltip title="编辑Agent">
                     <Button 
                       type="link" 
                       size="small" 
                       icon={<EditOutlined />}
                       onClick={() => handleEditAgent(record)}
-                    />
-                  </Tooltip>
-                  <Tooltip title="绑定工具">
-                    <Button 
-                      type="link" 
-                      size="small" 
-                      icon={<SettingOutlined />}
-                      onClick={() => handleBindTools(record)}
                     />
                   </Tooltip>
                   <Tooltip title="删除Agent">
