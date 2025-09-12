@@ -164,3 +164,7 @@ verify*
 !fix_and_start_frontend.bat
 
 .gitignore
+
+*.docx
+
+setting.local.json

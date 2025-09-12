@@ -7,6 +7,7 @@ import uuid
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel, Field
+from loguru import logger
 
 from ..utils.auth import get_current_active_user, CurrentUser
 from ..models.base import BaseResponse
@@ -332,10 +333,28 @@ async def unbind_tool_from_agent(
                 break
         
         if not binding_record:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="工具绑定不存在"
+            # 修复：如果找不到绑定记录，可能是工具已失效，尝试自动清理
+            logger.warning(f"工具绑定记录不存在，尝试自动清理失效绑定: agent_id={agent_id}, tool_id={tool_id}")
+            
+            cleanup_result = await agent_tool_service.cleanup_unhealthy_tool_bindings(
+                user_id=current_user.user_id
             )
+            
+            if cleanup_result['cleaned_bindings'] > 0:
+                return BaseResponse(
+                    success=True,
+                    message=f"工具已失效，已自动清理 {cleanup_result['cleaned_bindings']} 个失效绑定",
+                    data={
+                        "agent_id": agent_id,
+                        "tool_id": tool_id,
+                        "cleanup_result": cleanup_result
+                    }
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="工具绑定不存在"
+                )
         
         binding_uuid = binding_record['binding_id']
         
@@ -360,15 +379,102 @@ async def unbind_tool_from_agent(
                 detail="工具绑定不存在或已解除"
             )
         
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="无效的ID格式"
-        )
+    except ValueError as ve:
+        # 处理权限相关的ValueError
+        if "无权删除" in str(ve):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=str(ve)
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(ve)
+            )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"解除工具绑定失败: {str(e)}"
+        )
+
+@router.post("/agents/cleanup-unhealthy-bindings", response_model=BaseResponse)
+async def cleanup_unhealthy_tool_bindings(
+    current_user: CurrentUser = Depends(get_current_active_user)
+):
+    """自动清理失效工具的绑定"""
+    try:
+        result = await agent_tool_service.cleanup_unhealthy_tool_bindings(
+            user_id=current_user.user_id
+        )
+        
+        return BaseResponse(
+            success=True,
+            message=f"失效工具绑定清理完成，已清理 {result['cleaned_bindings']} 个绑定",
+            data=result
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"清理失效工具绑定失败: {str(e)}"
+        )
+
+@router.post("/agents/cleanup-orphaned-bindings", response_model=BaseResponse)
+async def cleanup_orphaned_tool_bindings(
+    current_user: CurrentUser = Depends(get_current_active_user)
+):
+    """清理孤儿工具绑定（工具已不存在的绑定）"""
+    try:
+        result = await agent_tool_service.cleanup_orphaned_bindings(
+            user_id=current_user.user_id
+        )
+        
+        return BaseResponse(
+            success=True,
+            message=f"孤儿工具绑定清理完成，已清理 {result['cleaned_orphans']} 个绑定",
+            data=result
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"清理孤儿工具绑定失败: {str(e)}"
+        )
+
+@router.post("/agents/cleanup-all-bindings", response_model=BaseResponse)
+async def cleanup_all_tool_bindings(
+    current_user: CurrentUser = Depends(get_current_active_user)
+):
+    """全面清理所有失效的工具绑定（失效工具 + 孤儿绑定）"""
+    try:
+        # 先清理失效工具绑定
+        unhealthy_result = await agent_tool_service.cleanup_unhealthy_tool_bindings(
+            user_id=current_user.user_id
+        )
+        
+        # 再清理孤儿绑定
+        orphaned_result = await agent_tool_service.cleanup_orphaned_bindings(
+            user_id=current_user.user_id
+        )
+        
+        total_cleaned = unhealthy_result['cleaned_bindings'] + orphaned_result['cleaned_orphans']
+        
+        return BaseResponse(
+            success=True,
+            message=f"全面清理完成，共清理 {total_cleaned} 个失效绑定",
+            data={
+                "total_cleaned": total_cleaned,
+                "unhealthy_cleaned": unhealthy_result['cleaned_bindings'],
+                "orphaned_cleaned": orphaned_result['cleaned_orphans'],
+                "unhealthy_details": unhealthy_result['details'],
+                "orphaned_details": orphaned_result['details']
+            }
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"全面清理工具绑定失败: {str(e)}"
         )
 
 # ===============================

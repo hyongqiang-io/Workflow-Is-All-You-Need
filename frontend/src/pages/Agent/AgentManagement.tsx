@@ -49,7 +49,6 @@ const processorAPI = {
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
-const { TabPane } = Tabs;
 
 interface AgentData {
   agent_id: string;

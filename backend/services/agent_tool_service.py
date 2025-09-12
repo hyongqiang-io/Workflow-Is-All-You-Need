@@ -64,7 +64,11 @@ class AgentToolService:
             params = [agent_id]
             param_count = 1
             
-            # 不再按绑定的user_id过滤，因为Agent所有者应该能看到所有绑定到该Agent的工具
+            # 修复：添加user_id过滤，确保查询和删除逻辑一致
+            if user_id is not None:
+                param_count += 1
+                query += f" AND atb.user_id = ${param_count}"
+                params.append(user_id)
             
             if is_enabled is not None:
                 param_count += 1
@@ -266,6 +270,21 @@ class AgentToolService:
     async def unbind_tool_from_agent(self, binding_id: uuid.UUID, user_id: uuid.UUID) -> bool:
         """解除Agent工具绑定"""
         try:
+            # 修复：先检查绑定是否存在，避免重复删除
+            existing_binding = await db_manager.fetch_one(
+                "SELECT binding_id, tool_id, agent_id, user_id as binding_user_id FROM agent_tool_bindings WHERE binding_id = $1",
+                binding_id
+            )
+            
+            if not existing_binding:
+                logger.warning(f"工具绑定不存在: {binding_id}")
+                return False
+            
+            # 检查权限：只能删除自己创建的绑定
+            if existing_binding['binding_user_id'] != user_id:
+                logger.warning(f"无权删除工具绑定: {binding_id} (创建者: {existing_binding['binding_user_id']}, 当前用户: {user_id})")
+                raise ValueError(f"无权删除此工具绑定，该绑定由其他用户创建")
+            
             result = await db_manager.execute(
                 "DELETE FROM agent_tool_bindings WHERE binding_id = $1 AND user_id = $2",
                 binding_id, user_id
@@ -275,11 +294,199 @@ class AgentToolService:
                 logger.info(f"工具绑定解除成功: {binding_id}")
                 return True
             else:
-                logger.warning(f"工具绑定不存在或无权限: {binding_id}")
+                logger.warning(f"工具绑定删除失败: {binding_id}")
                 return False
                 
+        except ValueError:
+            # 重新抛出权限错误
+            raise
         except Exception as e:
             logger.error(f"解除工具绑定失败: {e}")
+            raise
+
+    async def cleanup_unhealthy_tool_bindings(self, user_id: uuid.UUID) -> Dict[str, Any]:
+        """自动清理失效工具的绑定"""
+        try:
+            logger.info(f"🧹 开始清理用户 {user_id} 的失效工具绑定")
+            
+            # 查找所有绑定了失效工具的记录
+            unhealthy_bindings = await db_manager.fetch_all(
+                """
+                SELECT 
+                    atb.binding_id,
+                    atb.agent_id,
+                    atb.tool_id,
+                    mtr.tool_name,
+                    mtr.server_name,
+                    mtr.server_status,
+                    mtr.is_deleted as tool_is_deleted,
+                    mtr.is_server_active,
+                    mtr.is_tool_active
+                FROM agent_tool_bindings atb
+                JOIN mcp_tool_registry mtr ON atb.tool_id = mtr.tool_id
+                WHERE atb.user_id = $1 
+                AND (mtr.server_status = 'unhealthy' OR mtr.is_deleted = TRUE OR mtr.is_server_active = FALSE OR mtr.is_tool_active = FALSE)
+                """,
+                user_id
+            )
+            
+            if not unhealthy_bindings:
+                logger.info("✅ 没有发现失效的工具绑定")
+                return {
+                    'cleaned_bindings': 0,
+                    'details': []
+                }
+            
+            logger.info(f"🔍 发现 {len(unhealthy_bindings)} 个失效工具绑定:")
+            for binding in unhealthy_bindings:
+                reason = []
+                if binding['tool_is_deleted']:
+                    reason.append('工具已删除')
+                if binding['server_status'] == 'unhealthy':
+                    reason.append('服务器不健康')
+                if not binding['is_server_active']:
+                    reason.append('服务器已禁用')
+                if not binding['is_tool_active']:
+                    reason.append('工具已禁用')
+                    
+                logger.info(f"   - {binding['tool_name']} (服务器: {binding['server_name']}, 原因: {', '.join(reason)})")
+            
+            # 批量删除失效工具绑定
+            cleaned_count = 0
+            details = []
+            
+            for binding in unhealthy_bindings:
+                try:
+                    result = await db_manager.execute(
+                        "DELETE FROM agent_tool_bindings WHERE binding_id = $1 AND user_id = $2",
+                        binding['binding_id'], user_id
+                    )
+                    
+                    if result == "DELETE 1":
+                        cleaned_count += 1
+                        reason = []
+                        if binding['tool_is_deleted']:
+                            reason.append('工具已删除')
+                        if binding['server_status'] == 'unhealthy':
+                            reason.append('服务器不健康')
+                        if not binding['is_server_active']:
+                            reason.append('服务器已禁用')
+                        if not binding['is_tool_active']:
+                            reason.append('工具已禁用')
+                            
+                        details.append({
+                            'agent_id': str(binding['agent_id']),
+                            'tool_name': binding['tool_name'],
+                            'server_name': binding['server_name'],
+                            'server_status': binding['server_status'],
+                            'reason': ', '.join(reason),
+                            'action': 'deleted'
+                        })
+                        logger.info(f"✅ 已清理失效绑定: {binding['tool_name']}")
+                    else:
+                        logger.warning(f"⚠️ 清理失败: {binding['tool_name']}")
+                        details.append({
+                            'agent_id': str(binding['agent_id']),
+                            'tool_name': binding['tool_name'],
+                            'server_name': binding['server_name'],
+                            'server_status': binding['server_status'],
+                            'action': 'failed'
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"❌ 清理绑定 {binding['tool_name']} 失败: {e}")
+                    details.append({
+                        'agent_id': str(binding['agent_id']),
+                        'tool_name': binding['tool_name'],
+                        'server_name': binding['server_name'],
+                        'server_status': binding['server_status'],
+                        'action': 'error',
+                        'error': str(e)
+                    })
+            
+            logger.info(f"🧹 失效工具绑定清理完成: {cleaned_count}/{len(unhealthy_bindings)} 个")
+            
+            return {
+                'cleaned_bindings': cleaned_count,
+                'total_found': len(unhealthy_bindings),
+                'details': details
+            }
+            
+        except Exception as e:
+            logger.error(f"清理失效工具绑定失败: {e}")
+            raise
+
+    async def cleanup_orphaned_bindings(self, user_id: uuid.UUID) -> Dict[str, Any]:
+        """清理孤儿绑定（工具已不存在的绑定）"""
+        try:
+            logger.info(f"🧹 开始清理用户 {user_id} 的孤儿工具绑定")
+            
+            # 查找所有没有对应工具记录的绑定
+            orphaned_bindings = await db_manager.fetch_all(
+                """
+                SELECT atb.binding_id, atb.agent_id, atb.tool_id
+                FROM agent_tool_bindings atb
+                LEFT JOIN mcp_tool_registry mtr ON atb.tool_id = mtr.tool_id
+                WHERE atb.user_id = $1 AND mtr.tool_id IS NULL
+                """,
+                user_id
+            )
+            
+            if not orphaned_bindings:
+                logger.info("✅ 没有发现孤儿工具绑定")
+                return {
+                    'cleaned_orphans': 0,
+                    'details': []
+                }
+            
+            logger.info(f"🔍 发现 {len(orphaned_bindings)} 个孤儿工具绑定")
+            
+            # 批量删除孤儿绑定
+            cleaned_count = 0
+            details = []
+            
+            for binding in orphaned_bindings:
+                try:
+                    result = await db_manager.execute(
+                        "DELETE FROM agent_tool_bindings WHERE binding_id = $1 AND user_id = $2",
+                        binding['binding_id'], user_id
+                    )
+                    
+                    if result == "DELETE 1":
+                        cleaned_count += 1
+                        details.append({
+                            'agent_id': str(binding['agent_id']),
+                            'tool_id': str(binding['tool_id']),
+                            'action': 'deleted'
+                        })
+                        logger.info(f"✅ 已清理孤儿绑定: {binding['binding_id']}")
+                    else:
+                        logger.warning(f"⚠️ 清理失败: {binding['binding_id']}")
+                        details.append({
+                            'agent_id': str(binding['agent_id']),
+                            'tool_id': str(binding['tool_id']),
+                            'action': 'failed'
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"❌ 清理孤儿绑定 {binding['binding_id']} 失败: {e}")
+                    details.append({
+                        'agent_id': str(binding['agent_id']),
+                        'tool_id': str(binding['tool_id']),
+                        'action': 'error',
+                        'error': str(e)
+                    })
+            
+            logger.info(f"🧹 孤儿工具绑定清理完成: {cleaned_count}/{len(orphaned_bindings)} 个")
+            
+            return {
+                'cleaned_orphans': cleaned_count,
+                'total_found': len(orphaned_bindings),
+                'details': details
+            }
+            
+        except Exception as e:
+            logger.error(f"清理孤儿工具绑定失败: {e}")
             raise
     
     async def batch_bind_tools(self, agent_id: uuid.UUID, user_id: uuid.UUID,

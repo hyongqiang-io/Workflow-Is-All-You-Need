@@ -269,6 +269,17 @@ class MCPToolService:
                     "DELETE FROM agent_tool_bindings WHERE tool_id = $1",
                     tool_id
                 )
+                
+                # 自动清理孤儿绑定（以防有其他残留）
+                try:
+                    from .agent_tool_service import agent_tool_service
+                    logger.debug(f"🧹 工具 {tool_id} 删除后，自动清理孤儿绑定")
+                    cleanup_result = await agent_tool_service.cleanup_orphaned_bindings(user_id)
+                    if cleanup_result['cleaned_orphans'] > 0:
+                        logger.info(f"✅ 额外清理了 {cleanup_result['cleaned_orphans']} 个孤儿绑定")
+                except Exception as cleanup_error:
+                    logger.warning(f"⚠️ 自动清理孤儿绑定失败（非致命错误）: {cleanup_error}")
+                
                 logger.info(f"工具删除成功: {tool_id}")
                 return True
             else:
@@ -307,6 +318,16 @@ class MCPToolService:
                     "DELETE FROM agent_tool_bindings WHERE tool_id = $1",
                     tool_row['tool_id']
                 )
+            
+            # 自动清理相关的孤儿绑定（以防有其他残留）
+            try:
+                from .agent_tool_service import agent_tool_service
+                logger.info(f"🧹 服务器 {server_name} 删除后，自动清理孤儿绑定")
+                cleanup_result = await agent_tool_service.cleanup_orphaned_bindings(user_id)
+                if cleanup_result['cleaned_orphans'] > 0:
+                    logger.info(f"✅ 额外清理了 {cleanup_result['cleaned_orphans']} 个孤儿绑定")
+            except Exception as cleanup_error:
+                logger.warning(f"⚠️ 自动清理孤儿绑定失败（非致命错误）: {cleanup_error}")
             
             deleted_count = len(tool_ids)
             logger.info(f"删除服务器 {server_name} 的 {deleted_count} 个工具")

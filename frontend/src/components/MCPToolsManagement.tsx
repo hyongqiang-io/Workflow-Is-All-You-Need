@@ -13,7 +13,6 @@ import { mcpUserToolsAPI, agentToolsAPI } from '../services/api';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
-const { TabPane } = Tabs;
 const { Option } = Select;
 
 interface MCPServer {

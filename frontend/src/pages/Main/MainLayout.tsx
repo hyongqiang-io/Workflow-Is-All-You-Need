@@ -10,7 +10,6 @@ import {
   LogoutOutlined,
   SettingOutlined,
   DashboardOutlined,
-  BellOutlined,
   RobotOutlined,
   QuestionCircleOutlined
 } from '@ant-design/icons';
@@ -141,9 +140,6 @@ const MainLayout: React.FC = () => {
             {menuItems.find(item => item.key === location.pathname)?.label || '仪表板'}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <Badge count={3} size="small">
-              <BellOutlined style={{ fontSize: '18px', color: '#666', cursor: 'pointer' }} />
-            </Badge>
             <Dropdown
               menu={{
                 items: userMenuItems,

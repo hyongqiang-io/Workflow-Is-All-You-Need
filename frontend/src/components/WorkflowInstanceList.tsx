@@ -80,6 +80,10 @@ const SubWorkflowNodeAdapter = ({ data }: { data: any }) => {
 
   const handleCollapse = (nodeId: string) => {
     console.log('🔍 [SubWorkflowNodeAdapter] 收起子工作流:', nodeId);
+    // 修复：应该传递parentNodeId而不是子工作流容器的nodeId
+    if (data.onCollapse) {
+      data.onCollapse(data.parentNodeId);
+    }
   };
 
   // 直接使用主工作流的节点显示逻辑
@@ -140,7 +144,8 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
     collapseNode,
     getNodeExpansionState,
     getNodeSubdivisionInfo,
-    subdivisionInfo
+    subdivisionInfo,
+    expandedNodes  // 添加expandedNodes状态依赖
   } = useSubWorkflowExpansion({
     workflowInstanceId: selectedInstance?.instance_id,
     onExpansionChange: (nodeId, isExpanded) => {
@@ -305,7 +310,10 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
               completedAt: subWorkflow.completed_at,
               
               // 添加节点详情回调，直接使用主工作流的Modal显示逻辑
-              onSubWorkflowNodeClick: setSelectedNodeForDetail
+              onSubWorkflowNodeClick: setSelectedNodeForDetail,
+              
+              // 添加收起回调
+              onCollapse: collapseNode
             }
           };
           
@@ -464,20 +472,15 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
   // 监听展开状态变化，重新渲染图形
   useEffect(() => {
     if (nodesDetail && selectedInstance) {
-      // 检查是否有任何节点的展开状态发生了变化
-      const hasExpandedNodes = Object.keys(subdivisionInfo).some(nodeId => {
-        const expansionState = getNodeExpansionState(nodeId);
-        return expansionState.isExpanded;
-      });
+      // 修复：依赖expandedNodes状态变化，无论展开还是收起都重新渲染
+      console.log('🔍 [WorkflowInstanceList] expandedNodes状态变化，重新渲染图形');
+      console.log('🔍 [WorkflowInstanceList] 当前expandedNodes:', expandedNodes);
       
-      if (hasExpandedNodes) {
-        console.log('🔍 [WorkflowInstanceList] 检测到展开状态变化，重新渲染图形');
-        const { nodes: flowNodes, edges: flowEdges } = convertToReactFlowData();
-        setNodes(flowNodes);
-        setEdges(flowEdges);
-      }
+      const { nodes: flowNodes, edges: flowEdges } = convertToReactFlowData();
+      setNodes(flowNodes);
+      setEdges(flowEdges);
     }
-  }, [nodesDetail, selectedInstance, getNodeExpansionState]);
+  }, [nodesDetail, selectedInstance, expandedNodes]);  // 依赖expandedNodes而不是函数引用
 
   const getStatusTag = React.useCallback((status: string) => {
     const statusConfig = {

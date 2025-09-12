@@ -9,7 +9,9 @@
       "Bash(mysql:*)",
       "Bash(python:*)",
       "Bash(sed:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(tree:*)"
     ],
     "deny": [],
     "ask": [],
