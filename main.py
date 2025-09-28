@@ -81,6 +81,7 @@ from backend.api.workflow_merge import router as workflow_merge_router
 from backend.api.context_health import router as context_health_router
 from backend.api.feishu import router as feishu_router
 from backend.api.feishu_bot import router as feishu_bot_router
+from backend.api.files import router as files_router
 from backend.utils.database import initialize_database, close_database
 from backend.utils.exceptions import BusinessException, ErrorResponse
 from backend.services.execution_service import execution_engine
@@ -453,6 +454,11 @@ logger.trace("注册飞书OAuth路由...")
 app.include_router(feishu_router, prefix="/api", tags=["飞书OAuth"])
 app.include_router(feishu_bot_router, prefix="/api", tags=["飞书机器人"])
 logger.trace("飞书OAuth路由注册完成")
+
+# 注册文件管理路由
+logger.trace("注册文件管理路由...")
+app.include_router(files_router, tags=["文件管理"])
+logger.trace("文件管理路由注册完成")
 
 logger.trace("所有路由注册完成")
 

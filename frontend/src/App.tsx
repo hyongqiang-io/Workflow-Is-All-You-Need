@@ -13,6 +13,7 @@ import Dashboard from './pages/Main/Dashboard';
 import Workflow from './pages/Workflow/Workflow';
 import Todo from './pages/Main/Todo';
 import Resource from './pages/Main/Resource';
+import MyResources from './pages/Main/MyResources';
 import Profile from './pages/Profile/Profile';
 import TaskFlow from './pages/Workflow/TaskFlow';
 import AgentManagement from './pages/Agent/AgentManagement';
@@ -43,6 +44,7 @@ function App() {
             <Route index element={<Dashboard />} />
             <Route path="profile" element={<Profile />} />
             <Route path="resource" element={<Resource />} />
+            <Route path="my-resources" element={<MyResources />} />
             <Route path="workflow" element={<Workflow />} />
             <Route path="workflow/:workflowId/task-flow" element={<TaskFlow />} />
             <Route path="todo" element={<Todo />} />

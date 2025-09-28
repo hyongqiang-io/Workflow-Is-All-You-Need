@@ -5,8 +5,10 @@ Base Data Models
 
 import uuid
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Generic, TypeVar
 from pydantic import BaseModel, Field, ConfigDict
+
+T = TypeVar('T')
 
 
 class BaseEntity(BaseModel):
@@ -34,11 +36,11 @@ class SoftDeleteMixin(BaseModel):
     is_deleted: bool = False
 
 
-class BaseResponse(BaseModel):
+class BaseResponse(BaseModel, Generic[T]):
     """基础响应模型"""
     success: bool = True
     message: str = "操作成功"
-    data: Optional[Any] = None
+    data: Optional[T] = None
 
 
 class PaginationParams(BaseModel):

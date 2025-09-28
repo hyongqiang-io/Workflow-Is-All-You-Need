@@ -220,3 +220,8 @@ def bad_request(message: str = "请求错误") -> JSONResponse:
 def not_found(message: str = "资源未找到") -> JSONResponse:
     """未找到响应的简写形式"""
     return not_found_response(message=message)
+
+
+def create_response(data: Any = None, message: str = "操作成功", status_code: int = status.HTTP_200_OK) -> JSONResponse:
+    """通用响应创建函数，兼容旧版本API"""
+    return success_response(data=data, message=message, status_code=status_code)

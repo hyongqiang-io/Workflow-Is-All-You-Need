@@ -1,0 +1,256 @@
+/* 我的文件页面样式 */
+
+.my-resources-container {
+  padding: 24px;
+  background: #f5f5f5;
+  min-height: calc(100vh - 64px);
+}
+
+.my-resources-container .ant-page-header {
+  background: #fff;
+  border-radius: 8px;
+  margin-bottom: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.my-resources-container .ant-card {
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* 批量上传区域 */
+.batch-upload-container {
+  padding: 24px;
+  
+  .ant-upload-drag {
+    border: 2px dashed #d9d9d9;
+    border-radius: 8px;
+    background: #fafafa;
+    transition: all 0.3s;
+  }
+  
+  .ant-upload-drag:hover {
+    border-color: #40a9ff;
+    background: #f0f9ff;
+  }
+  
+  .ant-upload-drag.ant-upload-drag-hover {
+    border-color: #1890ff;
+    background: #e6f7ff;
+  }
+  
+  .ant-upload-drag-icon {
+    margin-bottom: 16px;
+  }
+  
+  .ant-upload-text {
+    margin-bottom: 8px;
+  }
+  
+  .ant-upload-hint {
+    color: #666;
+    font-size: 14px;
+    margin-bottom: 16px;
+  }
+}
+
+/* 选项卡样式 */
+.ant-tabs-large .ant-tabs-tab {
+  padding: 12px 16px;
+  font-size: 16px;
+}
+
+.ant-tabs-tab-active {
+  color: #1890ff;
+}
+
+/* 页面头部样式 */
+.ant-page-header-heading-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: #262626;
+}
+
+.ant-page-header-heading-sub-title {
+  color: #8c8c8c;
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+/* 信息提示框样式 */
+.ant-alert {
+  border-radius: 8px;
+  
+  ul {
+    margin: 8px 0;
+    padding-left: 20px;
+    
+    li {
+      margin-bottom: 4px;
+      color: #666;
+    }
+  }
+}
+
+.ant-alert-info {
+  background: #e6f7ff;
+  border: 1px solid #91d5ff;
+}
+
+/* 按钮样式优化 */
+.ant-btn-primary {
+  border-radius: 6px;
+  box-shadow: 0 2px 4px rgba(24, 144, 255, 0.3);
+}
+
+.ant-btn-primary:hover {
+  box-shadow: 0 4px 8px rgba(24, 144, 255, 0.4);
+  transform: translateY(-1px);
+}
+
+.ant-btn {
+  border-radius: 6px;
+  transition: all 0.3s;
+}
+
+/* 统计数据样式 */
+.ant-statistic {
+  text-align: center;
+}
+
+.ant-statistic-title {
+  margin-bottom: 4px;
+  color: #8c8c8c;
+  font-size: 14px;
+}
+
+.ant-statistic-content {
+  color: #1890ff;
+  font-weight: 600;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .my-resources-container {
+    padding: 16px;
+  }
+  
+  .ant-page-header {
+    padding: 16px;
+  }
+  
+  .ant-page-header-heading-title {
+    font-size: 20px;
+  }
+  
+  .batch-upload-container {
+    padding: 16px;
+  }
+  
+  .ant-upload-drag {
+    padding: 24px 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .my-resources-container {
+    padding: 12px;
+  }
+  
+  .ant-page-header-heading-extra {
+    .ant-btn {
+      font-size: 12px;
+      padding: 4px 8px;
+    }
+  }
+  
+  .ant-tabs-large .ant-tabs-tab {
+    padding: 8px 12px;
+    font-size: 14px;
+  }
+}
+
+/* 加载状态优化 */
+.ant-btn-loading {
+  opacity: 0.7;
+}
+
+/* 上传文件列表样式 */
+.ant-upload-list {
+  margin-top: 16px;
+  
+  .ant-upload-list-item {
+    border-radius: 6px;
+    border: 1px solid #d9d9d9;
+    background: #fafafa;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+  }
+  
+  .ant-upload-list-item-name {
+    color: #262626;
+    font-weight: 500;
+  }
+  
+  .ant-upload-list-item-progress {
+    margin-top: 4px;
+  }
+}
+
+/* 成功状态 */
+.ant-upload-list-item-done {
+  border-color: #52c41a;
+  background: #f6ffed;
+}
+
+/* 错误状态 */
+.ant-upload-list-item-error {
+  border-color: #ff4d4f;
+  background: #fff2f0;
+}
+
+/* 提示文字样式 */
+.ant-typography {
+  .ant-typography-paragraph {
+    margin-bottom: 8px;
+  }
+  
+  .ant-typography-paragraph:last-child {
+    margin-bottom: 0;
+  }
+}
+
+/* 分割线样式 */
+.ant-divider {
+  margin: 16px 0;
+  border-color: #e8e8e8;
+}
+
+/* 空间组件样式 */
+.ant-space {
+  .ant-space-item {
+    display: flex;
+    align-items: center;
+  }
+}
+
+/* 图标样式优化 */
+.anticon {
+  transition: all 0.3s;
+}
+
+.anticon:hover {
+  transform: scale(1.1);
+}
+
+/* 卡片内容间距 */
+.ant-card-body {
+  padding: 24px;
+}
+
+/* 表格容器样式 */
+.file-list-container {
+  .ant-card {
+    margin-bottom: 0;
+  }
+}

@@ -48,6 +48,10 @@ class ApplicationSettings(BaseSettings):
     
     # 安全配置
     secret_key: str = "default-secret-key"
+    
+    # 文件上传配置
+    upload_root_dir: str = "./uploads"
+    max_file_size_mb: int = 100
     access_token_expire_minutes: int = 30
     
     class Config:

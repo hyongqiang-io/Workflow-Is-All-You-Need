@@ -30,6 +30,16 @@ from .instance import (
     WorkflowInstanceStatus, NodeInstanceStatus, TaskInstanceStatus, TaskInstanceType,
     WorkflowExecuteRequest, WorkflowControlRequest, ExecutionStatistics
 )
+from .file_attachment import (
+    WorkflowFile, WorkflowFileCreate, WorkflowFileUpdate, WorkflowFileResponse,
+    UserFile, UserFileCreate, UserFileResponse,
+    NodeFile, NodeFileCreate, NodeFileResponse,
+    NodeInstanceFile, NodeInstanceFileCreate, NodeInstanceFileResponse,
+    TaskInstanceFile, TaskInstanceFileCreate, TaskInstanceFileResponse,
+    AttachmentType, AccessType, FileUploadRequest, FileUploadResponse,
+    FileBatchAssociateRequest, FileBatchResponse, FileSearchRequest, FileSearchResponse,
+    FileStatistics, FilePermissionRequest, FilePermissionResponse
+)
 
 __all__ = [
     # Base
@@ -61,4 +71,14 @@ __all__ = [
     "TaskInstance", "TaskInstanceCreate", "TaskInstanceUpdate", "TaskInstanceResponse",
     "WorkflowInstanceStatus", "NodeInstanceStatus", "TaskInstanceStatus", "TaskInstanceType",
     "WorkflowExecuteRequest", "WorkflowControlRequest", "ExecutionStatistics",
+    
+    # File Attachment
+    "WorkflowFile", "WorkflowFileCreate", "WorkflowFileUpdate", "WorkflowFileResponse",
+    "UserFile", "UserFileCreate", "UserFileResponse",
+    "NodeFile", "NodeFileCreate", "NodeFileResponse",
+    "NodeInstanceFile", "NodeInstanceFileCreate", "NodeInstanceFileResponse", 
+    "TaskInstanceFile", "TaskInstanceFileCreate", "TaskInstanceFileResponse",
+    "AttachmentType", "AccessType", "FileUploadRequest", "FileUploadResponse",
+    "FileBatchAssociateRequest", "FileBatchResponse", "FileSearchRequest", "FileSearchResponse",
+    "FileStatistics", "FilePermissionRequest", "FilePermissionResponse",
 ]

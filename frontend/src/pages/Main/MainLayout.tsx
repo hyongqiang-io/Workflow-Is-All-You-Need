@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Layout, Menu, Avatar, Dropdown, Badge } from 'antd';
+import { Layout, Menu, Avatar, Dropdown } from 'antd';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import {
@@ -10,8 +10,8 @@ import {
   LogoutOutlined,
   SettingOutlined,
   DashboardOutlined,
-  RobotOutlined,
-  QuestionCircleOutlined
+  QuestionCircleOutlined,
+  FileTextOutlined
 } from '@ant-design/icons';
 
 const { Header, Sider, Content } = Layout;
@@ -45,6 +45,11 @@ const MainLayout: React.FC = () => {
       key: '/todo',
       icon: <CheckSquareOutlined />,
       label: '待办任务',
+    },
+    {
+      key: '/my-resources',
+      icon: <FileTextOutlined />,
+      label: '我的文件',
     },
     {
       key: '/resource',
