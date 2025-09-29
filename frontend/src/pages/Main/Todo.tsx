@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Card, List, Tag, Button, Modal, Form, Input, Select, message, Space, Collapse, Typography, Divider, Alert, Spin, Row, Col, Pagination } from 'antd';
-import { SaveOutlined, BranchesOutlined, EditOutlined, EyeOutlined, SearchOutlined, FilterOutlined, ClearOutlined } from '@ant-design/icons';
+import { SaveOutlined, BranchesOutlined, EditOutlined, EyeOutlined, SearchOutlined, FilterOutlined, ClearOutlined, DownloadOutlined, FileOutlined } from '@ant-design/icons';
 import { useTaskStore } from '../../stores/taskStore';
 import { useAuthStore } from '../../stores/authStore';
 import { taskSubdivisionApi, executionAPI } from '../../services/api';
+import { FileAPI } from '../../services/fileAPI';
 import TaskSubdivisionModal from '../../components/TaskSubdivisionModal';
 import SubdivisionResultEditModal from '../../components/SubdivisionResultEditModal';
 import TaskFlowViewer from '../../components/TaskFlowViewer';
+import NodeAttachmentManager from '../../components/NodeAttachmentManager';
 
 const { TextArea } = Input;
 const { Panel } = Collapse;
@@ -14,13 +16,14 @@ const { Text, Paragraph } = Typography;
 
 const Todo: React.FC = () => {
   const { user } = useAuthStore();
-  const { 
-    tasks, 
-    loading, 
+  const {
+    tasks,
+    currentTask: taskStoreCurrentTask,  // 重命名避免冲突
+    loading,
     error,
-    loadTasks, 
+    loadTasks,
     getTaskDetails,
-    startTask, 
+    startTask,
     submitTaskResult,
     pauseTask,
     requestHelp,
@@ -261,6 +264,16 @@ const Todo: React.FC = () => {
     setCurrentPage(1); // 重置到第一页
   };
 
+  // 处理文件下载（带认证）
+  const handleFileDownload = async (fileId: string) => {
+    try {
+      await FileAPI.downloadFile(fileId);
+    } catch (error) {
+      console.error('文件下载失败:', error);
+      message.error('文件下载失败，请稍后重试');
+    }
+  };
+
   // 检查任务是否可以拆解
   const canSubdivideTask = (task: any) => {
     const status = task.status?.toLowerCase();
@@ -275,7 +288,6 @@ const Todo: React.FC = () => {
     const canSubdivide = (status === 'pending' || status === 'assigned' || status === 'in_progress') && 
            (taskType === 'human' || taskType === 'mixed' || taskType === 'processor');
     
-    console.log('   - 是否可拆解:', canSubdivide);
     
     return canSubdivide;
   };
@@ -671,50 +683,40 @@ const Todo: React.FC = () => {
   };
 
   const handleViewDetails = async (task: any) => {
-    console.log('🔍 前端: 查看任务详情', task.task_instance_id);
-    
-    // 调用API获取完整的任务详情（包含context_data）
+    // 调用API获取完整的任务详情（包含context_data和current_task_attachments）
     try {
-      console.log('📡 前端: 调用getTaskDetails API');
       await getTaskDetails(task.task_instance_id);
-      console.log('✅ 前端: 任务详情获取成功');
-      
-      // 使用从store获取的最新任务数据
-      const updatedTask = tasks.find(t => t.task_instance_id === task.task_instance_id);
-      if (updatedTask) {
-        console.log('🔄 前端: 更新当前任务数据');
-        console.log('📊 前端: 最新context_data', updatedTask.context_data);
-        
+
+      // 直接使用taskStore中的currentTask，确保获取最新的完整数据
+      if (taskStoreCurrentTask && taskStoreCurrentTask.task_instance_id === task.task_instance_id) {
         // 解析context_data字符串为对象（如果是字符串）
-        let parsedTask = { ...updatedTask };
-        if (typeof updatedTask.context_data === 'string' && (updatedTask.context_data as string).trim()) {
+        let parsedTask = { ...taskStoreCurrentTask };
+        if (typeof taskStoreCurrentTask.context_data === 'string' && (taskStoreCurrentTask.context_data as string).trim()) {
           try {
-            parsedTask.context_data = JSON.parse(updatedTask.context_data as string);
-            console.log('✅ 前端: context_data解析成功', parsedTask.context_data);
+            parsedTask.context_data = JSON.parse(taskStoreCurrentTask.context_data as string);
           } catch (parseError) {
-            console.warn('⚠️ 前端: context_data解析失败，保持原始格式', parseError);
+            console.warn('context_data解析失败，保持原始格式', parseError);
           }
         }
-        
+
         // 解析input_data字符串为对象（如果是字符串）
-        if (typeof updatedTask.input_data === 'string' && (updatedTask.input_data as string).trim()) {
+        if (typeof taskStoreCurrentTask.input_data === 'string' && (taskStoreCurrentTask.input_data as string).trim()) {
           try {
-            parsedTask.input_data = JSON.parse(updatedTask.input_data as string);
-            console.log('✅ 前端: input_data解析成功', parsedTask.input_data);
+            parsedTask.input_data = JSON.parse(taskStoreCurrentTask.input_data as string);
           } catch (parseError) {
-            console.warn('⚠️ 前端: input_data解析失败，保持原始格式', parseError);
+            console.warn('input_data解析失败，保持原始格式', parseError);
           }
         }
-        
+
         setCurrentTask(parsedTask);
       } else {
         setCurrentTask(task);
       }
     } catch (error) {
-      console.error('❌ 前端: 获取任务详情失败', error);
+      console.error('获取任务详情失败', error);
       setCurrentTask(task);
     }
-    
+
     setDetailModalVisible(true);
   };
 
@@ -738,7 +740,12 @@ const Todo: React.FC = () => {
       });
       
       const values = await submitForm.validateFields();
-      await submitTaskResult(currentTask.task_instance_id, values.result, values.notes);
+      
+      // 🆕 获取附件ID列表
+      const attachmentFileIds = values.attachment_file_ids || [];
+      console.log('📎 提交的附件ID列表:', attachmentFileIds);
+      
+      await submitTaskResult(currentTask.task_instance_id, values.result, values.notes, attachmentFileIds);
       message.success('任务提交成功');
       setSubmitModalVisible(false);
       setCurrentTask(null);
@@ -1345,6 +1352,7 @@ const Todo: React.FC = () => {
       >
         {currentTask && (
           <div>
+
             <Card size="small" title="基本信息" style={{ marginBottom: '16px' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div>
@@ -1377,6 +1385,59 @@ const Todo: React.FC = () => {
                 <div>
                   <Text strong>执行指令: </Text>
                   <Paragraph>{currentTask.instructions}</Paragraph>
+                </div>
+              )}
+              
+              {/* 🆕 当前任务附件 */}
+              {currentTask.current_task_attachments && currentTask.current_task_attachments.length > 0 && (
+                <div style={{ marginTop: '16px' }}>
+                  <Text strong>任务附件: </Text>
+                  
+                  <div style={{ marginTop: '8px' }}>
+                    <List
+                      size="small"
+                      dataSource={currentTask.current_task_attachments}
+                      renderItem={(attachment: any) => (
+                        <List.Item
+                          style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}
+                          actions={[
+                            <Button 
+                              key="download"
+                              type="link" 
+                              size="small"
+                              icon={<DownloadOutlined />}
+                              onClick={() => handleFileDownload(attachment.file_id)}
+                            >
+                              下载
+                            </Button>
+                          ]}
+                        >
+                          <List.Item.Meta
+                            avatar={<FileOutlined style={{ color: '#1890ff' }} />}
+                            title={
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Text strong>{attachment.filename}</Text>
+                                <Tag 
+                                  color={attachment.association_type === 'task_direct' ? 'green' : 'blue'} 
+                                  style={{ fontSize: '10px' }}
+                                >
+                                  {attachment.association_type === 'task_direct' ? '任务附件' : '节点绑定'}
+                                </Tag>
+                              </div>
+                            }
+                            description={
+                              <div style={{ fontSize: '12px', color: '#666' }}>
+          
+                                <div>大小: {(attachment.file_size / 1024).toFixed(1)} KB </div>
+                                <div>类型: {attachment.content_type}</div>
+                                {/* <div>创建时间: {new Date(attachment.created_at).toLocaleString()}</div> */}
+                              </div>
+                            }
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  </div>
                 </div>
               )}
             </Card>
@@ -1518,24 +1579,6 @@ const Todo: React.FC = () => {
                                         if (outputData.result) {
                                           return (
                                             <div>
-                                              <Alert
-                                                message="✅ 处理器执行结果"
-                                                description={
-                                                  <div>
-                                                    <div style={{ marginBottom: '8px', fontWeight: 'bold', color: '#52c41a' }}>
-                                                      {outputData.result}
-                                                    </div>
-                                                    {outputData.summary && (
-                                                      <div style={{ fontSize: '12px', color: '#666', fontStyle: 'italic' }}>
-                                                        摘要: {outputData.summary}
-                                                      </div>
-                                                    )}
-                                                  </div>
-                                                }
-                                                type="success"
-                                                showIcon
-                                                style={{ marginBottom: '8px' }}
-                                              />
                                               {Object.keys(outputData).length > 1 && (
                                                 <details>
                                                   <summary style={{ cursor: 'pointer', color: '#1890ff', fontSize: '12px' }}>
@@ -1639,6 +1682,236 @@ const Todo: React.FC = () => {
                     </>
                   )}
                   
+                  {/* 🆕 全局上游上下文面板 */}
+                  {currentTask.context_data && currentTask.context_data.all_upstream_results && Object.keys(currentTask.context_data.all_upstream_results).length > 0 && (
+                    <Panel 
+                      header={
+                        <div>
+                          <Text strong>🌐 全局上游上下文</Text>
+                          <Tag color="purple" style={{ marginLeft: '8px' }}>
+                            {Object.keys(currentTask.context_data.all_upstream_results).length} 个节点
+                          </Tag>
+                        </div>
+                      } 
+                      key="all_upstream_results"
+                    >
+                      <Alert
+                        message="🌐 全局执行上下文"
+                        description="此处显示工作流从开始到当前任务的所有上游节点执行结果，可帮助您了解完整的执行历史。"
+                        type="info"
+                        showIcon
+                        style={{ marginBottom: '16px' }}
+                      />
+                      {Object.entries(currentTask.context_data.all_upstream_results)
+                        .sort(([,a], [,b]) => ((a as any).execution_order || 0) - ((b as any).execution_order || 0))
+                        .map(([nodeKey, nodeData]: [string, any], index: number) => (
+                        <Card 
+                          key={nodeKey} 
+                          size="small" 
+                          style={{ marginBottom: '12px', border: '1px solid #f0f0f0' }}
+                          title={
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Text strong style={{ color: '#722ed1' }}>
+                                  {nodeData.node_name || nodeKey}
+                                </Text>
+                                <Tag color="purple" style={{ fontSize: '10px' }}>#{nodeData.execution_order || index + 1}</Tag>
+                              </div>
+                              {nodeData.completed_at && (
+                                <Text type="secondary" style={{ fontSize: '12px' }}>
+                                  {new Date(nodeData.completed_at).toLocaleString()}
+                                </Text>
+                              )}
+                            </div>
+                          }
+                        >
+                          {/* 显示输出结果 */}
+                          {nodeData.output_data && Object.keys(nodeData.output_data).length > 0 ? (
+                            <div>
+                              <div style={{ marginTop: '8px' }}>
+                                {(() => {
+                                  const outputData = nodeData.output_data;
+                                  
+                                  // 检查是否有嵌套的output_data结构
+                                  if (outputData.output_data) {
+                                    return (
+                                      <div>
+                                        {/* 显示具体的输出数据 */}
+                                        {outputData.output_data && (
+                                          <div style={{ marginTop: '8px' }}>
+                                            <Text strong style={{ color: '#52c41a' }}>输出数据:</Text>
+                                            <div style={{ marginTop: '4px', padding: '8px', background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: '4px' }}>
+                                              {typeof outputData.output_data === 'object' ? (
+                                                Object.entries(outputData.output_data).map(([key, value]: [string, any]) => (
+                                                  <div key={key} style={{ marginBottom: '4px' }}>
+                                                    <Text strong>{key}: </Text>
+                                                    <Text>{String(value)}</Text>
+                                                  </div>
+                                                ))
+                                              ) : (
+                                                <Text>{String(outputData.output_data)}</Text>
+                                              )}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  } else {
+                                    // 简单输出数据
+                                    return (
+                                      <Alert
+                                        message="📄 执行结果"
+                                        description={
+                                          <div style={{ maxHeight: '120px', overflow: 'auto' }}>
+                                            <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', fontSize: '11px', margin: 0, whiteSpace: 'pre-wrap' }}>
+                                              {JSON.stringify(outputData, null, 2)}
+                                            </pre>
+                                          </div>
+                                        }
+                                        type="info"
+                                        showIcon
+                                      />
+                                    );
+                                  }
+                                })()}
+                              </div>
+                            </div>
+                          ) : (
+                            <Alert
+                              message="⚠️ 该节点无输出数据"
+                              type="warning"
+                              showIcon={false}
+                              style={{ fontSize: '12px' }}
+                            />
+                          )}
+                          
+                          {/* 🆕 显示节点相关附件 */}
+                          {nodeData.attachments && nodeData.attachments.length > 0 && (
+                            <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #f0f0f0' }}>
+                              <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Text strong style={{ color: '#1890ff' }}>相关附件</Text>
+                                <Tag color="blue" style={{ fontSize: '10px' }}>
+                                  {nodeData.attachments.length} 个文件
+                                </Tag>
+                              </div>
+                              <List
+                                size="small"
+                                dataSource={nodeData.attachments}
+                                renderItem={(attachment: any) => (
+                                  <List.Item
+                                    style={{ padding: '4px 0', borderBottom: '1px solid #f5f5f5' }}
+                                    actions={[
+                                      <Button 
+                                        key="download"
+                                        type="link" 
+                                        size="small"
+                                        icon={<DownloadOutlined />}
+                                        style={{ fontSize: '10px' }}
+                                        onClick={() => handleFileDownload(attachment.file_id)}
+                                      >
+                                        下载
+                                      </Button>
+                                    ]}
+                                  >
+                                    <List.Item.Meta
+                                      avatar={<FileOutlined style={{ color: '#1890ff', fontSize: '12px' }} />}
+                                      title={
+                                        <div style={{ fontSize: '12px' }}>
+                                          <Text strong>{attachment.filename}</Text>
+                                          <Tag 
+                                            color={
+                                              attachment.association_type === 'node_binding' ? 'blue' : 
+                                              attachment.association_type === 'task_submission' ? 'green' : 'default'
+                                            } 
+                                            style={{ fontSize: '9px', marginLeft: '4px' }}
+                                          >
+                                            {attachment.association_type === 'node_binding' ? '节点绑定' : 
+                                             attachment.association_type === 'task_submission' ? '任务提交' : '其他'}
+                                          </Tag>
+                                        </div>
+                                      }
+                                      description={
+                                        <div style={{ fontSize: '10px', color: '#666' }}>
+                                          <div>大小: {(attachment.file_size / 1024).toFixed(1)} KB</div>
+                                          <div>类型: {attachment.content_type}</div>
+                                          {attachment.task_title && (
+                                            <div>任务: {attachment.task_title}</div>
+                                          )}
+                                          <div>时间: {new Date(attachment.created_at).toLocaleString()}</div>
+                                        </div>
+                                      }
+                                    />
+                                  </List.Item>
+                                )}
+                              />
+                            </div>
+                          )}
+                        </Card>
+                      ))}
+                    </Panel>
+                  )}
+
+                  {/* 🆕 上下文附件面板 */}
+                  {currentTask.context_data && currentTask.context_data.context_attachments && currentTask.context_data.context_attachments.length > 0 && (
+                    <Panel 
+                      header={
+                        <div>
+                          <Text strong>📎 上下文附件</Text>
+                          <Tag color="cyan" style={{ marginLeft: '8px' }}>
+                            {currentTask.context_data.context_attachments.length} 个文件
+                          </Tag>
+                        </div>
+                      } 
+                      key="context_attachments"
+                    >
+                      <Alert
+                        message="📎 工作流相关附件"
+                        description="此处显示与当前任务和工作流相关的所有附件文件，您可以下载查看。"
+                        type="info"
+                        showIcon
+                        style={{ marginBottom: '16px' }}
+                      />
+                      <List
+                        size="small"
+                        dataSource={currentTask.context_data.context_attachments}
+                        renderItem={(attachment: any) => (
+                          <List.Item
+                            actions={[
+                              <Button 
+                                key="download"
+                                type="link" 
+                                size="small"
+                                icon={<DownloadOutlined />}
+                                onClick={() => handleFileDownload(attachment.file_id)}
+                              >
+                                下载
+                              </Button>
+                            ]}
+                          >
+                            <List.Item.Meta
+                              avatar={<FileOutlined style={{ color: '#1890ff' }} />}
+                              title={
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <Text strong>{attachment.filename}</Text>
+                                  <Tag color={attachment.association_type === 'node' ? 'blue' : 'green'} style={{ fontSize: '10px' }}>
+                                    {attachment.association_type === 'node' ? '节点附件' : '工作流附件'}
+                                  </Tag>
+                                </div>
+                              }
+                              description={
+                                <div style={{ fontSize: '12px', color: '#666' }}>
+                                  <div>大小: {(attachment.file_size / 1024).toFixed(1)} KB</div>
+                                  <div>类型: {attachment.content_type}</div>
+                                  <div>创建时间: {new Date(attachment.created_at).toLocaleString()}</div>
+                                </div>
+                              }
+                            />
+                          </List.Item>
+                        )}
+                      />
+                    </Panel>
+                  )}
+                  
                   {/* 兼容旧的格式：支持context_data中的immediate_upstream_results */}
                   {currentTask.context_data && currentTask.context_data.immediate_upstream_results && Object.keys(currentTask.context_data.immediate_upstream_results).length > 0 && (
                     <Panel 
@@ -1695,25 +1968,6 @@ const Todo: React.FC = () => {
                                   if (outputData.output_data) {
                                     return (
                                       <div>
-                                        <Alert
-                                          message="✅ 处理器执行结果"
-                                          description={
-                                            <div>
-                                              <div style={{ marginBottom: '8px', fontWeight: 'bold', color: '#52c41a' }}>
-                                                {outputData.message || '任务完成'}
-                                              </div>
-                                              <div style={{ fontSize: '12px', color: '#666' }}>
-                                                任务类型: {outputData.task_type || 'unknown'}
-                                              </div>
-                                              <div style={{ fontSize: '12px', color: '#666' }}>
-                                                完成时间: {outputData.completed_at ? new Date(outputData.completed_at).toLocaleString() : '未知'}
-                                              </div>
-                                            </div>
-                                          }
-                                          type="success"
-                                          showIcon
-                                          style={{ marginBottom: '8px' }}
-                                        />
                                         {/* 显示具体的输出数据 */}
                                         {outputData.output_data && (
                                           <div style={{ marginTop: '8px' }}>
@@ -1743,18 +1997,62 @@ const Todo: React.FC = () => {
                                       </div>
                                     );
                                   } else {
-                                    // 简单输出数据
+                                    // 针对开始节点和其他简单输出数据的特殊处理
+                                    const isStartNode = outputData.node_type === 'START' || outputData.message === 'START节点自动完成';
+
                                     return (
-                                      <Alert
-                                        message="📄 执行结果"
-                                        description={
-                                          <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', maxHeight: '150px', overflow: 'auto', fontSize: '11px', margin: 0, whiteSpace: 'pre-wrap' }}>
+                                      <div>
+                                        {isStartNode ? (
+                                          // 开始节点特殊显示
+                                          <Alert
+                                            message="🚀 开始节点执行信息"
+                                            description={
+                                              <div>
+                                                <div style={{ marginBottom: '8px', fontWeight: 'bold', color: '#52c41a' }}>
+                                                  {outputData.message || 'START节点自动完成'}
+                                                </div>
+                                                {outputData.task_description && (
+                                                  <div style={{ marginBottom: '8px', padding: '8px', background: '#e6f7ff', border: '1px solid #91d5ff', borderRadius: '4px' }}>
+                                                    <Text strong style={{ color: '#1890ff' }}>📝 开始节点任务描述: </Text>
+                                                    <Text style={{ color: '#333' }}>{outputData.task_description}</Text>
+                                                  </div>
+                                                )}
+                                                <div style={{ fontSize: '12px', color: '#666' }}>
+                                                  节点类型: {outputData.node_type || 'START'}
+                                                </div>
+                                                <div style={{ fontSize: '12px', color: '#666' }}>
+                                                  完成时间: {outputData.completed_at ? new Date(outputData.completed_at).toLocaleString() : '未知'}
+                                                </div>
+                                              </div>
+                                            }
+                                            type="info"
+                                            showIcon
+                                            style={{ marginBottom: '8px' }}
+                                          />
+                                        ) : (
+                                          // 其他简单输出数据
+                                          <Alert
+                                            message="📄 执行结果"
+                                            description={
+                                              <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', maxHeight: '150px', overflow: 'auto', fontSize: '11px', margin: 0, whiteSpace: 'pre-wrap' }}>
+                                                {JSON.stringify(outputData, null, 2)}
+                                              </pre>
+                                            }
+                                            type="info"
+                                            showIcon
+                                          />
+                                        )}
+
+                                        {/* 详细数据展开 */}
+                                        <details style={{ marginTop: '8px' }}>
+                                          <summary style={{ cursor: 'pointer', color: '#1890ff', fontSize: '12px' }}>
+                                            🔍 查看完整数据结构
+                                          </summary>
+                                          <pre style={{ background: '#f5f5f5', padding: '8px', borderRadius: '4px', marginTop: '8px', maxHeight: '150px', overflow: 'auto', fontSize: '11px' }}>
                                             {JSON.stringify(outputData, null, 2)}
                                           </pre>
-                                        }
-                                        type="info"
-                                        showIcon
-                                      />
+                                        </details>
+                                      </div>
                                     );
                                   }
                                 })()}
@@ -1959,14 +2257,6 @@ const Todo: React.FC = () => {
           </Button>,
         ]}
       >
-        {(() => {
-          console.log('🎨 [UI渲染] 提交任务结果模态框渲染:');
-          console.log('   - submitModalVisible:', submitModalVisible);
-          console.log('   - currentTask:', currentTask?.task_instance_id);
-          console.log('   - subWorkflowsForSubmit初始状态:', subWorkflowsForSubmit);
-          console.log('   - loadingSubWorkflows:', loadingSubWorkflows);
-          return null;
-        })()}
         <div style={{ display: 'flex', gap: '16px' }}>
           {/* 左侧：任务结果表单 */}
           <div style={{ flex: 1 }}>
@@ -1990,9 +2280,23 @@ const Todo: React.FC = () => {
               </Form.Item>
               <Form.Item
                 name="attachments"
-                label="附件"
+                label="附件上传"
+                tooltip="您可以上传与任务完成相关的文件，如截图、文档等"
               >
-                <Input placeholder="附件链接（可选）" />
+                <NodeAttachmentManager 
+                  workflowId={currentTask?.workflow_instance_id}
+                  nodeId={currentTask?.node_instance_id}
+                  onChange={(fileIds) => {
+                    // 将文件ID存储到表单中
+                    submitForm.setFieldsValue({ attachment_file_ids: fileIds });
+                  }}
+                />
+              </Form.Item>
+              <Form.Item
+                name="attachment_file_ids"
+                style={{ display: 'none' }}
+              >
+                <Input />
               </Form.Item>
               <Form.Item
                 name="notes"
@@ -2011,56 +2315,10 @@ const Todo: React.FC = () => {
               <Text strong style={{ fontSize: '16px' }}>相关子工作流</Text>
               {loadingSubWorkflows && <Spin size="small" style={{ marginLeft: '8px' }} />}
             </div>
-            
-            {/* 添加详细的UI调试日志 */}
-            {(() => {
-              console.log('🎨 [UI渲染] 子工作流区域渲染检查:');
-              console.log('   - subWorkflowsForSubmit:', subWorkflowsForSubmit);
-              console.log('   - subWorkflowsForSubmit类型:', typeof subWorkflowsForSubmit);
-              console.log('   - subWorkflowsForSubmit.length:', subWorkflowsForSubmit?.length);
-              console.log('   - Array.isArray(subWorkflowsForSubmit):', Array.isArray(subWorkflowsForSubmit));
-              console.log('   - loadingSubWorkflows:', loadingSubWorkflows);
-              console.log('   - 显示条件 (length > 0):', subWorkflowsForSubmit?.length > 0);
-              
-              if (subWorkflowsForSubmit?.length > 0) {
-                console.log('   ✅ 应该显示子工作流列表');
-                console.log('   📋 子工作流预览:', subWorkflowsForSubmit.slice(0, 2).map((sub: any, idx: number) => ({
-                  index: idx,
-                  name: sub?.subdivision_name,
-                  id: sub?.subdivision_id,
-                  status: sub?.status,
-                  hasWorkflowDetails: !!sub?.workflowDetails
-                })));
-              } else {
-                console.log('   ❌ 将显示空状态消息');
-                console.log('   原因分析:');
-                if (subWorkflowsForSubmit === null || subWorkflowsForSubmit === undefined) {
-                  console.log('     - subWorkflowsForSubmit 是 null/undefined');
-                } else if (!Array.isArray(subWorkflowsForSubmit)) {
-                  console.log('     - subWorkflowsForSubmit 不是数组');
-                } else if (subWorkflowsForSubmit.length === 0) {
-                  console.log('     - subWorkflowsForSubmit 是空数组');
-                }
-              }
-              
-              return null; // 这个函数只用于日志，不返回UI元素
-            })()}
-            
+
             {subWorkflowsForSubmit.length > 0 ? (
               <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-                {(() => {
-                  console.log('🎨 [UI渲染] 开始渲染子工作流卡片列表:');
-                  console.log('   - 将渲染', subWorkflowsForSubmit.length, '个卡片');
-                  return null;
-                })()}
                 {subWorkflowsForSubmit.map((subWorkflow, index) => {
-                  console.log(`🎨 [UI渲染] 渲染卡片 ${index + 1}:`, {
-                    subdivision_name: subWorkflow?.subdivision_name,
-                    subdivision_id: subWorkflow?.subdivision_id,
-                    status: subWorkflow?.status,
-                    hasWorkflowDetails: !!subWorkflow?.workflowDetails,
-                    workflowDetailsKeys: subWorkflow?.workflowDetails ? Object.keys(subWorkflow.workflowDetails) : []
-                  });
                   
                   return (
                     <Card 
@@ -2083,12 +2341,7 @@ const Todo: React.FC = () => {
                         >
                           {(() => {
                             const actualStatus = subWorkflow.workflowDetails?.status || subWorkflow.status;
-                            console.log(`🎨 [UI渲染] 卡片状态显示: ${subWorkflow.subdivision_name}`, {
-                              subdivisionStatus: subWorkflow.status,
-                              workflowInstanceStatus: subWorkflow.workflowDetails?.status,
-                              actualStatusUsed: actualStatus
-                            });
-                            
+
                             return actualStatus === 'completed' ? '已完成' :
                                    actualStatus === 'failed' ? '失败' :
                                    actualStatus === 'running' ? '运行中' : '进行中';
@@ -2129,19 +2382,12 @@ const Todo: React.FC = () => {
                         <Text>
                           {(() => {
                             // 优先使用工作流实例的创建时间，否则使用细分创建时间
-                            const createTime = subWorkflow.workflowDetails?.created_at || 
-                                             subWorkflow.created_at || 
+                            const createTime = subWorkflow.workflowDetails?.created_at ||
+                                             subWorkflow.created_at ||
                                              subWorkflow.subdivision_created_at;
-                            
-                            console.log(`🎨 [UI渲染] 时间显示: ${subWorkflow.subdivision_name}`, {
-                              workflowInstanceCreatedAt: subWorkflow.workflowDetails?.created_at,
-                              subdivisionCreatedAt: subWorkflow.created_at,
-                              subdivisionCreatedAtAlt: subWorkflow.subdivision_created_at,
-                              finalTimeUsed: createTime
-                            });
-                            
+
                             if (!createTime) return '未知';
-                            
+
                             try {
                               return new Date(createTime).toLocaleString();
                             } catch (e) {
@@ -2183,18 +2429,6 @@ const Todo: React.FC = () => {
               </div>
             ) : (
               <div style={{ textAlign: 'center', padding: '20px', color: '#999' }}>
-                {(() => {
-                  console.log('🎨 [UI渲染] 显示空状态区域:');
-                  console.log('   - loadingSubWorkflows:', loadingSubWorkflows);
-                  console.log('   - subWorkflowsForSubmit:', subWorkflowsForSubmit);
-                  console.log('   - 空状态原因:', 
-                    loadingSubWorkflows ? '正在加载中' : 
-                    !subWorkflowsForSubmit ? 'subWorkflowsForSubmit为空' :
-                    !Array.isArray(subWorkflowsForSubmit) ? 'subWorkflowsForSubmit不是数组' :
-                    subWorkflowsForSubmit.length === 0 ? 'subWorkflowsForSubmit是空数组' : '未知原因'
-                  );
-                  return null;
-                })()}
                 {loadingSubWorkflows ? '加载中...' : (
                   <div>
                     <div>该任务没有相关的子工作流</div>

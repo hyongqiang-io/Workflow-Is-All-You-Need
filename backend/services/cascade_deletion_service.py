@@ -280,6 +280,82 @@ class CascadeDeletionService:
             logger.error(f"清空处理器引用失败: {e}")
             raise
 
+    async def fix_orphan_instances(self) -> Dict[str, Any]:
+        """修复孤儿实例 - 同步软删除引用已删除工作流的节点实例和任务实例"""
+        try:
+            logger.info(f"🔧 开始修复孤儿实例问题")
+
+            # 查找引用软删除工作流的活跃节点实例
+            orphan_nodes_query = """
+                SELECT COUNT(*) as count
+                FROM node_instance n
+                JOIN workflow_instance w ON n.workflow_instance_id = w.workflow_instance_id
+                WHERE w.is_deleted = TRUE AND n.is_deleted = FALSE
+            """
+            orphan_nodes_count = await self.node_instance_repo.db.fetch_one(orphan_nodes_query)
+            orphan_nodes = int(orphan_nodes_count['count'])
+
+            # 查找引用软删除工作流的活跃任务实例
+            orphan_tasks_query = """
+                SELECT COUNT(*) as count
+                FROM task_instance t
+                JOIN workflow_instance w ON t.workflow_instance_id = w.workflow_instance_id
+                WHERE w.is_deleted = TRUE AND t.is_deleted = FALSE
+            """
+            orphan_tasks_count = await self.task_instance_repo.db.fetch_one(orphan_tasks_query)
+            orphan_tasks = int(orphan_tasks_count['count'])
+
+            logger.info(f"   发现孤儿节点实例: {orphan_nodes} 个")
+            logger.info(f"   发现孤儿任务实例: {orphan_tasks} 个")
+
+            fixed_nodes = 0
+            fixed_tasks = 0
+
+            # 修复孤儿节点实例
+            if orphan_nodes > 0:
+                fix_nodes_query = """
+                    UPDATE node_instance n
+                    JOIN workflow_instance w ON n.workflow_instance_id = w.workflow_instance_id
+                    SET n.is_deleted = TRUE, n.updated_at = NOW()
+                    WHERE w.is_deleted = TRUE AND n.is_deleted = FALSE
+                """
+                await self.node_instance_repo.db.execute(fix_nodes_query)
+                fixed_nodes = orphan_nodes
+                logger.info(f"✅ 已修复孤儿节点实例: {fixed_nodes} 个")
+
+            # 修复孤儿任务实例
+            if orphan_tasks > 0:
+                fix_tasks_query = """
+                    UPDATE task_instance t
+                    JOIN workflow_instance w ON t.workflow_instance_id = w.workflow_instance_id
+                    SET t.is_deleted = TRUE, t.updated_at = NOW()
+                    WHERE w.is_deleted = TRUE AND t.is_deleted = FALSE
+                """
+                await self.task_instance_repo.db.execute(fix_tasks_query)
+                fixed_tasks = orphan_tasks
+                logger.info(f"✅ 已修复孤儿任务实例: {fixed_tasks} 个")
+
+            fix_result = {
+                'orphan_nodes_found': orphan_nodes,
+                'orphan_tasks_found': orphan_tasks,
+                'fixed_nodes': fixed_nodes,
+                'fixed_tasks': fixed_tasks,
+                'success': True
+            }
+
+            if fixed_nodes > 0 or fixed_tasks > 0:
+                logger.info(f"✅ 孤儿实例修复完成:")
+                logger.info(f"   - 修复的节点实例: {fixed_nodes} 个")
+                logger.info(f"   - 修复的任务实例: {fixed_tasks} 个")
+            else:
+                logger.info(f"✅ 未发现孤儿实例，数据状态正常")
+
+            return fix_result
+
+        except Exception as e:
+            logger.error(f"修复孤儿实例失败: {e}")
+            raise
+
 
 # 创建全局服务实例
 cascade_deletion_service = CascadeDeletionService()

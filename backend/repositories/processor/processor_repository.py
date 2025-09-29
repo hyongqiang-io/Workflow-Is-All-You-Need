@@ -398,3 +398,23 @@ class NodeProcessorRepository:
         except Exception as e:
             logger.error(f"获取节点处理器列表失败: {e}")
             raise
+    async def soft_delete_by_node(self, node_base_id: uuid.UUID) -> int:
+        """软删除指定节点的所有处理器绑定"""
+        try:
+            # 🔧 Linus式修复：清理指定节点的所有活跃处理器绑定，避免重复
+            query = """
+                UPDATE node_processor np
+                JOIN node n ON np.node_id = n.node_id
+                SET np.is_deleted = TRUE
+                WHERE n.node_base_id = $1 AND np.is_deleted = FALSE
+            """
+            result = await self.db.execute(query, node_base_id)
+
+            # 获取受影响的行数
+            affected_rows = getattr(result, 'rowcount', 0) if result else 0
+            logger.info(f"🔧 节点 {node_base_id} 的处理器绑定清理完成，影响 {affected_rows} 条记录")
+
+            return affected_rows
+        except Exception as e:
+            logger.error(f"软删除节点处理器绑定失败: {e}")
+            raise

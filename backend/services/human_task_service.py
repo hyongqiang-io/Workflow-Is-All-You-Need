@@ -114,6 +114,9 @@ class HumanTaskService:
             parsed_context_data = self._parse_context_data(task.get('context_data', ''))
             upstream_context = await self._get_upstream_context(task)
             
+            # 🆕 获取当前任务的附件
+            current_task_attachments = await self._get_current_task_attachments(task)
+            
             # 创建增强的任务描述（结合原始描述和上游上下文）
             enhanced_description = self._create_enhanced_description(
                 task.get('task_description', ''), 
@@ -159,6 +162,9 @@ class HumanTaskService:
                 'workflow_name': workflow_base.get('name', '') if workflow_base else '',
                 'node_name': node_info.get('node_name', '') if node_info else '',
                 'processor_name': processor_info.get('name', '') if processor_info else '',
+                
+                # 🆕 任务附件信息
+                'current_task_attachments': current_task_attachments,  # 当前任务的附件
             }
             
             logger.info(f"获取任务详情: {task_details['task_title']} (ID: {task_id})")
@@ -209,58 +215,64 @@ class HumanTaskService:
             return None
     
     async def _get_upstream_context(self, task: Dict[str, Any]) -> Dict[str, Any]:
-        """获取任务的上游上下文信息"""
+        """获取任务的上游上下文信息（支持全局上下文和附件）"""
         try:
             # 从context_data中获取上游数据（需要先解析JSON字符串）
             raw_context_data = task.get('context_data', '')
             context_data = self._parse_context_data(raw_context_data)
             logger.info(f"获取上游上下文 - context_data keys: {list(context_data.keys()) if isinstance(context_data, dict) else 'not dict'}")
             
-            # 获取上游节点输出数据（修复：处理列表格式的upstream_outputs）
+            # 🆕 支持新的全局上下文结构
+            immediate_upstream_results = context_data.get('immediate_upstream_results', {})
+            all_upstream_results = context_data.get('all_upstream_results', {})
+            
+            # 兼容旧格式：处理老的upstream_outputs字段
             upstream_outputs = context_data.get('upstream_outputs', [])
-            logger.info(f"upstream_outputs类型: {type(upstream_outputs)}, 数量: {len(upstream_outputs) if isinstance(upstream_outputs, (list, dict)) else 'unknown'}")
+            formatted_immediate_upstream = {}
             
-            # 获取工作流信息
-            workflow_info = context_data.get('workflow', {})
+            if upstream_outputs:
+                logger.info(f"🔄 [兼容模式] 处理旧格式upstream_outputs，共{len(upstream_outputs) if isinstance(upstream_outputs, (list, dict)) else 0}个节点")
+                
+                # 处理列表格式的upstream_outputs
+                if isinstance(upstream_outputs, list):
+                    for i, node_data in enumerate(upstream_outputs):
+                        if isinstance(node_data, dict):
+                            node_base_id = node_data.get('node_base_id', f'unknown_{i}')
+                            output_data = node_data.get('output_data', {})
+                            
+                            if output_data:  # 只有当节点有输出数据时才包含
+                                formatted_immediate_upstream[node_base_id] = {
+                                    'node_name': node_data.get('node_name', f'节点_{node_base_id[:8]}'),
+                                    'output_data': output_data,
+                                    'completed_at': node_data.get('completed_at', ''),
+                                    'status': node_data.get('status', ''),
+                                    'node_description': node_data.get('node_description', ''),
+                                    'source': node_data.get('source', 'unknown'),
+                                    'summary': self._extract_data_summary(output_data)
+                                }
+                                logger.info(f"找到上游节点数据: {node_base_id} - {node_data.get('node_name', '未知节点')}")
+                
+                # 兼容字典格式
+                elif isinstance(upstream_outputs, dict):
+                    for node_base_id, node_data in upstream_outputs.items():
+                        if isinstance(node_data, dict):
+                            output_data = node_data.get('output_data', {})
+                            if output_data:  # 只有当节点有输出数据时才包含
+                                formatted_immediate_upstream[node_base_id] = {
+                                    'node_name': node_data.get('node_name', f'节点_{node_base_id[:8]}'),
+                                    'output_data': output_data,
+                                    'completed_at': node_data.get('completed_at', ''),
+                                    'status': node_data.get('status', ''),
+                                    'summary': self._extract_data_summary(output_data)
+                                }
+            else:
+                # 🆕 使用新格式的immediate_upstream_results
+                formatted_immediate_upstream = immediate_upstream_results
+                logger.info(f"🆕 [新格式] 使用immediate_upstream_results，共{len(immediate_upstream_results)}个直接上游节点")
             
-            # 格式化上游数据以便前端展示
-            formatted_upstream = {}
-            
-            # 处理列表格式的upstream_outputs
-            if isinstance(upstream_outputs, list):
-                logger.info(f"处理列表格式的upstream_outputs，共{len(upstream_outputs)}个节点")
-                for i, node_data in enumerate(upstream_outputs):
-                    if isinstance(node_data, dict):
-                        node_base_id = node_data.get('node_base_id', f'unknown_{i}')
-                        output_data = node_data.get('output_data', {})
-                        
-                        if output_data:  # 只有当节点有输出数据时才包含
-                            formatted_upstream[node_base_id] = {
-                                'node_name': node_data.get('node_name', f'节点_{node_base_id[:8]}'),
-                                'output_data': output_data,
-                                'completed_at': node_data.get('completed_at', ''),
-                                'status': node_data.get('status', ''),
-                                'node_description': node_data.get('node_description', ''),
-                                'source': node_data.get('source', 'unknown'),
-                                'summary': self._extract_data_summary(output_data)
-                            }
-                            logger.info(f"找到上游节点数据: {node_base_id} - {node_data.get('node_name', '未知节点')} - 输出: {output_data}")
-            
-            # 兼容字典格式（如果有的话）
-            elif isinstance(upstream_outputs, dict):
-                logger.info(f"处理字典格式的upstream_outputs，共{len(upstream_outputs)}个节点")
-                for node_base_id, node_data in upstream_outputs.items():
-                    if isinstance(node_data, dict):
-                        output_data = node_data.get('output_data', {})
-                        if output_data:  # 只有当节点有输出数据时才包含
-                            formatted_upstream[node_base_id] = {
-                                'node_name': node_data.get('node_name', f'节点_{node_base_id[:8]}'),
-                                'output_data': output_data,
-                                'completed_at': node_data.get('completed_at', ''),
-                                'status': node_data.get('status', ''),
-                                'summary': self._extract_data_summary(output_data)
-                            }
-                            logger.info(f"找到上游节点数据: {node_base_id} - {node_data.get('node_name', '未知节点')}")
+            # 🆕 格式化全局上游结果
+            formatted_all_upstream = all_upstream_results
+            logger.info(f"🌐 [全局上下文] 全局上游节点数: {len(all_upstream_results)}")
             
             # 从input_data获取补充信息（处理文本格式）
             input_data_raw = task.get('input_data', '{}')
@@ -276,18 +288,26 @@ class HumanTaskService:
                 input_data = {}
                 
             workflow_global = input_data.get('workflow_global', {})
+            workflow_info = context_data.get('workflow', {})
+            
+            # 🆕 获取上下文中的附件信息
+            context_attachments = await self._get_context_attachments(task)
             
             result = {
-                'immediate_upstream_results': formatted_upstream,
-                'upstream_node_count': len(formatted_upstream),
+                'immediate_upstream_results': formatted_immediate_upstream,
+                'all_upstream_results': formatted_all_upstream,  # 🆕 全局上游结果
+                'upstream_node_count': len(formatted_immediate_upstream),
+                'all_upstream_node_count': len(formatted_all_upstream),  # 🆕 全局上游计数
                 'workflow_global_data': workflow_global,
                 'workflow_execution_path': workflow_global.get('execution_path', []),
                 'workflow_start_time': workflow_info.get('created_at', ''),
                 'workflow_name': workflow_info.get('name', ''),
-                'has_upstream_data': len(formatted_upstream) > 0
+                'has_upstream_data': len(formatted_immediate_upstream) > 0,
+                'has_global_upstream_data': len(formatted_all_upstream) > 0,  # 🆕 全局上游数据标识
+                'context_attachments': context_attachments  # 🆕 上下文附件
             }
             
-            logger.info(f"上游上下文结果: has_upstream_data={result['has_upstream_data']}, upstream_node_count={result['upstream_node_count']}")
+            logger.info(f"上游上下文结果: immediate={result['upstream_node_count']}, global={result['all_upstream_node_count']}, attachments={len(context_attachments)}")
             return result
             
         except Exception as e:
@@ -296,13 +316,115 @@ class HumanTaskService:
             logger.error(f"错误堆栈: {traceback.format_exc()}")
             return {
                 'immediate_upstream_results': {},
+                'all_upstream_results': {},
                 'upstream_node_count': 0,
+                'all_upstream_node_count': 0,
                 'workflow_global_data': {},
                 'workflow_execution_path': [],
                 'workflow_start_time': '',
                 'workflow_name': '',
-                'has_upstream_data': False
+                'has_upstream_data': False,
+                'has_global_upstream_data': False,
+                'context_attachments': []
             }
+    
+    async def _get_context_attachments(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """获取任务上下文中的附件信息"""
+        try:
+            context_attachments = []
+            
+            # 从任务的node_instance_id获取关联的附件
+            node_instance_id = task.get('node_instance_id')
+            workflow_instance_id = task.get('workflow_instance_id')
+            
+            if node_instance_id or workflow_instance_id:
+                from ..services.file_association_service import FileAssociationService
+                file_service = FileAssociationService()
+                
+                # 获取节点关联的附件
+                if node_instance_id:
+                    node_files = await file_service.get_node_instance_files(node_instance_id)
+                    for file_info in node_files:
+                        context_attachments.append({
+                            'file_id': file_info['file_id'],
+                            'filename': file_info['original_filename'],
+                            'file_size': file_info['file_size'],
+                            'content_type': file_info['content_type'],
+                            'created_at': file_info['created_at'],
+                            'association_type': 'node',
+                            'association_id': str(node_instance_id)
+                        })
+                
+                # 获取工作流关联的附件（暂时注释掉，因为FileAssociationService暂无此方法）
+                # if workflow_instance_id:
+                #     workflow_files = await file_service.get_files_by_association('workflow', str(workflow_instance_id))
+                #     for file_info in workflow_files:
+                #         context_attachments.append({
+                #             'file_id': file_info['file_id'],
+                #             'filename': file_info['original_filename'],
+                #             'file_size': file_info['file_size'],
+                #             'content_type': file_info['content_type'],
+                #             'created_at': file_info['created_at'],
+                #             'association_type': 'workflow',
+                #             'association_id': str(workflow_instance_id)
+                #         })
+                
+                logger.info(f"🔗 [附件收集] 为任务 {task.get('task_instance_id')} 收集了 {len(context_attachments)} 个上下文附件")
+            
+            return context_attachments
+            
+        except Exception as e:
+            logger.error(f"获取上下文附件失败: {e}")
+            return []
+    
+    async def _get_current_task_attachments(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """获取当前任务的附件信息"""
+        try:
+            current_task_attachments = []
+            
+            # 获取任务ID
+            task_id = task.get('task_instance_id')
+            node_instance_id = task.get('node_instance_id')
+            
+            if task_id or node_instance_id:
+                from ..services.file_association_service import FileAssociationService
+                file_service = FileAssociationService()
+                
+                # 获取直接与任务关联的附件
+                if task_id:
+                    task_files = await file_service.get_task_instance_files(task_id)
+                    for file_info in task_files:
+                        current_task_attachments.append({
+                            'file_id': file_info['file_id'],
+                            'filename': file_info['original_filename'],
+                            'file_size': file_info['file_size'],
+                            'content_type': file_info['content_type'],
+                            'created_at': file_info['created_at'],
+                            'association_type': 'task_direct',
+                            'association_id': str(task_id)
+                        })
+                
+                # 获取节点绑定的附件
+                if node_instance_id:
+                    node_files = await file_service.get_node_instance_files(node_instance_id)
+                    for file_info in node_files:
+                        current_task_attachments.append({
+                            'file_id': file_info['file_id'],
+                            'filename': file_info['original_filename'],
+                            'file_size': file_info['file_size'],
+                            'content_type': file_info['content_type'],
+                            'created_at': file_info['created_at'],
+                            'association_type': 'node_binding',
+                            'association_id': str(node_instance_id)
+                        })
+                
+                logger.info(f"🔗 [当前任务附件] 为任务 {task_id} 收集了 {len(current_task_attachments)} 个附件")
+            
+            return current_task_attachments
+            
+        except Exception as e:
+            logger.error(f"获取当前任务附件失败: {e}")
+            return []
     
     def _extract_data_summary(self, output_data: Dict[str, Any]) -> str:
         """从输出数据中提取摘要信息"""

@@ -545,6 +545,10 @@ class NodeService:
             if not node:
                 raise ValueError("节点不存在")
             
+            # 🔧 Linus式修复：先删除旧的处理器绑定，避免重复绑定
+            logger.info(f"🔧 为节点 {node_base_id} 分配处理器前，先清理旧绑定")
+            await self.node_processor_repository.soft_delete_by_node(node_base_id)
+
             # 创建节点处理器关联
             assignment_data = NodeProcessorCreate(
                 node_base_id=node_base_id,

@@ -251,6 +251,10 @@ class ExecutionEngine:
         start_nodes_count = 0
         created_tasks_count = 0
         
+        # 🔧 Linus式修复: 导入附件服务
+        from ..services.file_association_service import FileAssociationService
+        file_service = FileAssociationService()
+        
         for node in nodes:
             node_instance_id = uuid.uuid4()
             
@@ -270,6 +274,15 @@ class ExecutionEngine:
                 NodeInstanceStatus.PENDING.value, json.dumps({}), json.dumps({}),
                 None, 0, now_utc(), False
             )
+            
+            # 🔧 Critical Fix: 创建节点实例后立即继承附件
+            try:
+                await file_service.inherit_node_files_to_instance(
+                    node_id=uuid.UUID(node['node_id']), 
+                    node_instance_id=node_instance_id
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ 节点实例 {node_instance_id} 附件继承失败: {e}")
             
             node_instances.append({
                 'node_instance_id': node_instance_id,
@@ -404,36 +417,74 @@ class ExecutionEngine:
             workflow_base_id = workflow_result['workflow_base_id']
             logger.trace(f"工作流版本 {workflow_id} 对应的base_id: {workflow_base_id}")
             
-            # 查询当前版本的所有节点
+            # 查询当前版本的所有节点（避免笛卡尔积问题）
             query = """
-                SELECT 
-                    n.*,
-                    np.processor_id
+                SELECT n.*
                 FROM "node" n
-                LEFT JOIN node_processor np ON np.node_id = n.node_id
-                WHERE n.workflow_base_id = $1 
+                WHERE n.workflow_base_id = $1
                 AND n.is_current_version = TRUE
                 AND n.is_deleted = FALSE
                 ORDER BY n.created_at ASC
             """
             results = await self.node_repo.db.fetch_all(query, workflow_base_id)
             logger.trace(f"✅ 通过base_id {workflow_base_id} 获取当前版本节点 {len(results)} 个")
+
+            # 为每个节点单独查询处理器信息（避免重复节点记录）
+            nodes_with_processors = []
+            for node_result in results:
+                node_dict = dict(node_result)
+
+                # 查询该节点的处理器
+                processor_query = """
+                    SELECT processor_id FROM node_processor
+                    WHERE node_id = $1 AND is_deleted = FALSE
+                """
+                processors = await self.node_repo.db.fetch_all(processor_query, node_dict['node_id'])
+
+                # 如果有处理器，取第一个（保持兼容性）
+                if processors:
+                    node_dict['processor_id'] = processors[0]['processor_id']
+                else:
+                    node_dict['processor_id'] = None
+
+                nodes_with_processors.append(node_dict)
+
+            results = nodes_with_processors
             
             # 如果没有找到当前版本节点，尝试直接用workflow_id查询
             if not results:
                 logger.warning(f"通过base_id未找到节点，尝试直接查询workflow_id: {workflow_id}")
                 fallback_query = """
-                    SELECT 
-                        n.*,
-                        np.processor_id
+                    SELECT n.*
                     FROM "node" n
-                    LEFT JOIN node_processor np ON np.node_id = n.node_id
-                    WHERE n.workflow_id = $1 
+                    WHERE n.workflow_id = $1
                     AND n.is_deleted = FALSE
                     ORDER BY n.created_at ASC
                 """
-                results = await self.node_repo.db.fetch_all(fallback_query, workflow_id)
-                logger.trace(f"✅ 通过workflow_id {workflow_id} fallback查询获取到 {len(results)} 个节点")
+                fallback_results = await self.node_repo.db.fetch_all(fallback_query, workflow_id)
+                logger.trace(f"✅ 通过workflow_id {workflow_id} fallback查询获取到 {len(fallback_results)} 个节点")
+
+                # 为fallback结果也单独查询处理器信息
+                nodes_with_processors = []
+                for node_result in fallback_results:
+                    node_dict = dict(node_result)
+
+                    # 查询该节点的处理器
+                    processor_query = """
+                        SELECT processor_id FROM node_processor
+                        WHERE node_id = $1 AND is_deleted = FALSE
+                    """
+                    processors = await self.node_repo.db.fetch_all(processor_query, node_dict['node_id'])
+
+                    # 如果有处理器，取第一个（保持兼容性）
+                    if processors:
+                        node_dict['processor_id'] = processors[0]['processor_id']
+                    else:
+                        node_dict['processor_id'] = None
+
+                    nodes_with_processors.append(node_dict)
+
+                results = nodes_with_processors
             
             return results
         except Exception as e:
@@ -5000,6 +5051,40 @@ class ExecutionEngine:
             result = await self.task_instance_repo.create_task(task_data)
             if result:
                 logger.info(f"✅ [动态任务] 成功创建任务: {task_data.task_title}")
+                
+                # 🔧 Critical Fix: 创建任务后立即传递节点实例附件
+                try:
+                    from ..services.file_association_service import FileAssociationService, AttachmentType
+                    file_service = FileAssociationService()
+                    
+                    task_instance_id = result.get('task_instance_id')
+                    if task_instance_id:
+                        # 获取节点实例的所有附件
+                        node_files = await file_service.get_node_instance_files(node_instance_id)
+                        
+                        # 将每个附件关联到任务实例
+                        for file_info in node_files:
+                            file_id = file_info['file_id']
+                            attachment_type_str = file_info.get('attachment_type', 'input')
+                            
+                            # 转换字符串为AttachmentType枚举
+                            try:
+                                attachment_type = AttachmentType(attachment_type_str.upper())
+                            except ValueError:
+                                attachment_type = AttachmentType.INPUT
+                            
+                            await file_service.associate_task_instance_file(
+                                task_instance_id=uuid.UUID(task_instance_id),
+                                file_id=uuid.UUID(file_id),
+                                uploaded_by=uuid.UUID(assigned_user_id) if assigned_user_id else uuid.UUID('00000000-0000-0000-0000-000000000000'),
+                                attachment_type=attachment_type
+                            )
+                        
+                        logger.info(f"📎 [附件传递] 任务 {task_instance_id} 继承了 {len(node_files)} 个节点附件")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ 任务附件传递失败: {e}")
+                
                 if task_type == TaskInstanceType.HUMAN:
                     logger.info(f"🎯 [动态任务] 人工任务已分配给用户: {assigned_user_id}")
                 return result

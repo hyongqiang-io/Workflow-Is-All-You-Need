@@ -120,7 +120,7 @@ export class FileAPI {
   }
 
   /**
-   * 上传文件
+   * 上传单个文件 - File对象版本
    */
   static async uploadFile(
     file: File,
@@ -310,6 +310,84 @@ export class FileAPI {
     };
 
     return typeMap[contentType] || '未知文件类型';
+  }
+
+  /**
+   * 获取节点关联的文件
+   */
+  static async getNodeFiles(nodeId: string): Promise<any> {
+    try {
+      const response = await fileAPI.get(`/files/associations/node/${nodeId}`);
+      return response.data;
+    } catch (error) {
+      console.error('获取节点文件失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 批量关联文件到节点
+   */
+  static async associateFilesToNode(nodeId: string, data: {
+    file_ids: string[];
+    attachment_type: 'input' | 'output' | 'reference' | 'template'; // 修复：使用小写
+  }): Promise<any> {
+    try {
+      const response = await fileAPI.post(`/files/associations/node/${nodeId}`, data);
+      return response.data;
+    } catch (error) {
+      console.error('关联文件到节点失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 移除节点文件关联
+   */
+  static async removeNodeFileAssociation(nodeId: string, fileId: string): Promise<any> {
+    try {
+      const response = await fileAPI.delete(`/files/associations/node/${nodeId}/file/${fileId}`);
+      return response.data;
+    } catch (error) {
+      console.error('移除节点文件关联失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 上传文件 - FormData版本（用于NodeAttachmentManager）
+   */
+  static async uploadFileFormData(formData: FormData): Promise<any> {
+    try {
+      const response = await fileAPI.post('/files/upload', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      return response.data;
+    } catch (error) {
+      console.error('文件上传失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 获取用户文件 - 便捷方法
+   */
+  static async getUserFiles(page: number = 1, pageSize: number = 20): Promise<any> {
+    try {
+      const response = await this.getMyFiles({
+        page,
+        page_size: pageSize
+      });
+      return {
+        success: true,
+        data: response
+      };
+    } catch (error) {
+      console.error('获取用户文件失败:', error);
+      throw error;
+    }
   }
 }
 

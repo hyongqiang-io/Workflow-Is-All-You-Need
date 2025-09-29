@@ -21,9 +21,9 @@ api.interceptors.request.use(
       // 解析token获取用户信息
       try {
         const payload = JSON.parse(atob(token.split('.')[1]));
-        console.log('   - Token用户ID:', payload.sub);  // JWT标准使用sub字段
-        console.log('   - Token用户名:', payload.username);
-        console.log('   - Token过期时间:', new Date(payload.exp * 1000).toLocaleString());
+        // console.log('   - Token用户ID:', payload.sub);  // JWT标准使用sub字段
+        // console.log('   - Token用户名:', payload.username);
+        // console.log('   - Token过期时间:', new Date(payload.exp * 1000).toLocaleString());
       } catch (e) {
         console.warn('   - Token解析失败:', e);
       }
@@ -242,7 +242,7 @@ export const taskAPI = {
     api.post(`/execution/tasks/${taskId}/start`),
 
   // 提交任务结果
-  submitTaskResult: (taskId: string, data: { result_data: any; result_summary?: string }) =>
+  submitTaskResult: (taskId: string, data: { result_data: any; result_summary?: string; attachment_file_ids?: string[] }) =>
     api.post(`/execution/tasks/${taskId}/submit`, data),
 
   // 暂停任务
@@ -566,18 +566,18 @@ export const executionAPI = {
   getAgentTaskStatistics: (agentId?: string) =>
     api.get('/execution/agent-tasks/statistics', { params: { agent_id: agentId } }),
 
-  // 删除工作流实例 - 修复API路径
+  // 删除工作流实例 - 使用级联删除端点
   deleteWorkflowInstance: async (instanceId: string) => {
-    console.log('🔥 前端开始删除工作流实例:', instanceId);
-    console.log('🔥 请求URL:', `/execution/workflows/${instanceId}`);
-    console.log('🔥 完整URL:', `${api.defaults.baseURL}/execution/workflows/${instanceId}`);
-    
+    console.log('🔥 前端开始级联删除工作流实例:', instanceId);
+    console.log('🔥 请求URL:', `/execution/instances/${instanceId}/cascade`);
+    console.log('🔥 完整URL:', `${api.defaults.baseURL}/execution/instances/${instanceId}/cascade`);
+
     try {
-      const response = await api.delete(`/execution/workflows/${instanceId}`);
-      console.log('✅ 工作流实例删除请求成功:', response);
+      const response = await api.delete(`/execution/instances/${instanceId}/cascade`);
+      console.log('✅ 工作流实例级联删除请求成功:', response);
       return response;
     } catch (error: any) {
-      console.error('❌ 工作流实例删除请求失败:', error);
+      console.error('❌ 工作流实例级联删除请求失败:', error);
       if (error.response) {
         console.error('❌ 错误响应状态:', error.response.status);
         console.error('❌ 错误响应数据:', error.response.data);

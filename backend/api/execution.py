@@ -30,6 +30,7 @@ class TaskSubmissionRequest(BaseModel):
     """任务提交请求"""
     result_data: Optional[dict] = Field(default={}, description="任务结果数据")
     result_summary: Optional[str] = Field(None, description="结果摘要")
+    attachment_file_ids: Optional[List[str]] = Field(default=[], description="附件文件ID列表")
 
 
 class TaskActionRequest(BaseModel):
@@ -232,83 +233,60 @@ async def get_workflow_status(
     instance_id: uuid.UUID,
     current_user: CurrentUser = Depends(get_current_user_context)
 ):
-    """获取工作流实例的详细状态"""    
+    """获取工作流实例的详细状态"""
     try:
         from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
-        
+
         workflow_instance_repo = WorkflowInstanceRepository()
-        
-        # 查询工作流实例详细信息 (MySQL兼容版本)
-        query = """
-        SELECT 
+
+        # 步骤1: 获取工作流实例基本信息
+        workflow_query = """
+        SELECT
             wi.*,
             w.name as workflow_name,
-            u.username as executor_username,
-            -- 节点实例统计 (MySQL语法)
-            CASE 
-                WHEN COUNT(ni.node_instance_id) > 0 THEN
-                    JSON_ARRAYAGG(
-                        JSON_OBJECT(
-                            'node_instance_id', ni.node_instance_id,
-                            'node_name', n.name,
-                            'node_type', n.type,
-                            'status', ni.status,
-                            'started_at', ni.started_at,
-                            'completed_at', ni.completed_at,
-                            'error_message', ni.error_message,
-                            'input_data', ni.input_data,
-                            'output_data', ni.output_data,
-                            'retry_count', ni.retry_count
-                        )
-                    )
-                ELSE JSON_ARRAY()
-            END as node_instances
+            u.username as executor_username
         FROM workflow_instance wi
         LEFT JOIN workflow w ON wi.workflow_base_id = w.workflow_base_id AND w.is_current_version = 1
         LEFT JOIN user u ON wi.executor_id = u.user_id
-        LEFT JOIN node_instance ni ON wi.workflow_instance_id = ni.workflow_instance_id AND ni.is_deleted = 0
-        LEFT JOIN node n ON ni.node_id = n.node_id
         WHERE wi.workflow_instance_id = %s
         AND wi.is_deleted = 0
-        GROUP BY wi.workflow_instance_id, w.name, u.username
         """
-        
-        result = await workflow_instance_repo.db.fetch_one(query, instance_id)
-        
-        if not result:
+
+        workflow_result = await workflow_instance_repo.db.fetch_one(workflow_query, instance_id)
+
+        if not workflow_result:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="工作流实例不存在"
             )
-        
-        # 确保result是字典类型，并且处理node_instances
-        if not isinstance(result, dict):
-            logger.error(f"查询结果不是字典类型: {type(result)} - {result}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="查询结果格式错误"
-            )
-        
-        node_instances = result.get("node_instances") or []
-        
-        # 如果node_instances是None或字符串，尝试解析或设为空列表
-        if not isinstance(node_instances, list):
-            logger.warning(f"node_instances不是列表类型")
-            if isinstance(node_instances, str):
-                try:
-                    import json
-                    parsed_nodes = json.loads(node_instances)
-                    if isinstance(parsed_nodes, list):
-                        node_instances = parsed_nodes
-                        logger.info(f"成功解析node_instances字符串为列表，包含 {len(node_instances)} 个节点")
-                    else:
-                        node_instances = []
-                except json.JSONDecodeError as e:
-                    logger.error(f"解析node_instances JSON失败: {e}")
-                    node_instances = []
-            else:
-                node_instances = []
-        
+
+        # 步骤2: 获取节点实例信息
+        nodes_query = """
+        SELECT
+            ni.node_instance_id,
+            n.name as node_name,
+            n.type as node_type,
+            ni.status,
+            ni.started_at,
+            ni.completed_at,
+            ni.error_message,
+            ni.input_data,
+            ni.output_data,
+            ni.retry_count
+        FROM node_instance ni
+        LEFT JOIN node n ON ni.node_id = n.node_id
+        WHERE ni.workflow_instance_id = %s
+        AND ni.is_deleted = 0
+        ORDER BY ni.created_at ASC
+        """
+
+        node_results = await workflow_instance_repo.db.fetch_all(nodes_query, instance_id)
+
+        # 组装结果
+        result = dict(workflow_result)
+        node_instances = [dict(node) for node in node_results] if node_results else []
+        result['node_instances'] = node_instances
+
         # 统计节点状态
         total_nodes = len(node_instances)
         completed_nodes = sum(1 for node in node_instances if node.get('status') == 'completed')
@@ -344,11 +322,11 @@ async def get_workflow_status(
                 execution_engine = ExecutionEngine()
                 await execution_engine._check_workflow_completion(instance_id)
                 logger.info(f"✅ 主动触发的工作流状态检查完成")
-                
+
                 # 重新查询更新后的状态
-                updated_result = await workflow_instance_repo.db.fetch_one(query, instance_id)
+                updated_result = await workflow_instance_repo.db.fetch_one(workflow_query, instance_id)
                 if updated_result:
-                    result = updated_result
+                    result = dict(updated_result)
                     current_status = result.get("status")
                     logger.info(f"📊 工作流状态已更新为: {current_status}")
             except Exception as e:
@@ -1121,11 +1099,11 @@ async def get_task_details(
     task_id: uuid.UUID,
     current_user: CurrentUser = Depends(get_current_user_context)
 ):
-    """获取任务详情（使用ExecutionService优化版本）"""
+    """获取任务详情（使用ExecutionService优化版本，增强附件支持）"""
     try:
         logger.info(f"🔍 任务详情API: 获取任务 {task_id}")
         
-        # 直接使用ExecutionService的优化get_task_details方法
+        # 使用稳定的ExecutionService方法
         task_details = await execution_engine.get_task_details(task_id, current_user.user_id)
         
         if not task_details:
@@ -1134,28 +1112,55 @@ async def get_task_details(
                 detail="任务不存在"
             )
         
+        # 🔧 Linus式修复: 手动添加附件信息到ExecutionService返回的结果中
+        try:
+            from ..services.file_association_service import FileAssociationService
+            file_service = FileAssociationService()
+            
+            # 获取当前任务的附件
+            current_task_attachments = []
+            
+            # 1. 获取任务实例附件
+            task_files = await file_service.get_task_instance_files(task_id)
+            for file_info in task_files:
+                current_task_attachments.append({
+                    'file_id': file_info['file_id'],
+                    'filename': file_info['filename'],
+                    'original_filename': file_info['original_filename'],
+                    'file_size': file_info['file_size'],
+                    'content_type': file_info['content_type'],
+                    'attachment_type': file_info['attachment_type'],
+                    'source': 'task'
+                })
+            
+            # 2. 获取节点实例附件
+            node_instance_id = task_details.get('node_instance_id')
+            if node_instance_id:
+                node_files = await file_service.get_node_instance_files(uuid.UUID(node_instance_id))
+                for file_info in node_files:
+                    current_task_attachments.append({
+                        'file_id': file_info['file_id'],
+                        'filename': file_info['filename'],
+                        'original_filename': file_info['original_filename'],
+                        'file_size': file_info['file_size'],
+                        'content_type': file_info['content_type'],
+                        'attachment_type': file_info['attachment_type'],
+                        'source': 'node'
+                    })
+            
+            # 添加到返回结果中
+            task_details['current_task_attachments'] = current_task_attachments
+
+            logger.info(f"📎 [任务附件] 成功添加附件信息: {len(current_task_attachments)} 个文件")
+
+        except Exception as attachment_error:
+            logger.warning(f"⚠️ 获取任务附件失败: {attachment_error}")
+            task_details['current_task_attachments'] = []
+        
         logger.info(f"✅ 任务详情API: 成功获取任务详情")
         
         # 添加调试信息以帮助前端理解数据结构
         context_debug = {}
-        if 'context_data' in task_details and 'upstream_context' in task_details:
-            context_data = task_details.get('context_data', {})
-            upstream_ctx = task_details['upstream_context']
-            
-            # 显示正确的context_data信息给前端
-            context_debug = {
-                "context_data_type": type(context_data).__name__,
-                "context_data_keys": list(context_data.keys()) if isinstance(context_data, dict) else [],
-                "context_data_content_preview": str(context_data)[:500] + "..." if len(str(context_data)) > 500 else str(context_data),
-                "input_data_type": type(task_details.get('input_data', {})).__name__,
-                "input_data_keys": list(task_details.get('input_data', {}).keys()) if isinstance(task_details.get('input_data'), dict) else [],
-                "task_instance_id": str(task_details.get('task_instance_id', '')),
-                "node_instance_id": str(task_details.get('node_context', {}).get('node_instance_id', '')),
-                "workflow_instance_id": str(task_details.get('workflow_context', {}).get('workflow_instance_name', '')),
-                "has_upstream_data": upstream_ctx.get('has_upstream_data', False),
-                "upstream_node_count": upstream_ctx.get('upstream_node_count', 0),
-                "upstream_results_preview": str(upstream_ctx.get('immediate_upstream_results', {}))[:200] + "..." if len(str(upstream_ctx.get('immediate_upstream_results', {}))) > 200 else str(upstream_ctx.get('immediate_upstream_results', {}))
-            }
         
         # 将调试信息添加到返回数据中
         task_details['debug_info'] = context_debug
@@ -1198,7 +1203,7 @@ async def get_task_details(
                 # 不影响主要功能，继续返回
         
         task_details['subdivision_info'] = subdivision_info
-        
+
         return {
             "success": True,
             "data": task_details,
@@ -1323,12 +1328,28 @@ async def submit_task_result(
         
         # 确保 result_data 不为 None
         result_data = request.result_data if request.result_data is not None else {}
-        logger.info(f"  🔄 准备提交任务结果: result_data={result_data}")
+        attachment_file_ids = request.attachment_file_ids or []
+        logger.info(f"  🔄 准备提交任务结果: result_data={result_data}, attachments={len(attachment_file_ids)}个")
         
         result = await execution_engine.submit_human_task_result(
             task_id, current_user.user_id, 
             result_data, request.result_summary
         )
+        
+        # 🆕 处理附件关联
+        if attachment_file_ids:
+            try:
+                from ..services.file_association_service import FileAssociationService
+                file_service = FileAssociationService()
+                
+                for file_id in attachment_file_ids:
+                    await file_service.associate_task_instance_file(task_id, uuid.UUID(file_id), current_user.user_id)
+                    logger.info(f"  📎 附件关联成功: file_id={file_id} -> task_id={task_id}")
+                
+                logger.info(f"  ✅ 所有附件关联完成: {len(attachment_file_ids)}个文件")
+            except Exception as e:
+                logger.warning(f"  ⚠️ 附件关联失败: {e}")
+                # 不中断任务提交流程，只记录警告
         
         logger.info(f"  ✅ 任务提交成功: {result}")
         
@@ -3051,7 +3072,13 @@ async def delete_workflow_instance_cascade(
             )
         
         # 检查权限：只有工作流执行者可以删除实例
-        if existing_instance.get('executor_id') != current_user.user_id:
+        current_user_id_str = str(current_user.user_id)
+        executor_id_str = str(existing_instance.get('executor_id'))
+
+        if executor_id_str != current_user_id_str:
+            logger.warning(f"🚫 级联删除权限检查失败:")
+            logger.warning(f"   - 用户 {current_user_id_str} 无权删除实例 {workflow_instance_id}")
+            logger.warning(f"   - 只有执行者 {executor_id_str} 可以删除此实例")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="无权删除此工作流实例"

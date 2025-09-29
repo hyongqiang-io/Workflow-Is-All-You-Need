@@ -20,6 +20,7 @@ import { Card, Button, Modal, Form, Input, Select, Space, message, Tag, Tooltip,
 import { PlusOutlined, PlayCircleOutlined, SaveOutlined, DeleteOutlined, ReloadOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { nodeAPI, processorAPI, executionAPI } from '../services/api';
 import { validateWorkflow, canSaveWorkflow, type ValidationResult } from '../utils/workflowValidation';
+import NodeAttachmentManager from './NodeAttachmentManager';
 
 // 添加额外的样式来修复React Flow容器问题
 const reactFlowStyle = `
@@ -1512,6 +1513,18 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
                 </div>
               </Option> */}
             </Select>
+          </Form.Item>
+
+          {/* 节点附件管理 */}
+          <Form.Item
+            label="节点附件"
+            extra="为此节点添加输入文件、参考资料等附件"
+          >
+            <NodeAttachmentManager
+              nodeId={selectedNode?.data?.nodeId}
+              workflowId={workflowId}
+              readOnly={false}
+            />
           </Form.Item>
         </Form>
       </Modal>

@@ -289,6 +289,7 @@ class WorkflowExecutionContext:
                 logger.warning(f"⚠️ 节点实例 {node_instance_id} 没有依赖信息")
                 return {
                     'immediate_upstream_results': {},
+                    'all_upstream_results': {},
                     'workflow_global': {
                         'global_data': self.execution_context.get('global_data', {}),
                         'workflow_instance_id': str(self.workflow_instance_id),
@@ -296,15 +297,16 @@ class WorkflowExecutionContext:
                         'execution_path': self.execution_context.get('execution_path', [])
                     },
                     'upstream_node_count': 0,
+                    'all_upstream_node_count': 0,
                     'current_node': {}
                 }
             
             upstream_nodes = deps.get('upstream_nodes', [])
-            logger.debug(f"🔍 [上下文构建] 节点实例 {node_instance_id} 有 {len(upstream_nodes)} 个上游节点实例")
+            logger.debug(f"🔍 [上下文构建] 节点实例 {node_instance_id} 有 {len(upstream_nodes)} 个直接上游节点实例")
             
-            # 收集上游节点实例的输出数据
+            # 收集直接上游节点实例的输出数据
             immediate_upstream_results = {}
-            logger.debug(f"🔧 [上下文获取] 开始收集上游输出，上游节点数: {len(upstream_nodes)}")
+            logger.debug(f"🔧 [上下文获取] 开始收集直接上游输出，上游节点数: {len(upstream_nodes)}")
             logger.debug(f"🔧 [上下文获取] 上游节点实例IDs: {upstream_nodes}")
             logger.debug(f"🔧 [上下文获取] 可用输出数据键: {list(self.execution_context['node_outputs'].keys())}")
             
@@ -333,11 +335,16 @@ class WorkflowExecutionContext:
                     logger.warning(f"  ⚠️ 上游节点实例 {upstream_node_instance_id} 的输出数据不存在")
                     logger.debug(f"🔧 [上下文获取] ❌ 未找到 {upstream_node_instance_id} 的输出数据")
             
+            # 🆕 收集所有上游节点（全局上下文）
+            all_upstream_results = await self._collect_all_upstream_results(node_instance_id)
+            logger.debug(f"🌐 [全局上下文] 为节点实例 {node_instance_id} 收集了 {len(all_upstream_results)} 个全局上游结果")
+            
             # 当前节点信息
             current_node_name = await self._get_node_name_by_id(deps.get('node_id'))
             
             context_data = {
                 'immediate_upstream_results': immediate_upstream_results,
+                'all_upstream_results': all_upstream_results,  # 🆕 新增全局上游结果
                 'workflow_global': {
                     'global_data': self.execution_context.get('global_data', {}),
                     'workflow_instance_id': str(self.workflow_instance_id),
@@ -345,6 +352,7 @@ class WorkflowExecutionContext:
                     'execution_path': self.execution_context.get('execution_path', [])
                 },
                 'upstream_node_count': len(upstream_nodes),
+                'all_upstream_node_count': len(all_upstream_results),  # 🆕 新增全局上游计数
                 'current_node': {
                     'node_instance_id': str(node_instance_id),
                     'node_id': str(deps.get('node_id')),
@@ -353,7 +361,7 @@ class WorkflowExecutionContext:
                 }
             }
             
-            logger.debug(f"✅ [上下文构建] 为节点实例 {node_instance_id} 构建了包含 {len(immediate_upstream_results)} 个上游结果的上下文")
+            logger.debug(f"✅ [上下文构建] 为节点实例 {node_instance_id} 构建了包含 {len(immediate_upstream_results)} 个直接上游和 {len(all_upstream_results)} 个全局上游结果的上下文")
             return context_data
     
     async def _check_and_trigger_downstream_nodes(self, completed_node_instance_id: uuid.UUID) -> List[uuid.UUID]:
@@ -752,6 +760,123 @@ class WorkflowExecutionContext:
         except Exception as e:
             logger.error(f"获取节点名称失败: {e}")
             return None
+
+    async def _collect_all_upstream_results(self, node_instance_id: uuid.UUID) -> Dict[str, Any]:
+        """收集指定节点的所有上游节点结果（全局上下文）
+        
+        使用深度优先搜索收集从工作流开始到当前节点的所有已完成节点的输出数据和附件
+        """
+        all_upstream = {}
+        visited = set()
+        
+        async def dfs_collect(current_node_instance_id: uuid.UUID):
+            """深度优先搜索收集上游节点数据"""
+            if current_node_instance_id in visited:
+                return
+            
+            visited.add(current_node_instance_id)
+            deps = self.node_dependencies.get(current_node_instance_id)
+            
+            if not deps:
+                return
+            
+            # 递归收集上游节点的上游
+            for upstream_node_instance_id in deps.get('upstream_nodes', []):
+                await dfs_collect(upstream_node_instance_id)
+                
+                # 如果上游节点有输出数据，收集它
+                if upstream_node_instance_id in self.execution_context['node_outputs']:
+                    output_data = self.execution_context['node_outputs'][upstream_node_instance_id]
+                    
+                    # 获取节点名称
+                    upstream_deps = self.node_dependencies.get(upstream_node_instance_id)
+                    if upstream_deps:
+                        upstream_node_id = upstream_deps.get('node_id')
+                        node_name = await self._get_node_name_by_id(upstream_node_id) if upstream_node_id else None
+                    else:
+                        node_name = None
+                    
+                    # 🆕 收集节点相关的附件
+                    node_attachments = await self._get_node_attachments(upstream_node_instance_id)
+                    
+                    # 使用节点实例ID作为唯一键，避免同名节点冲突
+                    unique_key = f"{str(upstream_node_instance_id)[:8]}_{node_name or 'unknown'}"
+                    all_upstream[unique_key] = {
+                        'node_instance_id': str(upstream_node_instance_id),
+                        'node_id': str(upstream_deps.get('node_id')) if upstream_deps else None,
+                        'node_name': node_name or f'节点实例_{str(upstream_node_instance_id)[:8]}',
+                        'output_data': output_data,
+                        'status': 'completed',
+                        'completed_at': self.execution_context.get('node_completion_times', {}).get(str(upstream_node_instance_id)),
+                        'execution_order': len(all_upstream) + 1,  # 按发现顺序编号
+                        'attachments': node_attachments  # 🆕 节点相关附件
+                    }
+                    logger.debug(f"🌐 [全局收集] 添加上游节点: {unique_key} -> 输出:{len(str(output_data))}字符, 附件:{len(node_attachments)}个")
+        
+        # 从当前节点开始收集所有上游
+        await dfs_collect(node_instance_id)
+        
+        logger.debug(f"🌐 [全局收集完成] 为节点 {node_instance_id} 收集了 {len(all_upstream)} 个全局上游节点")
+        return all_upstream
+
+    async def _get_node_attachments(self, node_instance_id: uuid.UUID) -> List[Dict[str, Any]]:
+        """获取节点实例相关的所有附件（包括节点绑定附件和任务提交附件）"""
+        try:
+            attachments = []
+            
+            # 导入文件关联服务
+            from ..services.file_association_service import FileAssociationService
+            file_service = FileAssociationService()
+            
+            # 获取节点绑定的附件
+            try:
+                node_files = await file_service.get_node_instance_files(node_instance_id)
+                for file_info in node_files:
+                    attachments.append({
+                        'file_id': file_info['file_id'],
+                        'filename': file_info['original_filename'],
+                        'file_size': file_info['file_size'],
+                        'content_type': file_info['content_type'],
+                        'created_at': file_info['created_at'],
+                        'association_type': 'node_binding',
+                        'association_id': str(node_instance_id)
+                    })
+            except Exception as e:
+                logger.warning(f"获取节点 {node_instance_id} 绑定附件失败: {e}")
+            
+            # 🆕 获取该节点执行的任务提交的附件
+            try:
+                # 查询该节点实例对应的任务
+                from ..repositories.instance.task_instance_repository import TaskInstanceRepository
+                task_repo = TaskInstanceRepository()
+                
+                # 获取节点的任务
+                tasks = await task_repo.get_tasks_by_node_instance(node_instance_id)
+                for task in tasks:
+                    task_id = task.get('task_instance_id')
+                    if task_id:
+                        # 获取任务提交的附件
+                        task_files = await file_service.get_task_instance_files(task_id)
+                        for file_info in task_files:
+                            attachments.append({
+                                'file_id': file_info['file_id'],
+                                'filename': file_info['original_filename'],
+                                'file_size': file_info['file_size'],
+                                'content_type': file_info['content_type'],
+                                'created_at': file_info['created_at'],
+                                'association_type': 'task_submission',
+                                'association_id': str(task_id),
+                                'task_title': task.get('task_title', '未知任务')
+                            })
+            except Exception as e:
+                logger.warning(f"获取节点 {node_instance_id} 任务附件失败: {e}")
+            
+            logger.debug(f"🔗 [附件收集] 节点 {node_instance_id} 共收集到 {len(attachments)} 个附件")
+            return attachments
+            
+        except Exception as e:
+            logger.error(f"获取节点附件失败: {e}")
+            return []
     
     def cleanup(self):
         """清理上下文资源"""

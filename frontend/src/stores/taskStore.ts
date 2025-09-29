@@ -40,6 +40,16 @@ interface Task {
   actual_duration?: number;
   instructions?: string;
   task_type?: string;
+  // 新增附件字段
+  current_task_attachments?: Array<{
+    file_id: string;
+    filename: string;
+    original_filename: string;
+    file_size: number;
+    content_type: string;
+    attachment_type: string;
+    source: string;
+  }>;
 }
 
 interface TaskState {
@@ -52,7 +62,7 @@ interface TaskState {
   loadTasks: (status?: string) => Promise<void>;
   getTaskDetails: (taskId: string) => Promise<void>;
   startTask: (taskId: string) => Promise<void>;
-  submitTaskResult: (taskId: string, resultData: any, summary?: string) => Promise<void>;
+  submitTaskResult: (taskId: string, resultData: any, summary?: string, attachmentFileIds?: string[]) => Promise<void>;
   pauseTask: (taskId: string, reason?: string) => Promise<void>;
   requestHelp: (taskId: string, helpMessage: string) => Promise<void>;
   rejectTask: (taskId: string, reason: string) => Promise<void>;
@@ -132,41 +142,36 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   getTaskDetails: async (taskId: string) => {
     set({ loading: true, error: null });
     try {
-      console.log('🔍 TaskStore: 开始获取任务详情', taskId);
       const response: any = await taskAPI.getTaskDetails(taskId);
-      console.log('📡 TaskStore: API响应', response);
-      
+
       if (response.success && response.data) {
-        console.log('✅ TaskStore: 任务详情获取成功');
-        console.log('📊 TaskStore: context_data检查', response.data.context_data);
-        
         // 更新任务列表中对应的任务（如果存在）
         const currentTasks = get().tasks;
-        const updatedTasks = currentTasks.map(task => 
+        const updatedTasks = currentTasks.map(task =>
           task.task_instance_id === taskId ? { ...task, ...response.data } : task
         );
-        
-        set({ 
-          currentTask: response.data, 
+
+        set({
+          currentTask: response.data,
           tasks: updatedTasks,
-          loading: false 
+          loading: false
         });
       } else if (response && !response.success) {
-        console.error('❌ TaskStore: API返回错误', response.message);
-        set({ 
-          currentTask: null, 
+        console.error('TaskStore: API返回错误', response.message);
+        set({
+          currentTask: null,
           loading: false,
           error: response.message || '获取任务详情失败'
         });
       } else {
-        console.error('❌ TaskStore: 响应格式异常', response);
+        console.error('TaskStore: 响应格式异常', response);
         set({ currentTask: null, loading: false });
       }
     } catch (error: any) {
-      console.error('❌ TaskStore: 获取任务详情异常', error);
-      set({ 
-        error: error.response?.data?.detail || error.message || '获取任务详情失败', 
-        loading: false 
+      console.error('TaskStore: 获取任务详情异常', error);
+      set({
+        error: error.response?.data?.detail || error.message || '获取任务详情失败',
+        loading: false
       });
     }
   },
@@ -186,10 +191,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
-  submitTaskResult: async (taskId: string, resultData: any, summary?: string) => {
+  submitTaskResult: async (taskId: string, resultData: any, summary?: string, attachmentFileIds?: string[]) => {
     set({ loading: true, error: null });
     try {
-      await taskAPI.submitTaskResult(taskId, { result_data: resultData, result_summary: summary });
+      const submitData = { 
+        result_data: resultData, 
+        result_summary: summary,
+        attachment_file_ids: attachmentFileIds || []  // 🆕 添加附件ID支持
+      };
+      await taskAPI.submitTaskResult(taskId, submitData);
       // 清除草稿
       get().clearTaskDraft(taskId);
       // 重新加载任务列表

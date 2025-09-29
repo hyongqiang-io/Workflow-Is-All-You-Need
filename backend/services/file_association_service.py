@@ -266,15 +266,18 @@ class FileAssociationService:
                                  attachment_type: AttachmentType = AttachmentType.INPUT) -> bool:
         """关联节点和文件"""
         try:
+            # 生成UUID作为node_file_id - Linus式修复: 数据结构要求啥就给啥
+            node_file_id = str(uuid.uuid4())
+            
             # MySQL兼容的UPSERT语法
             query = """
-                INSERT INTO node_file (node_id, file_id, attachment_type)
-                VALUES ($1, $2, $3)
+                INSERT INTO node_file (node_file_id, node_id, file_id, attachment_type)
+                VALUES ($1, $2, $3, $4)
                 ON DUPLICATE KEY UPDATE
                 attachment_type = VALUES(attachment_type)
             """
             
-            await self.db.execute(query, node_id, file_id, attachment_type.value)
+            await self.db.execute(query, node_file_id, node_id, file_id, attachment_type.value)
             logger.info(f"节点文件关联成功: node={node_id}, file={file_id}")
             return True
             
@@ -311,6 +314,39 @@ class FileAssociationService:
             
         except Exception as e:
             logger.error(f"移除节点文件关联失败: {e}")
+            return False
+
+    async def inherit_node_files_to_instance(self, node_id: uuid.UUID, node_instance_id: uuid.UUID) -> bool:
+        """
+        将节点设计时的附件继承到节点实例
+        Critical: 在 node_instance 创建时必须调用此方法
+        """
+        try:
+            # 🔧 Linus式修复: 通过node_id找到node_base_id，然后继承附件
+            inherit_query = """
+                INSERT INTO node_instance_file (node_instance_file_id, node_instance_id, file_id, attachment_type)
+                SELECT UUID(), %s, nf.file_id, nf.attachment_type
+                FROM node_file nf
+                JOIN node n ON nf.node_id = n.node_base_id
+                WHERE n.node_id = %s
+            """
+            
+            result = await self.db.execute(inherit_query, node_instance_id, node_id)
+            
+            # 验证继承结果
+            count_query = """
+                SELECT COUNT(*) as inherited_count
+                FROM node_instance_file nif
+                WHERE nif.node_instance_id = %s
+            """
+            count_result = await self.db.fetch_one(count_query, node_instance_id)
+            inherited_count = count_result['inherited_count'] if count_result else 0
+            
+            logger.info(f"✅ [附件继承] 节点 {node_id} -> 实例 {node_instance_id}: 继承了 {inherited_count} 个附件")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ [附件继承] 节点附件继承失败: {e}")
             return False
     
     # ==================== 节点实例文件关联管理 ====================
@@ -365,15 +401,16 @@ class FileAssociationService:
                                          attachment_type: AttachmentType = AttachmentType.INPUT) -> bool:
         """关联任务实例和文件"""
         try:
-            # MySQL兼容的UPSERT语法
+            # 🔧 Linus式修复: 正确处理主键ID和MySQL语法
+            task_instance_file_id = str(uuid.uuid4())
+            
+            # MySQL兼容语法 - 修复参数占位符
             query = """
-                INSERT INTO task_instance_file (task_instance_id, file_id, uploaded_by, attachment_type)
-                VALUES ($1, $2, $3, $4)
-                ON DUPLICATE KEY UPDATE
-                uploaded_by = VALUES(uploaded_by)
+                INSERT IGNORE INTO task_instance_file (task_instance_file_id, task_instance_id, file_id, uploaded_by, attachment_type)
+                VALUES (%s, %s, %s, %s, %s)
             """
             
-            await self.db.execute(query, task_instance_id, file_id, uploaded_by, attachment_type.value)
+            await self.db.execute(query, task_instance_file_id, task_instance_id, file_id, uploaded_by, attachment_type.value)
             logger.info(f"任务实例文件关联成功: task_instance={task_instance_id}, file={file_id}")
             return True
             
@@ -426,7 +463,7 @@ class FileAssociationService:
                     success = await self.associate_node_instance_file(entity_id, file_id, attachment_type)
                 elif entity_type == "task_instance" and uploaded_by:
                     success = await self.associate_task_instance_file(entity_id, file_id, uploaded_by, attachment_type)
-                elif entity_type == user and uploaded_by:
+                elif entity_type == "user" and uploaded_by:
                     success = await self.associate_user_file(uploaded_by, file_id, AccessType.OWNER)
                 
                 if success:
@@ -440,7 +477,7 @@ class FileAssociationService:
         return FileBatchResponse(
             success_count=len(success_files),
             failed_count=len(failed_files),
-            success_files=success_files,
+            success_files=[str(file_id) for file_id in success_files],  # Linus式修复: 转换UUID为字符串
             failed_files=failed_files
         )
     

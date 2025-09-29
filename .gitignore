@@ -168,3 +168,5 @@ verify*
 *.docx
 
 setting.local.json
+
+uploads/

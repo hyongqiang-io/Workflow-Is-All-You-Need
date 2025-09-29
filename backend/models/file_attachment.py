@@ -222,7 +222,7 @@ class FileBatchResponse(BaseModel):
     """文件批量操作响应模型"""
     success_count: int = Field(0, description="成功数量")
     failed_count: int = Field(0, description="失败数量")
-    success_files: List[uuid.UUID] = Field(default_factory=list, description="成功的文件ID列表")
+    success_files: List[str] = Field(default_factory=list, description="成功的文件ID列表")  # Linus式修复: 使用字符串而非UUID
     failed_files: List[Dict[str, Any]] = Field(default_factory=list, description="失败的文件信息列表")
     message: str = "批量操作完成"
 

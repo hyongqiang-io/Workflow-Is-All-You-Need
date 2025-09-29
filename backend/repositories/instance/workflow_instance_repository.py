@@ -968,7 +968,7 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
             # 获取当前工作流状态用于快照
             workflow_instance = await self.get_instance_by_id(workflow_instance_id)
             if not workflow_instance:
-                logger.error(f"❌ [持久化] 工作流实例不存在: {workflow_instance_id}")
+                logger.debug(f"🗑️ [持久化] 工作流实例已删除，跳过快照保存: {workflow_instance_id}")
                 return None
             
             current_status = workflow_instance.get('status', 'unknown')
