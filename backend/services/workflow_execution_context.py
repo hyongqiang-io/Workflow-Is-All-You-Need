@@ -315,6 +315,58 @@ class WorkflowExecutionContext:
                 if upstream_node_instance_id in self.execution_context['node_outputs']:
                     output_data = self.execution_context['node_outputs'][upstream_node_instance_id]
                     logger.debug(f"🔧 [上下文获取] ✅ 找到输出数据: {len(str(output_data))}字符")
+
+                    # 🆕 获取上游任务的提交附件
+                    upstream_task_attachments = []
+                    try:
+                        logger.info(f"📎 [附件收集] 开始为上游节点 {upstream_node_instance_id} 收集任务附件")
+
+                        # 通过node_instance_id获取task_instance_id
+                        from ..repositories.instance.task_instance_repository import TaskInstanceRepository
+                        task_repo = TaskInstanceRepository()
+                        task_query = "SELECT task_instance_id FROM task_instance WHERE node_instance_id = %s AND is_deleted = FALSE"
+                        task_result = await task_repo.db.fetch_one(task_query, upstream_node_instance_id)
+
+                        logger.info(f"📎 [附件收集] 查询结果: {task_result}")
+
+                        if task_result:
+                            task_instance_id = task_result['task_instance_id']
+                            logger.info(f"📎 [附件收集] 找到上游任务: {task_instance_id}")
+
+                            # 获取任务提交的附件
+                            from ..services.file_association_service import FileAssociationService
+                            file_service = FileAssociationService()
+                            task_attachments = await file_service.get_task_instance_files(task_instance_id)
+
+                            logger.info(f"📎 [附件收集] 原始附件数据: {task_attachments}")
+
+                            # 格式化附件信息
+                            for attachment in task_attachments:
+                                upstream_task_attachments.append({
+                                    'file_id': str(attachment.get('file_id')),
+                                    'filename': attachment.get('filename', ''),
+                                    'original_filename': attachment.get('original_filename', ''),
+                                    'file_size': attachment.get('file_size', 0),
+                                    'content_type': attachment.get('content_type', ''),
+                                    'attachment_type': attachment.get('attachment_type', 'input'),
+                                    'source': 'task_submission'  # 标记来源为任务提交
+                                })
+
+                            logger.info(f"📎 [附件收集] 收集到 {len(upstream_task_attachments)} 个上游任务附件")
+                        else:
+                            logger.info(f"📎 [附件收集] 未找到上游节点 {upstream_node_instance_id} 对应的任务实例")
+
+                    except Exception as e:
+                        logger.warning(f"⚠️ 获取上游任务附件失败: {e}")
+                        import traceback
+                        logger.warning(f"⚠️ 错误堆栈: {traceback.format_exc()}")
+
+                    # 🆕 获取上游节点的完整附件信息（包括节点绑定和任务提交）
+                    upstream_node_attachments = await self._get_node_attachments(upstream_node_instance_id)
+                    logger.info(f"🔧 [immediate上下文] 节点 {upstream_node_instance_id} 获取到的完整附件: {len(upstream_node_attachments)} 个")
+                    for i, att in enumerate(upstream_node_attachments):
+                        logger.debug(f"   附件 #{i+1}: {att.get('filename')} (类型: {att.get('association_type')})")
+
                     # 通过upstream_node_instance_id获取对应的node_id来查询节点名称
                     upstream_deps = self.node_dependencies.get(upstream_node_instance_id)
                     if upstream_deps:
@@ -322,15 +374,18 @@ class WorkflowExecutionContext:
                         node_name = await self._get_node_name_by_id(upstream_node_id) if upstream_node_id else None
                     else:
                         node_name = None
-                    
+
                     upstream_key = node_name or f'节点实例_{str(upstream_node_instance_id)[:8]}'
                     immediate_upstream_results[upstream_key] = {
                         'node_instance_id': str(upstream_node_instance_id),
                         'node_name': node_name or f'节点实例_{str(upstream_node_instance_id)[:8]}',
                         'output_data': output_data,
+                        'task_attachments': upstream_task_attachments,  # 🆕 添加任务附件（向后兼容）
+                        'attachments': upstream_node_attachments,  # 🆕 添加完整的节点附件信息
                         'status': 'completed'
                     }
-                    logger.debug(f"  ✅ 添加上游输出: {upstream_key} -> {len(str(output_data))}字符")
+                    logger.info(f"  ✅ 添加上游输出: {upstream_key} -> {len(str(output_data))}字符, {len(upstream_task_attachments)}个任务附件, {len(upstream_node_attachments)}个总附件")
+                    logger.info(f"🔧 [immediate上下文] 最终存储到immediate_upstream_results的附件数量: {len(immediate_upstream_results[upstream_key]['attachments'])}")
                 else:
                     logger.warning(f"  ⚠️ 上游节点实例 {upstream_node_instance_id} 的输出数据不存在")
                     logger.debug(f"🔧 [上下文获取] ❌ 未找到 {upstream_node_instance_id} 的输出数据")
@@ -798,7 +853,10 @@ class WorkflowExecutionContext:
                     
                     # 🆕 收集节点相关的附件
                     node_attachments = await self._get_node_attachments(upstream_node_instance_id)
-                    
+                    logger.info(f"🌐 [全局收集调试] 节点 {upstream_node_instance_id} 收集到 {len(node_attachments)} 个附件")
+                    for i, att in enumerate(node_attachments):
+                        logger.debug(f"   全局附件 #{i+1}: {att.get('filename')} (类型: {att.get('association_type')})")
+
                     # 使用节点实例ID作为唯一键，避免同名节点冲突
                     unique_key = f"{str(upstream_node_instance_id)[:8]}_{node_name or 'unknown'}"
                     all_upstream[unique_key] = {
@@ -811,6 +869,7 @@ class WorkflowExecutionContext:
                         'execution_order': len(all_upstream) + 1,  # 按发现顺序编号
                         'attachments': node_attachments  # 🆕 节点相关附件
                     }
+                    logger.info(f"🌐 [全局收集调试] 存储到all_upstream[{unique_key}]的附件数量: {len(all_upstream[unique_key]['attachments'])}")
                     logger.debug(f"🌐 [全局收集] 添加上游节点: {unique_key} -> 输出:{len(str(output_data))}字符, 附件:{len(node_attachments)}个")
         
         # 从当前节点开始收集所有上游
@@ -823,15 +882,17 @@ class WorkflowExecutionContext:
         """获取节点实例相关的所有附件（包括节点绑定附件和任务提交附件）"""
         try:
             attachments = []
-            
+            logger.info(f"🔗 [节点附件收集] 开始为节点 {node_instance_id} 收集所有附件")
+
             # 导入文件关联服务
             from ..services.file_association_service import FileAssociationService
             file_service = FileAssociationService()
-            
+
             # 获取节点绑定的附件
             try:
                 node_files = await file_service.get_node_instance_files(node_instance_id)
-                for file_info in node_files:
+                logger.info(f"🔗 [节点附件收集] 获取到 {len(node_files)} 个节点绑定附件")
+                for i, file_info in enumerate(node_files):
                     attachments.append({
                         'file_id': file_info['file_id'],
                         'filename': file_info['original_filename'],
@@ -841,23 +902,29 @@ class WorkflowExecutionContext:
                         'association_type': 'node_binding',
                         'association_id': str(node_instance_id)
                     })
+                    logger.debug(f"   - 节点绑定附件 #{i+1}: {file_info['original_filename']}")
             except Exception as e:
                 logger.warning(f"获取节点 {node_instance_id} 绑定附件失败: {e}")
-            
+
             # 🆕 获取该节点执行的任务提交的附件
             try:
                 # 查询该节点实例对应的任务
                 from ..repositories.instance.task_instance_repository import TaskInstanceRepository
                 task_repo = TaskInstanceRepository()
-                
+
                 # 获取节点的任务
                 tasks = await task_repo.get_tasks_by_node_instance(node_instance_id)
-                for task in tasks:
+                logger.info(f"🔗 [节点附件收集] 该节点有 {len(tasks)} 个任务")
+
+                for task_idx, task in enumerate(tasks):
                     task_id = task.get('task_instance_id')
                     if task_id:
+                        logger.info(f"🔗 [节点附件收集] 检查任务 #{task_idx+1}: {task_id}")
                         # 获取任务提交的附件
                         task_files = await file_service.get_task_instance_files(task_id)
-                        for file_info in task_files:
+                        logger.info(f"🔗 [节点附件收集] 任务 {task_id} 有 {len(task_files)} 个提交附件")
+
+                        for file_idx, file_info in enumerate(task_files):
                             attachments.append({
                                 'file_id': file_info['file_id'],
                                 'filename': file_info['original_filename'],
@@ -868,12 +935,15 @@ class WorkflowExecutionContext:
                                 'association_id': str(task_id),
                                 'task_title': task.get('task_title', '未知任务')
                             })
+                            logger.debug(f"   - 任务提交附件 #{file_idx+1}: {file_info['original_filename']} (来自任务: {task.get('task_title', '未知任务')})")
             except Exception as e:
                 logger.warning(f"获取节点 {node_instance_id} 任务附件失败: {e}")
-            
-            logger.debug(f"🔗 [附件收集] 节点 {node_instance_id} 共收集到 {len(attachments)} 个附件")
+                import traceback
+                logger.warning(f"详细错误: {traceback.format_exc()}")
+
+            logger.info(f"🔗 [节点附件收集] 节点 {node_instance_id} 共收集到 {len(attachments)} 个附件")
             return attachments
-            
+
         except Exception as e:
             logger.error(f"获取节点附件失败: {e}")
             return []

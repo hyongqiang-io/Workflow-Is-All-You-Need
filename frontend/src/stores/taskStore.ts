@@ -33,7 +33,32 @@ interface Task {
       output_data: any;
       completed_at?: string;
     }>;
+    // 🆕 添加全局上游结果支持
+    all_upstream_results?: {
+      [nodeKey: string]: {
+        node_instance_id: string;
+        node_id?: string;
+        node_name: string;
+        output_data: any;
+        status: string;
+        completed_at?: string;
+        execution_order?: number;
+        attachments?: Array<{
+          file_id: string;
+          filename: string;
+          file_size: number;
+          content_type: string;
+          association_type: string;
+          association_id?: string;
+          task_title?: string;
+          created_at?: string;
+          [key: string]: any;
+        }>;
+        [key: string]: any;
+      };
+    };
     context_generated_at?: string;
+    [key: string]: any; // 允许其他动态字段
   };
   result_summary?: string;
   estimated_duration?: number;
@@ -50,6 +75,63 @@ interface Task {
     attachment_type: string;
     source: string;
   }>;
+  // 🆕 添加上游上下文字段
+  upstream_context?: {
+    immediate_upstream_results?: {
+      [nodeKey: string]: {
+        node_instance_id: string;
+        node_name: string;
+        output_data: any;
+        attachments?: Array<{
+          file_id: string;
+          filename: string;
+          association_type: string;
+          file_size: number;
+          content_type: string;
+          created_at?: string;
+          [key: string]: any;
+        }>;
+        task_attachments?: Array<{
+          file_id: string;
+          filename: string;
+          file_size: number;
+          content_type: string;
+          association_type: string;
+          source: string;
+          [key: string]: any;
+        }>;
+        [key: string]: any;
+      };
+    };
+    // 🆕 添加全局上游结果支持
+    all_upstream_results?: {
+      [nodeKey: string]: {
+        node_instance_id: string;
+        node_id?: string;
+        node_name: string;
+        output_data: any;
+        status: string;
+        completed_at?: string;
+        execution_order?: number;
+        attachments?: Array<{
+          file_id: string;
+          filename: string;
+          file_size: number;
+          content_type: string;
+          association_type: string;
+          association_id?: string;
+          task_title?: string;
+          created_at?: string;
+          [key: string]: any;
+        }>;
+        [key: string]: any;
+      };
+    };
+    workflow_global?: any;
+    upstream_node_count?: number;
+    all_upstream_node_count?: number;
+    [key: string]: any;
+  };
 }
 
 interface TaskState {

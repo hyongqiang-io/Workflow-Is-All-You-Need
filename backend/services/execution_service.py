@@ -4185,12 +4185,24 @@ class ExecutionEngine:
             # 🔍 添加调试日志
             logger.info(f"🔍 [任务详情调试] 上游上下文数据:")
             logger.info(f"   - 上游上下文键: {list(upstream_context.keys()) if upstream_context else '无数据'}")
+
+            # 🆕 提取所有上游任务提交的附件到任务顶级字段
+            task_attachments = []
             if upstream_context:
                 immediate_results = upstream_context.get('immediate_upstream_results', {})
                 logger.info(f"   - immediate_upstream_results键: {list(immediate_results.keys())}")
                 for node_name, node_data in immediate_results.items():
                     logger.info(f"   - 节点 {node_name} 的output_data: {node_data.get('output_data', {})}")
-            
+                    # 提取上游任务附件
+                    upstream_task_attachments = node_data.get('task_attachments', [])
+                    if upstream_task_attachments:
+                        task_attachments.extend(upstream_task_attachments)
+                        logger.info(f"   - 节点 {node_name} 贡献 {len(upstream_task_attachments)} 个任务附件")
+
+            # 将合并的附件添加到任务数据中
+            task['task_attachments'] = task_attachments
+            logger.info(f"📎 [附件合并] 共收集到 {len(task_attachments)} 个上游任务附件")
+
             # 丰富任务信息
             task = await self._enrich_task_info(task)
             
