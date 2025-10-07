@@ -325,7 +325,7 @@ class AgentTaskService:
             
             # 构建用户消息（作为任务输入）
             logger.trace(f"✉️ [AGENT-PROCESS] 构建用户消息")
-            user_message = self._build_user_message(task, context_info)
+            user_message = await self._build_user_message(task, context_info)
             logger.trace(f"   - 用户消息长度: {len(user_message)} 字符")
             logger.trace(f"   - 用户消息预览: {user_message[:200]}...")
         
@@ -1093,16 +1093,16 @@ class AgentTaskService:
         except:
             return "数据"
     
-    def _build_user_message(self, task: Dict[str, Any], context_info: str) -> str:
-        """构建用户消息（包含任务标题和上游节点信息）"""
+    async def _build_user_message(self, task: Dict[str, Any], context_info: str) -> str:
+        """构建用户消息（包含任务标题、上游节点信息和附件内容）"""
         try:
             message_parts = []
-            
+
             # 任务标题
             logger.trace(f"上下文信息: {context_info}")
             task_title = task.get('task_title', '未命名任务')
             message_parts.append(f"任务：{task_title}")
-            
+
             # 添加上下文信息（上游节点信息）
             # 检查是否有有效的上下文信息
             invalid_context_messages = [
@@ -1110,14 +1110,14 @@ class AgentTaskService:
                 "上下文信息处理失败，请基于任务描述进行处理。",
                 "上下文信息格式错误，请基于任务描述进行处理。"
             ]
-            
+
             logger.debug(f"🔍 [消息构建] 检查上下文信息有效性...")
             logger.debug(f"  - context_info存在: {bool(context_info)}")
             logger.debug(f"  - context_info长度: {len(context_info) if context_info else 0}")
             logger.debug(f"  - context_info内容: '{context_info}'")
             logger.debug(f"  - context_info.strip(): '{context_info.strip() if context_info else ''}'")
             logger.debug(f"  - 是否在无效消息列表中: {context_info.strip() in invalid_context_messages if context_info else False}")
-            
+
             if context_info and context_info.strip() and context_info.strip() not in invalid_context_messages:
                 message_parts.append("\n上下文信息：")
                 message_parts.append(context_info)
@@ -1125,7 +1125,27 @@ class AgentTaskService:
             else:
                 message_parts.append("\n当前没有上游节点数据。")
                 logger.warning(f"⚠️ [消息构建] 上下文信息无效或为空: '{context_info}'")
-            
+
+            # 🆕 处理任务附件内容
+            try:
+                task_id = task.get('task_instance_id')
+                if task_id:
+                    logger.debug(f"📎 [附件处理] 开始处理任务附件, task_id: {task_id}")
+                    attachments_content = await self._process_task_attachments(uuid.UUID(task_id))
+
+                    if attachments_content:
+                        message_parts.append("\n附件内容：")
+                        message_parts.append(attachments_content)
+                        logger.debug(f"✅ [附件处理] 成功添加附件内容，长度: {len(attachments_content)}")
+                    else:
+                        logger.debug(f"ℹ️ [附件处理] 当前任务无附件")
+                else:
+                    logger.debug(f"⚠️ [附件处理] 任务缺少task_instance_id，跳过附件处理")
+            except Exception as e:
+                logger.error(f"❌ [附件处理] 处理附件时出错: {e}")
+                # 附件处理失败不应该影响主流程
+                pass
+
             return "\n".join(message_parts)
             
         except Exception as e:
@@ -1275,6 +1295,38 @@ class AgentTaskService:
                 'error': f'工具调用处理失败: {str(e)}'
             }
 
+    async def _process_task_attachments(self, task_id: uuid.UUID) -> str:
+        """
+        处理任务附件，提取内容并整合为AI可理解的文本
+        使用支持节点级别附件传递的提取器
+
+        Args:
+            task_id: 任务实例ID
+
+        Returns:
+            整合后的附件内容文本，如果没有附件则返回空字符串
+        """
+        try:
+            from .file_content_extractor import FileContentExtractor
+
+            logger.debug(f"📎 [附件处理] 开始处理任务附件: {task_id}")
+
+            # 使用支持节点级别附件传递的提取器
+            extractor = FileContentExtractor()
+            attachments_content = await extractor.extract_task_attachments(task_id)
+
+            if attachments_content:
+                logger.debug(f"✅ [附件处理] 成功提取附件内容，长度: {len(attachments_content)} 字符")
+                return attachments_content
+            else:
+                logger.debug(f"📎 [附件处理] 任务 {task_id} 没有附件内容")
+                return ""
+
+        except Exception as e:
+            logger.error(f"❌ [附件处理] 处理附件失败: {e}")
+            import traceback
+            logger.error(f"   错误堆栈: {traceback.format_exc()}")
+            return f"附件处理失败: {str(e)}"
 
 # 全局Agent任务服务实例
 agent_task_service = AgentTaskService()

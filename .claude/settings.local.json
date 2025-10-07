@@ -11,7 +11,10 @@
       "Bash(sed:*)",
       "Bash(find:*)",
       "Bash(grep:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "mcp__grep__searchGitHub",
+      "Bash(npx:*)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": [],

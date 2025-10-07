@@ -1079,27 +1079,6 @@ const TaskFlowViewer: React.FC<TaskFlowViewerProps> = ({
               </Descriptions.Item>
             )}
             
-            {/* 输入数据 */}
-            {selectedTask.input_data && (
-              <Descriptions.Item label="输入数据">
-                <div style={{
-                  maxHeight: '200px',
-                  overflowY: 'auto',
-                  border: '1px solid #d9d9d9',
-                  borderRadius: '4px',
-                  padding: '8px',
-                  backgroundColor: '#f5f5f5',
-                  fontFamily: 'monospace',
-                  fontSize: '12px',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word'
-                }}>
-                  {typeof selectedTask.input_data === 'string' 
-                    ? selectedTask.input_data 
-                    : JSON.stringify(selectedTask.input_data, null, 2)}
-                </div>
-              </Descriptions.Item>
-            )}
             
             {/* 输出数据 */}
             {selectedTask.output_data && (

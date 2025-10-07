@@ -522,35 +522,39 @@ async def get_workflow_task_flow(
                 detail="工作流实例不存在"
             )
         
-        # 获取工作流实例的所有节点实例（包含处理器详细信息和位置信息）
+        # 获取工作流实例的所有节点实例（修复：避免JOIN导致重复）
         nodes_query = """
-        SELECT 
+        SELECT
             ni.*,
             n.name as node_name,
             n.type as node_type,
             n.position_x,
             n.position_y,
-            -- 处理器信息（通过node_processor关联表）
-            p.name as processor_name,
-            p.type as processor_type,
+            -- 🔧 Linus式修复：使用子查询获取第一个处理器，避免重复行
+            (SELECT p.name FROM node_processor np
+             JOIN processor p ON np.processor_id = p.processor_id
+             WHERE np.node_id = n.node_id AND np.is_deleted = 0
+             LIMIT 1) as processor_name,
+            (SELECT p.type FROM node_processor np
+             JOIN processor p ON np.processor_id = p.processor_id
+             WHERE np.node_id = n.node_id AND np.is_deleted = 0
+             LIMIT 1) as processor_type,
             -- 计算节点执行时间 (MySQL兼容)
-            CASE 
-                WHEN ni.started_at IS NOT NULL AND ni.completed_at IS NOT NULL 
+            CASE
+                WHEN ni.started_at IS NOT NULL AND ni.completed_at IS NOT NULL
                 THEN CAST(TIMESTAMPDIFF(SECOND, ni.started_at, ni.completed_at) AS SIGNED)
-                WHEN ni.started_at IS NOT NULL 
+                WHEN ni.started_at IS NOT NULL
                 THEN CAST(TIMESTAMPDIFF(SECOND, ni.started_at, NOW()) AS SIGNED)
                 ELSE NULL
             END as execution_duration_seconds
         FROM node_instance ni
         JOIN node n ON ni.node_id = n.node_id
-        LEFT JOIN node_processor np ON n.node_id = np.node_id
-        LEFT JOIN processor p ON np.processor_id = p.processor_id
         WHERE ni.workflow_instance_id = $1
         AND ni.is_deleted = 0
-        ORDER BY 
-            CASE 
-                WHEN ni.started_at IS NOT NULL THEN ni.started_at 
-                ELSE ni.created_at 
+        ORDER BY
+            CASE
+                WHEN ni.started_at IS NOT NULL THEN ni.started_at
+                ELSE ni.created_at
             END ASC
         """
         
@@ -646,8 +650,48 @@ async def get_workflow_task_flow(
         
         # 格式化节点数据（包含实时状态、执行信息、处理器信息和位置信息）
         for node in nodes:
+            node_instance_id = str(node['node_instance_id'])
+
+            # 🆕 获取节点相关的附件信息
+            node_attachments = []
+            try:
+                from ..services.file_association_service import FileAssociationService
+                file_service = FileAssociationService()
+
+                # 获取节点绑定的附件
+                node_files = await file_service.get_node_instance_files(uuid.UUID(node_instance_id))
+                for file_info in node_files:
+                    node_attachments.append({
+                        'file_id': file_info['file_id'],
+                        'filename': file_info['original_filename'],
+                        'file_size': file_info['file_size'],
+                        'content_type': file_info['content_type'],
+                        'created_at': file_info['created_at'],
+                        'association_type': 'node_binding',
+                        'association_id': node_instance_id
+                    })
+
+                # 获取该节点的所有任务提交的附件
+                node_tasks = [task for task in tasks if str(task['node_instance_id']) == node_instance_id]
+                for task in node_tasks:
+                    task_files = await file_service.get_task_instance_files(uuid.UUID(str(task['task_instance_id'])))
+                    for file_info in task_files:
+                        node_attachments.append({
+                            'file_id': file_info['file_id'],
+                            'filename': file_info['original_filename'],
+                            'file_size': file_info['file_size'],
+                            'content_type': file_info['content_type'],
+                            'created_at': file_info['created_at'],
+                            'association_type': 'task_submission',
+                            'association_id': str(task['task_instance_id']),
+                            'task_title': task['task_title']
+                        })
+
+            except Exception as e:
+                logger.warning(f"获取节点 {node_instance_id} 附件失败: {e}")
+
             node_data = {
-                "node_instance_id": str(node['node_instance_id']),
+                "node_instance_id": node_instance_id,
                 "node_name": node['node_name'],
                 "node_type": node['node_type'],
                 "status": node['status'],  # 这是从数据库实时读取的状态
@@ -667,7 +711,9 @@ async def get_workflow_task_flow(
                 "processor_name": node['processor_name'],
                 "processor_type": node['processor_type'],
                 # 节点关联的任务数量
-                "task_count": len([task for task in tasks if str(task['node_instance_id']) == str(node['node_instance_id'])]),
+                "task_count": len([task for task in tasks if str(task['node_instance_id']) == node_instance_id]),
+                # 🆕 新增：节点附件信息
+                "attachments": node_attachments,
                 # 关联的任务详细信息
                 "tasks": [
                     {
@@ -682,7 +728,7 @@ async def get_workflow_task_flow(
                         "result_summary": task.get('result_summary'),
                         "error_message": task.get('error_message')
                     }
-                    for task in tasks if str(task['node_instance_id']) == str(node['node_instance_id'])
+                    for task in tasks if str(task['node_instance_id']) == node_instance_id
                 ],
                 # 时间戳信息
                 "timestamps": {
@@ -2868,17 +2914,54 @@ async def get_workflow_nodes_detail(
         for node in nodes:
             node_id = str(node['node_instance_id'])
             node_tasks = tasks_by_node.get(node_id, [])
-            
+
+            # 🆕 获取节点相关的附件信息
+            node_attachments = []
+            try:
+                from ..services.file_association_service import FileAssociationService
+                file_service = FileAssociationService()
+
+                # 获取节点绑定的附件
+                node_files = await file_service.get_node_instance_files(uuid.UUID(node_id))
+                for file_info in node_files:
+                    node_attachments.append({
+                        'file_id': file_info['file_id'],
+                        'filename': file_info['original_filename'],
+                        'file_size': file_info['file_size'],
+                        'content_type': file_info['content_type'],
+                        'created_at': file_info['created_at'],
+                        'association_type': 'node_binding',
+                        'association_id': node_id
+                    })
+
+                # 获取该节点的所有任务提交的附件
+                for task in node_tasks:
+                    task_files = await file_service.get_task_instance_files(uuid.UUID(task['task_instance_id']))
+                    for file_info in task_files:
+                        node_attachments.append({
+                            'file_id': file_info['file_id'],
+                            'filename': file_info['original_filename'],
+                            'file_size': file_info['file_size'],
+                            'content_type': file_info['content_type'],
+                            'created_at': file_info['created_at'],
+                            'association_type': 'task_submission',
+                            'association_id': task['task_instance_id'],
+                            'task_title': task['task_title']
+                        })
+
+            except Exception as e:
+                logger.warning(f"获取节点 {node_id} 附件失败: {e}")
+
             # 计算节点级别的统计信息
             total_tasks = len(node_tasks)
             completed_tasks = len([t for t in node_tasks if t['status'] == 'completed'])
             failed_tasks = len([t for t in node_tasks if t['status'] == 'failed'])
             running_tasks = len([t for t in node_tasks if t['status'] in ['in_progress', 'assigned']])
-            
+
             # 汇总节点输出数据：从所有已完成任务的输出中合并
             node_output_data = {}
             node_input_data = node['node_input'] or {}
-            
+
             # 收集所有已完成任务的输出数据
             for task in node_tasks:
                 if task['status'] == 'completed' and task['output_data']:
@@ -2889,11 +2972,11 @@ async def get_workflow_nodes_detail(
                         # 如果任务输出不是字典，以任务ID为键存储
                         task_key = f"task_{task['task_instance_id']}"
                         node_output_data[task_key] = task['output_data']
-            
+
             # 如果没有任务输出但节点有输出，使用节点级别的输出
             if not node_output_data and (node['node_output'] or {}):
                 node_output_data = node['node_output'] or {}
-            
+
             node_data = {
                 "node_instance_id": str(node['node_instance_id']),
                 "node_id": str(node['node_id']),
@@ -2915,6 +2998,8 @@ async def get_workflow_nodes_detail(
                 "processor_name": node['processor_name'],
                 "processor_type": node['processor_type'],
                 "task_count": total_tasks,
+                # 🆕 新增：节点附件信息
+                "attachments": node_attachments,
                 "timestamps": {
                     "created_at": node['node_created_at'].isoformat() if node.get('node_created_at') else None,
                     "started_at": node['node_started_at'].isoformat() if node.get('node_started_at') else None,

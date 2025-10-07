@@ -223,6 +223,8 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
           start_at: node.start_at,
           completed_at: node.completed_at,
           tasks: node.tasks || [],
+          // 🆕 添加附件信息
+          attachments: node.attachments || [],
           onNodeClick: setSelectedNodeForDetail,
           // subdivision支持
           subWorkflowInfo,
@@ -424,12 +426,20 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
     }
   }, [visible, workflowBaseId]);
 
-  // 自动刷新机制
+  // 自动刷新机制 - 针对运行中的实例使用更高频率刷新
   useEffect(() => {
     if (autoRefresh && visible) {
+      // 检查是否有运行中的实例
+      const hasRunningInstances = instances.some((instance: any) => instance.status === 'running');
+
+      // 如果有运行中的实例，使用更高频率刷新（1.5秒），否则使用常规频率（5秒）
+      const refreshFrequency = hasRunningInstances ? 1500 : 5000;
+
       const interval = setInterval(() => {
+        console.log(`🔄 [自动刷新] 执行刷新 (频率: ${refreshFrequency}ms, 运行中实例: ${hasRunningInstances ? '是' : '否'})`);
         fetchInstances();
-      }, 3000); // 每3秒刷新一次
+      }, refreshFrequency);
+
       setRefreshInterval(interval);
       return () => {
         clearInterval(interval);
@@ -440,7 +450,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
         setRefreshInterval(null);
       }
     }
-  }, [autoRefresh, visible]);
+  }, [autoRefresh, visible, instances]); // 添加instances依赖，当实例状态变化时重新设置刷新频率
 
   // 组件卸载时清理定时器
   useEffect(() => {
@@ -949,7 +959,14 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
             </Space>
             
             {autoRefresh && (
-              <Badge status="processing" text="自动刷新中 (3秒间隔)" />
+              <Badge
+                status="processing"
+                text={
+                  instances.some((instance: any) => instance.status === 'running')
+                    ? "自动刷新中 (1.5秒间隔，有运行中实例)"
+                    : "自动刷新中 (5秒间隔)"
+                }
+              />
             )}
             
             {instances.filter(i => i.status === 'running').length > 0 && (
@@ -1082,7 +1099,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                 <Tag color="processing">{selectedInstance.current_node}</Tag>
               </div>
             )}
-            
+
             {selectedInstance.current_running_nodes && selectedInstance.current_running_nodes.length > 0 && (
               <div style={{ marginBottom: 16 }}>
                 <strong>正在执行的节点:</strong>
@@ -1095,64 +1112,13 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                 </div>
               </div>
             )}
-            
-            {(selectedInstance as any).node_instances && (
-              <div style={{ marginBottom: 16 }}>
-                <strong>节点执行状态:</strong>
-                <div style={{ 
-                  maxHeight: '200px', 
-                  overflow: 'auto', 
-                  marginTop: 8,
-                  border: '1px solid #d9d9d9',
-                  borderRadius: 4,
-                  padding: 8
-                }}>
-                  {(selectedInstance as any).node_instances.map((node: any, index: number) => (
-                    <div key={`node-instance-${node.node_instance_id || index}-${node.node_name}`} style={{ 
-                      display: 'flex', 
-                      justifyContent: 'space-between', 
-                      alignItems: 'center',
-                      padding: '4px 0',
-                      borderBottom: index < (selectedInstance as any).node_instances.length - 1 ? '1px solid #f0f0f0' : 'none'
-                    }}>
-                      <div>
-                        <strong>{node.node_name}</strong>
-                        <span style={{ marginLeft: 8, fontSize: '12px', color: '#666' }}>({node.node_type})</span>
-                      </div>
-                      <div>
-                        {getStatusTag(node.status)}
-                        {node.completed_at && (
-                          <span style={{ marginLeft: 8, fontSize: '12px', color: '#666' }}>
-                            {new Date(node.completed_at).toLocaleString('zh-CN')}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div style={{ marginBottom: 16 }}>
+<div style={{ marginBottom: 16 }}>
               <strong>创建时间:</strong> {selectedInstance.created_at ? new Date(selectedInstance.created_at).toLocaleString() : '-'}
             </div>
             <div style={{ marginBottom: 16 }}>
               <strong>更新时间:</strong> {selectedInstance.updated_at ? new Date(selectedInstance.updated_at).toLocaleString() : '-'}
             </div>
             
-            {selectedInstance.input_data && Object.keys(selectedInstance.input_data).length > 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <strong>输入数据:</strong>
-                <pre style={{ 
-                  background: '#f5f5f5', 
-                  padding: 12, 
-                  borderRadius: 4, 
-                  marginTop: 8,
-                  fontSize: '12px'
-                }}>
-                  {JSON.stringify(selectedInstance.input_data, null, 2)}
-                </pre>
-              </div>
-            )}
             
             {selectedInstance.output_data && Object.keys(selectedInstance.output_data).length > 0 && (
               <div style={{ marginBottom: 16 }}>
@@ -1227,7 +1193,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                       )}
 
                       {/* 节点输入数据 */}
-                      {node.input_data && Object.keys(node.input_data).length > 0 && (
+                      {/* {node.input_data && Object.keys(node.input_data).length > 0 && (
                         <div style={{ marginBottom: 12 }}>
                           <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: 4 }}>输入数据:</div>
                           <pre style={{ 
@@ -1242,7 +1208,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                             {JSON.stringify(node.input_data, null, 2)}
                           </pre>
                         </div>
-                      )}
+                      )} */}
 
                       {/* 节点输出数据 */}
                       {node.output_data && Object.keys(node.output_data).length > 0 && (
@@ -1250,10 +1216,10 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                           <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: 4, color: '#1890ff' }}>
                             输出数据:
                           </div>
-                          <pre style={{ 
-                            background: '#e6f7ff', 
-                            padding: 8, 
-                            borderRadius: 4, 
+                          <pre style={{
+                            background: '#e6f7ff',
+                            padding: 8,
+                            borderRadius: 4,
                             fontSize: '11px',
                             margin: 0,
                             maxHeight: '200px',
@@ -1262,6 +1228,109 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                           }}>
                             {JSON.stringify(node.output_data, null, 2)}
                           </pre>
+                        </div>
+                      )}
+
+                      {/* 🆕 节点附件信息 */}
+                      {node.attachments && node.attachments.length > 0 && (
+                        <div style={{ marginBottom: 12 }}>
+                          <div style={{
+                            fontSize: '12px',
+                            fontWeight: 'bold',
+                            marginBottom: 8,
+                            color: '#1890ff',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px'
+                          }}>
+                            相关附件
+                            <span style={{
+                              fontSize: '10px',
+                              backgroundColor: '#f0f8ff',
+                              color: '#1890ff',
+                              padding: '2px 6px',
+                              borderRadius: '10px',
+                              fontWeight: 'normal'
+                            }}>
+                              {node.attachments.length} 个文件
+                            </span>
+                          </div>
+                          <div style={{
+                            background: '#f8f9fa',
+                            border: '1px solid #e8e8e8',
+                            borderRadius: 4,
+                            maxHeight: '120px',
+                            overflow: 'auto'
+                          }}>
+                            {node.attachments.map((attachment: any, attIndex: number) => (
+                              <div key={`node-${node.node_instance_id}-attachment-${attIndex}`} style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '6px 10px',
+                                borderBottom: attIndex < node.attachments.length - 1 ? '1px solid #e8e8e8' : 'none'
+                              }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{
+                                    fontSize: '12px',
+                                    color: '#333',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    marginBottom: '2px'
+                                  }}>
+                                    📄 {attachment.filename || attachment.original_filename}
+                                  </div>
+                                  <div style={{
+                                    fontSize: '10px',
+                                    color: '#999',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '10px'
+                                  }}>
+                                    <span>{(attachment.file_size / 1024).toFixed(1)} KB</span>
+                                    <span style={{
+                                      backgroundColor: attachment.association_type === 'node_binding' ? '#e6f7ff' : '#f6ffed',
+                                      color: attachment.association_type === 'node_binding' ? '#1890ff' : '#52c41a',
+                                      padding: '1px 4px',
+                                      borderRadius: '2px',
+                                      fontSize: '9px'
+                                    }}>
+                                      {attachment.association_type === 'node_binding' ? '节点绑定' :
+                                       attachment.association_type === 'task_submission' ? '任务提交' : '其他'}
+                                    </span>
+                                    {attachment.task_title && (
+                                      <span style={{ fontSize: '9px', color: '#666' }}>
+                                        来自: {attachment.task_title}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <button
+                                  style={{
+                                    fontSize: '10px',
+                                    padding: '3px 8px',
+                                    backgroundColor: '#1890ff',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '3px',
+                                    cursor: 'pointer',
+                                    marginLeft: '10px'
+                                  }}
+                                  onClick={async () => {
+                                    try {
+                                      const { FileAPI } = await import('../services/fileAPI');
+                                      await FileAPI.downloadFile(attachment.file_id);
+                                    } catch (error) {
+                                      console.error('文件下载失败:', error);
+                                    }
+                                  }}
+                                >
+                                  下载
+                                </button>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
 
@@ -1285,7 +1354,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                       )}
 
                       {/* 任务详细信息 */}
-                      {node.tasks && node.tasks.length > 0 && (
+                      {/* {node.tasks && node.tasks.length > 0 && (
                         <div>
                           <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: 8 }}>
                             任务详情 ({node.tasks.length}个):
@@ -1353,7 +1422,7 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                             ))}
                           </div>
                         </div>
-                      )}
+                      )} */}
 
                       {/* 时间信息 */}
                       <div style={{ fontSize: '11px', color: '#999', marginTop: 8 }}>
@@ -1591,7 +1660,107 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                 </div>
               </div>
             )}
-            
+
+            {/* 🆕 节点附件信息 */}
+            {selectedNodeForDetail.attachments && selectedNodeForDetail.attachments.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  marginBottom: 8,
+                  gap: '6px'
+                }}>
+                  <strong>📎 相关附件</strong>
+                  <span style={{
+                    fontSize: '12px',
+                    backgroundColor: '#f0f8ff',
+                    color: '#1890ff',
+                    padding: '2px 8px',
+                    borderRadius: '12px',
+                    fontWeight: 'normal'
+                  }}>
+                    {selectedNodeForDetail.attachments.length} 个文件
+                  </span>
+                </div>
+                <div style={{
+                  background: '#f8f9fa',
+                  border: '1px solid #e8e8e8',
+                  borderRadius: 4,
+                  maxHeight: '200px',
+                  overflow: 'auto'
+                }}>
+                  {selectedNodeForDetail.attachments.map((attachment: any, attIndex: number) => (
+                    <div key={`modal-attachment-${attIndex}`} style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '10px 12px',
+                      borderBottom: attIndex < selectedNodeForDetail.attachments.length - 1 ? '1px solid #e8e8e8' : 'none'
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{
+                          fontSize: '13px',
+                          color: '#333',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          marginBottom: '4px'
+                        }}>
+                          📄 {attachment.filename || attachment.original_filename}
+                        </div>
+                        <div style={{
+                          fontSize: '11px',
+                          color: '#999',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '12px'
+                        }}>
+                          <span>{(attachment.file_size / 1024).toFixed(1)} KB</span>
+                          <span style={{
+                            backgroundColor: attachment.association_type === 'node_binding' ? '#e6f7ff' : '#f6ffed',
+                            color: attachment.association_type === 'node_binding' ? '#1890ff' : '#52c41a',
+                            padding: '2px 6px',
+                            borderRadius: '3px',
+                            fontSize: '10px'
+                          }}>
+                            {attachment.association_type === 'node_binding' ? '节点绑定' :
+                             attachment.association_type === 'task_submission' ? '任务提交' : '其他'}
+                          </span>
+                          {attachment.task_title && (
+                            <span style={{ fontSize: '10px', color: '#666' }}>
+                              来自: {attachment.task_title}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        style={{
+                          fontSize: '11px',
+                          padding: '4px 10px',
+                          backgroundColor: '#1890ff',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          marginLeft: '12px'
+                        }}
+                        onClick={async () => {
+                          try {
+                            const { FileAPI } = await import('../services/fileAPI');
+                            await FileAPI.downloadFile(attachment.file_id);
+                          } catch (error) {
+                            console.error('文件下载失败:', error);
+                          }
+                        }}
+                      >
+                        下载
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* 错误信息 */}
             {selectedNodeForDetail.error_message && (
               <div style={{ marginBottom: 16 }}>

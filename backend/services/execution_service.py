@@ -4490,6 +4490,10 @@ class ExecutionEngine:
             result = await self.task_instance_repo.update_task(task_id, update_data)
             if result:
                 logger.info(f"✅ [任务取消] 任务状态已更新为 CANCELLED")
+
+                # 🔧 Linus式修复：向上传播取消状态到节点和工作流
+                await self._propagate_task_cancellation(task_id, task, cancel_reason)
+
                 return {
                     "success": True,
                     "message": "任务已取消",
@@ -5107,6 +5111,138 @@ class ExecutionEngine:
         except Exception as e:
             logger.error(f"为节点创建任务失败: {e}")
             return None
+
+    async def _propagate_task_cancellation(self, task_id: uuid.UUID, task_data: Dict[str, Any], cancel_reason: Optional[str] = None):
+        """
+        简洁的状态向上传播：任务取消 -> 节点取消 -> 工作流检查
+        Linus式设计：没有特殊情况，就是简单的状态更新链
+        """
+        try:
+            logger.info(f"🔄 [状态传播] 开始传播任务取消状态: {task_id}")
+
+            # 1. 获取节点实例ID
+            node_instance_id = task_data.get('node_instance_id')
+            workflow_instance_id = task_data.get('workflow_instance_id')
+
+            if not node_instance_id or not workflow_instance_id:
+                logger.warning(f"⚠️ [状态传播] 缺少必要信息，跳过传播")
+                logger.warning(f"   - node_instance_id: {node_instance_id}")
+                logger.warning(f"   - workflow_instance_id: {workflow_instance_id}")
+                return
+
+            # 2. 标记节点实例为取消状态
+            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            from ..models.instance import NodeInstanceUpdate, NodeInstanceStatus
+
+            node_repo = NodeInstanceRepository()
+            node_update = NodeInstanceUpdate(
+                status=NodeInstanceStatus.CANCELLED,
+                error_message=cancel_reason or "任务被取消",
+                completed_at=now_utc()
+            )
+
+            node_result = await node_repo.update_node_instance(node_instance_id, node_update)
+            if node_result:
+                logger.info(f"✅ [状态传播] 节点实例已标记为取消: {node_instance_id}")
+
+                # 3. 通知执行上下文管理器
+                try:
+                    await self.context_manager.mark_node_failed(
+                        workflow_instance_id,
+                        task_data.get('node_id'),  # 需要node_id，不是node_instance_id
+                        node_instance_id,
+                        {"message": cancel_reason or "任务被取消", "type": "user_cancelled"}
+                    )
+                    logger.info(f"✅ [状态传播] 上下文管理器已更新节点状态")
+                except Exception as ctx_error:
+                    logger.warning(f"⚠️ [状态传播] 更新上下文失败: {ctx_error}")
+
+                # 4. 检查是否需要取消整个工作流
+                await self._check_and_update_workflow_status(workflow_instance_id)
+
+            else:
+                logger.error(f"❌ [状态传播] 更新节点状态失败: {node_instance_id}")
+
+        except Exception as e:
+            logger.error(f"❌ [状态传播] 传播任务取消状态失败: {e}")
+            import traceback
+            logger.error(f"   - 堆栈: {traceback.format_exc()}")
+
+    async def _check_and_update_workflow_status(self, workflow_instance_id: uuid.UUID):
+        """
+        检查工作流是否应该被标记为取消状态
+        简单逻辑：如果所有节点都是完成/失败/取消状态，则工作流结束
+        """
+        try:
+            logger.info(f"🔍 [工作流检查] 检查工作流状态: {workflow_instance_id}")
+
+            # 获取所有节点实例状态
+            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            node_repo = NodeInstanceRepository()
+
+            nodes = await node_repo.get_instances_by_workflow_instance(workflow_instance_id)
+            if not nodes:
+                logger.warning(f"⚠️ [工作流检查] 未找到节点实例")
+                return
+
+            # 统计节点状态 - 简单分类
+            total_nodes = len(nodes)
+            completed_nodes = 0
+            failed_nodes = 0
+            cancelled_nodes = 0
+            running_nodes = 0
+
+            for node in nodes:
+                status = node.get('status', '').lower()
+                if status == 'completed':
+                    completed_nodes += 1
+                elif status == 'failed':
+                    failed_nodes += 1
+                elif status == 'cancelled':
+                    cancelled_nodes += 1
+                elif status in ['running', 'pending']:
+                    running_nodes += 1
+
+            logger.info(f"📊 [工作流检查] 节点状态统计:")
+            logger.info(f"   - 总数: {total_nodes}")
+            logger.info(f"   - 完成: {completed_nodes}")
+            logger.info(f"   - 失败: {failed_nodes}")
+            logger.info(f"   - 取消: {cancelled_nodes}")
+            logger.info(f"   - 运行中: {running_nodes}")
+
+            # 简单逻辑：如果没有运行中的节点，工作流结束
+            if running_nodes == 0:
+                from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+                from ..models.instance import WorkflowInstanceUpdate, WorkflowInstanceStatus
+
+                workflow_repo = WorkflowInstanceRepository()
+
+                # 决定最终状态：有取消的节点就是取消，有失败的就是失败，否则完成
+                if cancelled_nodes > 0:
+                    final_status = WorkflowInstanceStatus.CANCELLED
+                    status_name = "已取消"
+                elif failed_nodes > 0:
+                    final_status = WorkflowInstanceStatus.FAILED
+                    status_name = "已失败"
+                else:
+                    final_status = WorkflowInstanceStatus.COMPLETED
+                    status_name = "已完成"
+
+                workflow_update = WorkflowInstanceUpdate(
+                    status=final_status,
+                    completed_at=now_utc()
+                )
+
+                result = await workflow_repo.update_instance(workflow_instance_id, workflow_update)
+                if result:
+                    logger.info(f"✅ [工作流检查] 工作流状态已更新为: {status_name}")
+                else:
+                    logger.error(f"❌ [工作流检查] 更新工作流状态失败")
+            else:
+                logger.info(f"ℹ️ [工作流检查] 工作流仍在运行中，无需更新状态")
+
+        except Exception as e:
+            logger.error(f"❌ [工作流检查] 检查工作流状态失败: {e}")
 
 
 # 全局执行引擎实例
