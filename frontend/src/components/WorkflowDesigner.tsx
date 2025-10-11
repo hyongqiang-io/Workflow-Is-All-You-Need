@@ -21,6 +21,7 @@ import { PlusOutlined, PlayCircleOutlined, SaveOutlined, DeleteOutlined, ReloadO
 import { nodeAPI, processorAPI, executionAPI } from '../services/api';
 import { validateWorkflow, canSaveWorkflow, type ValidationResult } from '../utils/workflowValidation';
 import NodeAttachmentManager from './NodeAttachmentManager';
+import EdgeEditModal from './EdgeEditModal';
 
 // 添加额外的样式来修复React Flow容器问题
 const reactFlowStyle = `
@@ -297,6 +298,8 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [nodeModalVisible, setNodeModalVisible] = useState(false);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
+  const [edgeModalVisible, setEdgeModalVisible] = useState(false);
+  const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [processors, setProcessors] = useState<any[]>([]);
   const [nodeForm] = Form.useForm();
   const [executionStatus, setExecutionStatus] = useState<any>(null);
@@ -569,7 +572,26 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
         const flowEdges: Edge[] = connections.map((conn: any, index: number) => {
           const sourceId = conn.from_node_base_id;
           const targetId = conn.to_node_base_id;
-          
+
+          console.log(`🔗 [DataLoad] 处理连接 ${index + 1}:`, conn);
+          console.log(`🔗 [DataLoad] 原始connection_type: "${conn.connection_type}"`);
+          console.log(`🔗 [DataLoad] 原始condition_config: "${conn.condition_config}"`);
+
+          // 解析condition_config
+          let parsedConditionConfig: any = {};
+          if (conn.condition_config) {
+            try {
+              parsedConditionConfig = typeof conn.condition_config === 'string'
+                ? JSON.parse(conn.condition_config)
+                : conn.condition_config;
+            } catch (e) {
+              console.error(`🔗 [DataLoad] 解析condition_config失败:`, e);
+              parsedConditionConfig = {};
+            }
+          }
+
+          console.log(`🔗 [DataLoad] 解析后condition_config:`, parsedConditionConfig);
+
           return {
             id: conn.connection_id || `e${index}`,
             source: sourceId,
@@ -577,6 +599,17 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
             type: 'smoothstep',
             sourceHandle: `${sourceId}-source`,
             targetHandle: `${targetId}-target`,
+            data: {
+              connection_type: conn.connection_type || 'normal',
+              condition_config: parsedConditionConfig,
+              from_node_base_id: conn.from_node_base_id,
+              to_node_base_id: conn.to_node_base_id,
+            },
+            style: {
+              strokeDasharray: conn.connection_type === 'conditional' ? '5,5' : 'none',
+              stroke: conn.connection_type === 'conditional' ? '#f59e0b' : '#6b7280'
+            },
+            label: conn.connection_type === 'conditional' ? parsedConditionConfig.description || '' : ''
           };
         });
         
@@ -1113,6 +1146,81 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
     }
   };
 
+  const onEdgeDoubleClick = useCallback((event: any, edge: Edge) => {
+    console.log('🔗 [EdgeClick] 双击边事件触发:', edge);
+    console.log('🔗 [EdgeClick] 边的data:', edge.data);
+    console.log('🔗 [EdgeClick] connection_type:', edge.data?.connection_type);
+    console.log('🔗 [EdgeClick] condition_config:', edge.data?.condition_config);
+    if (!readOnly) {
+      console.log('🔗 [EdgeClick] 设置选中边并打开模态框');
+      setSelectedEdge(edge);
+      setEdgeModalVisible(true);
+    }
+  }, [readOnly]);
+
+  const handleSaveEdge = useCallback(async (edgeData: any) => {
+    try {
+      console.log('🔗 [EdgeSave] 开始保存边配置:', edgeData);
+
+      if (!workflowId || !edgeData.source || !edgeData.target) {
+        throw new Error('缺少必要的边数据');
+      }
+
+      // 查找源节点和目标节点
+      const sourceNode = nodes.find(n => n.id === edgeData.source);
+      const targetNode = nodes.find(n => n.id === edgeData.target);
+
+      if (!sourceNode || !targetNode) {
+        throw new Error('找不到连接的节点');
+      }
+
+      console.log('🔗 [EdgeSave] 源节点:', sourceNode);
+      console.log('🔗 [EdgeSave] 目标节点:', targetNode);
+
+      // 构建更新请求数据
+      const updateData = {
+        from_node_base_id: sourceNode.data.nodeId || sourceNode.id,
+        to_node_base_id: targetNode.data.nodeId || targetNode.id,
+        workflow_base_id: workflowId,
+        connection_type: edgeData.connection_type,
+        condition_config: edgeData.condition_config
+      };
+
+      console.log('🔗 [EdgeSave] 构建更新数据:', updateData);
+
+      // 调用API更新连接
+      const response = await nodeAPI.updateConnection(updateData);
+      console.log('🔗 [EdgeSave] API响应:', response);
+
+      // 更新本地边状态
+      setEdges(prevEdges =>
+        prevEdges.map(edge =>
+          edge.id === edgeData.id
+            ? {
+                ...edge,
+                data: {
+                  ...edge.data,
+                  connection_type: edgeData.connection_type,
+                  condition_config: edgeData.condition_config
+                },
+                style: {
+                  ...edge.style,
+                  strokeDasharray: edgeData.connection_type === 'conditional' ? '5,5' : 'none',
+                  stroke: edgeData.connection_type === 'conditional' ? '#f59e0b' : '#6b7280'
+                },
+                label: edgeData.condition_config?.description || ''
+              }
+            : edge
+        )
+      );
+
+      message.success('连接配置更新成功');
+    } catch (error: any) {
+      console.error('保存边配置失败:', error);
+      throw error;
+    }
+  }, [workflowId, nodes, setEdges]);
+
   const onNodeContextMenu = useCallback((event: any, node: Node) => {
     console.log('节点右键菜单触发:', node);
     console.log('readOnly状态:', readOnly);
@@ -1327,6 +1435,7 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
               nodeTypes={nodeTypes}
               onNodeDoubleClick={onNodeDoubleClick}
               onNodeContextMenu={onNodeContextMenu}
+              onEdgeDoubleClick={onEdgeDoubleClick}
               onEdgeContextMenu={onEdgeContextMenu}
               onNodesDelete={onNodesDelete}
               onEdgesDelete={onEdgesDelete}
@@ -1528,6 +1637,17 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* 边编辑模态框 */}
+      <EdgeEditModal
+        visible={edgeModalVisible}
+        edge={selectedEdge}
+        onSave={handleSaveEdge}
+        onCancel={() => {
+          setEdgeModalVisible(false);
+          setSelectedEdge(null);
+        }}
+      />
     </ReactFlowProvider>
   );
 };

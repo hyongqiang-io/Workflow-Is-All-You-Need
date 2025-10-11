@@ -4,7 +4,7 @@ Agent Models
 """
 
 import uuid
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field, ConfigDict
 from .base import BaseEntity, CreateRequest, UpdateRequest
 
@@ -12,7 +12,7 @@ from .base import BaseEntity, CreateRequest, UpdateRequest
 class AgentBase(BaseModel):
     """Agent基础模型"""
     model_config = ConfigDict(protected_namespaces=())
-    
+
     agent_name: str = Field(..., min_length=1, max_length=255, description="Agent名称")
     description: Optional[str] = Field(None, description="Agent描述")
     base_url: Optional[str] = Field(None, max_length=255, description="基础URL")
@@ -21,6 +21,7 @@ class AgentBase(BaseModel):
     tool_config: Optional[Dict[str, Any]] = Field(None, description="工具配置")
     parameters: Optional[Dict[str, Any]] = Field(None, description="参数配置")
     is_autonomous: bool = Field(False, description="是否自主运行")
+    tags: Optional[List[str]] = Field(None, description="Agent标签，如multimodal、vision等能力标识")
 
 
 class Agent(AgentBase, BaseEntity):
@@ -43,6 +44,7 @@ class AgentUpdate(UpdateRequest):
     tool_config: Optional[Dict[str, Any]] = Field(None, description="工具配置")
     parameters: Optional[Dict[str, Any]] = Field(None, description="参数配置")
     is_autonomous: Optional[bool] = Field(None, description="是否自主运行")
+    tags: Optional[List[str]] = Field(None, description="Agent标签，如multimodal、vision等能力标识")
     capabilities: Optional[list] = Field(None, description="能力列表")
 
 

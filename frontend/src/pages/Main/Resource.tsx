@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { 
+import {
   Card, List, Avatar, Tag, Input, Select, Row, Col, Button, message, Statistic, Typography, Empty,
   Tabs, Table, Modal, Form, Upload, Space, Descriptions, Divider, Tooltip, Checkbox
 } from 'antd';
@@ -319,7 +319,7 @@ const Resource: React.FC = () => {
     editForm.setFieldsValue({
       name: agent.name,
       description: agent.description,
-      capabilities: agent.capabilities || [],
+      tags: agent.capabilities || (agent as any).tags || [],  // 优先使用capabilities，使用类型断言访问tags
       config: configValue
     });
   }, [editForm]);
@@ -354,13 +354,13 @@ const Resource: React.FC = () => {
       const response = await agentAPI.updateAgent(selectedAgent.id, {
         agent_name: values.name,
         description: values.description,
-        capabilities: values.capabilities,
+        tags: values.tags,  // 修复：发送tags字段而不是capabilities
         tool_config: toolConfig
       });
       
       console.log('Agent更新响应:', response);
-      
-      if (response && response.data && response.data.success) {
+
+      if (response && (response as any).success) {
         // 如果工具绑定有变化，同步更新工具绑定
         if (editToolBindings.length > 0) {
           try {
@@ -384,7 +384,7 @@ const Resource: React.FC = () => {
         setEditToolBindings([]);  // 清空编辑工具绑定
         loadResources();
       } else {
-        message.error(response?.data?.message || '更新Agent失败');
+        message.error((response as any)?.message || '更新Agent失败');
       }
     } catch (error: any) {
       console.error('更新失败:', error);
@@ -403,14 +403,21 @@ const Resource: React.FC = () => {
 
   const confirmDeleteAgent = useCallback(async () => {
     if (!agentToDelete) return;
-    
+
     try {
       console.log('🔥 用户确认删除，开始调用API...');
-      await agentAPI.deleteAgent(agentToDelete.id);
-      message.success('Agent删除成功');
-      setDeleteAgentModalVisible(false);
-      setAgentToDelete(null);
-      loadResources();
+      const response = await agentAPI.deleteAgent(agentToDelete.id);
+      console.log('🔥 Agent删除响应:', response);
+
+      if (response && (response as any).success) {
+        message.success('Agent删除成功');
+        setDeleteAgentModalVisible(false);
+        setAgentToDelete(null);
+        loadResources();
+      } else {
+        console.error('❌ Agent删除失败:', response);
+        message.error((response as any)?.message || '删除Agent失败');
+      }
     } catch (error: any) {
       console.error('❌ Agent删除失败:', error);
       message.error(error.response?.data?.detail || '删除Agent失败');
@@ -448,31 +455,38 @@ const Resource: React.FC = () => {
       
       // 创建Agent
       const response = await agentAPI.createAgent(agentData);
-      const createdAgent = response.data;
-      
-      // 如果有工具绑定，创建Agent后立即绑定工具
-      if (toolBindings.length > 0 && createdAgent?.agent_id) {
-        console.log('🔥 开始绑定工具到新创建的Agent...');
-        try {
-          // 导入agentToolsAPI
-          const { agentToolsAPI } = await import('../../services/api');
-          
-          // 批量绑定工具
-          await agentToolsAPI.batchBindTools(createdAgent.agent_id, toolBindings);
-          console.log('✅ 工具绑定成功');
-          message.success(`Agent创建成功，已绑定 ${toolBindings.length} 个工具`);
-        } catch (toolError: any) {
-          console.error('❌ 工具绑定失败:', toolError);
-          message.warning('Agent创建成功，但工具绑定失败: ' + toolError.message);
+      console.log('🔥 Agent创建响应:', response);
+
+      if (response && (response as any).success) {
+        const createdAgent = (response as any).data?.agent;
+
+        // 如果有工具绑定，创建Agent后立即绑定工具
+        if (toolBindings.length > 0 && createdAgent?.agent_id) {
+          console.log('🔥 开始绑定工具到新创建的Agent...');
+          try {
+            // 导入agentToolsAPI
+            const { agentToolsAPI } = await import('../../services/api');
+
+            // 批量绑定工具
+            await agentToolsAPI.batchBindTools(createdAgent.agent_id, toolBindings);
+            console.log('✅ 工具绑定成功');
+            message.success(`Agent创建成功，已绑定 ${toolBindings.length} 个工具`);
+          } catch (toolError: any) {
+            console.error('❌ 工具绑定失败:', toolError);
+            message.warning('Agent创建成功，但工具绑定失败: ' + toolError.message);
+          }
+        } else {
+          message.success('Agent创建成功');
         }
+
+        setCreateAgentModalVisible(false);
+        createAgentForm.resetFields();
+        setToolBindings([]);  // 清空工具绑定
+        loadResources();
       } else {
-        message.success('Agent创建成功');
+        console.error('❌ Agent创建失败:', response);
+        message.error((response as any)?.message || '创建Agent失败');
       }
-      
-      setCreateAgentModalVisible(false);
-      createAgentForm.resetFields();
-      setToolBindings([]);  // 清空工具绑定
-      loadResources();
     } catch (error: any) {
       console.error('❌ Agent创建失败:', error);
       if (error.name === 'SyntaxError') {
@@ -1416,33 +1430,33 @@ const Resource: React.FC = () => {
             name="description"
             label="描述"
           >
-            <TextArea 
-              rows={3} 
-              placeholder="请输入Agent描述（可选）" 
+            <TextArea
+              rows={3}
+              placeholder="请输入Agent描述（可选）"
             />
           </Form.Item>
-          
-          {/* <Form.Item
-            name="capabilities"
+
+          <Form.Item
+            name="tags"
             label="能力标签"
+            help="设置Agent的能力标签，如multimodal（多模态）、vision（视觉）、text（文本）、code（代码）等"
           >
             <Select
               mode="tags"
-              placeholder="请输入能力标签，按回车添加"
+              placeholder="输入或选择能力标签"
               style={{ width: '100%' }}
-              open={false}
+              options={[
+                { label: 'multimodal', value: 'multimodal' },
+                { label: 'vision', value: 'vision' },
+                { label: 'text', value: 'text' },
+                { label: 'code', value: 'code' },
+                { label: 'reasoning', value: 'reasoning' },
+                { label: 'search', value: 'search' },
+                { label: 'analysis', value: 'analysis' },
+                { label: 'image-generation', value: 'image-generation' }
+              ]}
             />
           </Form.Item>
-          
-          <Form.Item
-            name="config"
-            label="配置信息"
-          >
-            <TextArea 
-              rows={6} 
-              placeholder="请输入JSON格式的配置信息（可选）" 
-            />
-          </Form.Item> */}
           
           {/* 工具绑定编辑器 */}
           <Form.Item
@@ -1628,9 +1642,31 @@ const Resource: React.FC = () => {
             name="description"
             label="描述"
           >
-            <TextArea 
-              rows={3} 
+            <TextArea
+              rows={3}
               placeholder="请输入Agent的描述信息"
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="tags"
+            label="能力标签"
+            help="设置Agent的能力标签，如multimodal（多模态）、vision（视觉）、text（文本）、code（代码）等"
+          >
+            <Select
+              mode="tags"
+              placeholder="输入或选择能力标签"
+              style={{ width: '100%' }}
+              options={[
+                { label: 'multimodal', value: 'multimodal' },
+                { label: 'vision', value: 'vision' },
+                { label: 'text', value: 'text' },
+                { label: 'code', value: 'code' },
+                { label: 'reasoning', value: 'reasoning' },
+                { label: 'search', value: 'search' },
+                { label: 'analysis', value: 'analysis' },
+                { label: 'image-generation', value: 'image-generation' }
+              ]}
             />
           </Form.Item>
 

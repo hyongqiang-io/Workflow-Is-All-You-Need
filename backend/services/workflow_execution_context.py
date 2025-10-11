@@ -6,13 +6,59 @@
 
 import uuid
 from datetime import datetime
-from typing import Dict, List, Any, Set, Optional
+from typing import Dict, List, Any, Set, Optional, Union
 import asyncio
 import json
+from dataclasses import dataclass, field
 from loguru import logger
 
 # 延迟导入避免循环依赖
 from ..models.instance import WorkflowInstanceStatus, WorkflowInstanceUpdate
+
+
+@dataclass
+class ExecutionRecord:
+    """节点执行记录"""
+    execution_id: str  # 执行ID，格式：{path_id}:{node_instance_id}:{execution_count}
+    path_id: str  # 执行路径ID
+    node_instance_id: uuid.UUID  # 节点实例ID
+    execution_count: int  # 该节点的执行次数（从1开始）
+    started_at: datetime  # 开始时间
+    completed_at: Optional[datetime] = None  # 完成时间
+    status: str = "RUNNING"  # 状态：RUNNING, COMPLETED, FAILED
+    input_data: Optional[Dict[str, Any]] = None  # 输入数据
+    output_data: Optional[Dict[str, Any]] = None  # 输出数据
+    selected_next_nodes: Optional[List[uuid.UUID]] = field(default_factory=list)  # 用户选择的下游节点
+
+
+@dataclass
+class ExecutionPath:
+    """执行路径"""
+    path_id: str  # 路径ID
+    parent_path_id: Optional[str] = None  # 父路径ID（分支情况下）
+    workflow_instance_id: uuid.UUID = None  # 工作流实例ID
+
+    # 路径状态
+    status: str = "ACTIVE"  # ACTIVE, COMPLETED, FAILED, MERGED
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    completed_at: Optional[datetime] = None
+
+    # 路径执行信息
+    execution_sequence: List[str] = field(default_factory=list)  # 执行记录ID序列
+    current_nodes: Set[uuid.UUID] = field(default_factory=set)  # 当前执行中的节点
+    last_executed_node: Optional[uuid.UUID] = None  # 最后执行的节点
+
+    # 路径数据上下文
+    path_context: Dict[str, Any] = field(default_factory=dict)  # 路径特定的上下文数据
+    accumulated_outputs: Dict[uuid.UUID, Any] = field(default_factory=dict)  # 累积的节点输出
+
+    # 条件边支持
+    pending_conditions: Dict[str, Any] = field(default_factory=dict)  # 待评估的条件
+    user_selections: Dict[uuid.UUID, List[uuid.UUID]] = field(default_factory=dict)  # 用户的条件选择
+
+    # 循环检测
+    visited_nodes: Set[uuid.UUID] = field(default_factory=set)  # 已访问的节点（用于循环检测）
+    loop_count: Dict[uuid.UUID, int] = field(default_factory=dict)  # 节点循环计数
 
 
 def _serialize_for_json(obj):
@@ -30,35 +76,57 @@ def _serialize_for_json(obj):
         return result
     elif isinstance(obj, (list, tuple, set)):
         return [_serialize_for_json(item) for item in obj]
+    elif hasattr(obj, '__dataclass_fields__'):
+        # 处理dataclass对象（如ExecutionPath）
+        from dataclasses import asdict
+        return _serialize_for_json(asdict(obj))
     else:
         return obj
 
 
 class WorkflowExecutionContext:
     """工作流执行上下文管理器
-    
+
     统一管理一个工作流实例的：
     - 执行上下文数据
-    - 节点状态管理 
+    - 节点状态管理
     - 依赖关系管理
     - 数据流管理
+    - 条件边支持和多路径执行
     """
-    
+
     def __init__(self, workflow_instance_id: uuid.UUID):
         self.workflow_instance_id = workflow_instance_id
-        
-        # 执行上下文数据
+
+        # 重构后的执行上下文数据 - 支持多路径执行
         self.execution_context = {
             'global_data': {},
-            'node_outputs': {},  # node_instance_id -> output_data
-            'execution_path': [],  # 已执行的节点路径 (node_instance_id)
+
+            # 多路径执行支持
+            'execution_paths': {},  # path_id -> ExecutionPath
+            'active_paths': set(),  # 活跃路径ID集合
+            'completed_paths': set(),  # 已完成路径ID集合
+            'failed_paths': set(),  # 失败路径ID集合
+
+            # 节点执行记录 - 支持多次执行
+            'node_execution_records': {},  # node_instance_id -> [ExecutionRecord]
+            'node_outputs_by_path': {},  # path_id -> {node_instance_id -> output_data}
+
+            # 兼容性字段 - 保持向后兼容
+            'node_outputs': {},  # 主路径的node_outputs，向后兼容
+            'execution_path': [],  # 主路径的执行路径，向后兼容
+
+            # 执行状态跟踪
+            'current_executing_nodes': set(),  # 当前执行中的节点实例ID
+            'completed_nodes': set(),  # 已完成的节点实例ID
+            'failed_nodes': set(),  # 失败的节点实例ID
+
+            # 系统字段
             'execution_start_time': datetime.utcnow().isoformat(),
-            'current_executing_nodes': set(),  # 当前执行中的节点实例ID (node_instance_id)
-            'completed_nodes': set(),  # 已完成的节点实例ID (node_instance_id)
-            'failed_nodes': set(),  # 失败的节点实例ID (node_instance_id)
             'auto_save_counter': 0,
             'last_snapshot_time': datetime.utcnow().isoformat(),
-            'persistence_enabled': True
+            'persistence_enabled': True,
+            'conditional_edges_enabled': True  # 条件边功能开关
         }
         
         # 节点依赖关系管理 - 使用node_instance_id作为key
@@ -84,13 +152,27 @@ class WorkflowExecutionContext:
             if restore_from_snapshot:
                 # TODO: 实现快照恢复
                 pass
-            
+
+            # 🆕 初始化主执行路径
+            main_path_id = f"main_{self.workflow_instance_id}"
+            main_path = ExecutionPath(
+                path_id=main_path_id,
+                workflow_instance_id=self.workflow_instance_id,
+                status="ACTIVE"
+            )
+
+            self.execution_context['execution_paths'][main_path_id] = main_path
+            self.execution_context['active_paths'].add(main_path_id)
+            self.execution_context['node_outputs_by_path'][main_path_id] = {}
+
+            logger.info(f"🛤️ 初始化主执行路径: {main_path_id}")
+
             # 🔧 新增：读取工作流实例的context_data
             try:
                 from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
                 workflow_repo = WorkflowInstanceRepository()
                 workflow_instance = await workflow_repo.get_instance_by_id(self.workflow_instance_id)
-                
+
                 if workflow_instance and workflow_instance.get('context_data'):
                     # 解析context_data（可能是JSON字符串）
                     context_data = workflow_instance['context_data']
@@ -101,20 +183,20 @@ class WorkflowExecutionContext:
                         except json.JSONDecodeError:
                             logger.warning(f"⚠️ 工作流实例context_data不是有效的JSON: {context_data}")
                             context_data = {}
-                    
+
                     # 将context_data存储到global_data中
                     self.execution_context['global_data']['workflow_context_data'] = context_data
                     logger.info(f"📋 加载工作流上下文数据: {context_data}")
                 else:
                     logger.debug(f"📋 工作流实例无context_data: {self.workflow_instance_id}")
-                    
+
             except Exception as e:
                 logger.error(f"❌ 加载工作流上下文数据失败: {e}")
-            
+
             # 获取开始节点信息
             start_node_info = await self._get_start_node_task_descriptions()
             self.execution_context['global_data']['start_node_descriptions'] = start_node_info
-            
+
             logger.info(f"✅ 工作流上下文初始化完成: {self.workflow_instance_id}")
     
     async def register_node_dependencies(self, 
@@ -236,14 +318,17 @@ class WorkflowExecutionContext:
             
             # 更新数据库状态
             await self._update_database_node_state(node_instance_id, 'COMPLETED', output_data)
-        
-        # 检查并触发下游节点（在锁外执行避免死锁）
-        triggered_nodes = await self._check_and_trigger_downstream_nodes(node_instance_id)
-        
+
+        # 🔧 Linus原则：统一触发逻辑，消除重复的触发方法
+        triggered_nodes = await self._trigger_downstream_nodes_unified(node_instance_id)
+
+        # 🔧 关键修复：检查工作流是否已完成
+        await self._check_workflow_completion()
+
         # 通知回调
         if triggered_nodes:
             await self._notify_completion_callbacks(triggered_nodes)
-        
+
         # 检查工作流完成
         await self._check_workflow_completion()
     
@@ -613,47 +698,95 @@ class WorkflowExecutionContext:
     async def get_workflow_status(self) -> Dict[str, Any]:
         """获取工作流状态"""
         total_nodes = len(self.node_dependencies)  # 基于node_instance_id的总数
-        
-        # 统计已完成的节点实例数量（通过node_states检查）
-        completed_node_instances = len([nid for nid, state in self.node_states.items() if state == 'COMPLETED'])
-        failed_node_instances = len([nid for nid, state in self.node_states.items() if state == 'FAILED'])
-        executing_node_instances = len([nid for nid, state in self.node_states.items() if state == 'EXECUTING'])
-        
-        # 也保留原有的node_id级别的统计（用于兼容性）
-        completed_nodes = len(self.execution_context['completed_nodes'])
-        failed_nodes = len(self.execution_context['failed_nodes'])
-        executing_nodes = len(self.execution_context['current_executing_nodes'])
-        
-        logger.debug(f"📊 [状态计算] 工作流状态统计:")
-        logger.debug(f"   - 总节点实例: {total_nodes}")
-        logger.debug(f"   - 已完成节点实例: {completed_node_instances}")
-        logger.debug(f"   - 执行中节点实例: {executing_node_instances}")
-        logger.debug(f"   - 失败节点实例: {failed_node_instances}")
-        logger.debug(f"   - 已完成节点(node_id): {completed_nodes}")
-        
-        if failed_node_instances > 0:
-            status = 'FAILED'
-        elif completed_node_instances == total_nodes and total_nodes > 0:
-            status = 'COMPLETED'
-        elif executing_node_instances > 0 or (total_nodes - completed_node_instances - failed_node_instances) > 0:
-            status = 'RUNNING'
+
+        # 🆕 如果启用了条件边，使用基于路径的状态判断
+        if self.execution_context.get('conditional_edges_enabled', True):
+            is_completed = await self.is_workflow_completed()
+
+            # 获取路径统计信息
+            active_paths = len(self.execution_context.get('active_paths', set()))
+            completed_paths = len(self.execution_context.get('completed_paths', set()))
+            failed_paths = len(self.execution_context.get('failed_paths', set()))
+
+            # 统计节点实例状态（用于详细信息）
+            completed_node_instances = len([nid for nid, state in self.node_states.items() if state == 'COMPLETED'])
+            failed_node_instances = len([nid for nid, state in self.node_states.items() if state == 'FAILED'])
+            executing_node_instances = len([nid for nid, state in self.node_states.items() if state == 'EXECUTING'])
+
+            logger.debug(f"📊 [路径状态计算] 工作流状态统计:")
+            logger.debug(f"   - 活跃路径: {active_paths}, 完成路径: {completed_paths}, 失败路径: {failed_paths}")
+            logger.debug(f"   - 总节点实例: {total_nodes}")
+            logger.debug(f"   - 已完成节点实例: {completed_node_instances}")
+            logger.debug(f"   - 执行中节点实例: {executing_node_instances}")
+            logger.debug(f"   - 失败节点实例: {failed_node_instances}")
+
+            # 基于路径状态确定工作流状态
+            if failed_paths > 0:
+                status = 'FAILED'
+            elif is_completed:
+                status = 'COMPLETED'
+            elif active_paths > 0:
+                status = 'RUNNING'
+            else:
+                status = 'UNKNOWN'
+
+            logger.debug(f"📊 [路径状态计算] 最终状态: {status}")
+
+            return {
+                'status': status,
+                'total_nodes': total_nodes,
+                'completed_nodes': completed_node_instances,
+                'failed_nodes': failed_node_instances,
+                'executing_nodes': executing_node_instances,
+                'active_paths': active_paths,
+                'completed_paths': completed_paths,
+                'failed_paths': failed_paths,
+                'is_path_based': True
+            }
+
+        # 传统的基于节点计数的逻辑（向后兼容）
         else:
-            status = 'UNKNOWN'
-        
-        logger.debug(f"📊 [状态计算] 最终状态: {status}")
-        
-        return {
-            'status': status,
-            'total_nodes': total_nodes,
-            'completed_nodes': completed_node_instances,  # 使用节点实例级别的统计
-            'failed_nodes': failed_node_instances,
-            'executing_nodes': executing_node_instances,
-            'pending_nodes': total_nodes - completed_node_instances - failed_node_instances - executing_node_instances,
-            # 保留原有字段用于兼容性
-            'completed_nodes_by_id': completed_nodes,
-            'failed_nodes_by_id': failed_nodes,
-            'executing_nodes_by_id': executing_nodes
-        }
+            # 统计已完成的节点实例数量（通过node_states检查）
+            completed_node_instances = len([nid for nid, state in self.node_states.items() if state == 'COMPLETED'])
+            failed_node_instances = len([nid for nid, state in self.node_states.items() if state == 'FAILED'])
+            executing_node_instances = len([nid for nid, state in self.node_states.items() if state == 'EXECUTING'])
+
+            # 也保留原有的node_id级别的统计（用于兼容性）
+            completed_nodes = len(self.execution_context['completed_nodes'])
+            failed_nodes = len(self.execution_context['failed_nodes'])
+            executing_nodes = len(self.execution_context['current_executing_nodes'])
+
+            logger.debug(f"📊 [传统状态计算] 工作流状态统计:")
+            logger.debug(f"   - 总节点实例: {total_nodes}")
+            logger.debug(f"   - 已完成节点实例: {completed_node_instances}")
+            logger.debug(f"   - 执行中节点实例: {executing_node_instances}")
+            logger.debug(f"   - 失败节点实例: {failed_node_instances}")
+            logger.debug(f"   - 已完成节点(node_id): {completed_nodes}")
+
+            if failed_node_instances > 0:
+                status = 'FAILED'
+            elif completed_node_instances == total_nodes and total_nodes > 0:
+                status = 'COMPLETED'
+            elif executing_node_instances > 0 or (total_nodes - completed_node_instances - failed_node_instances) > 0:
+                status = 'RUNNING'
+            else:
+                status = 'UNKNOWN'
+
+            logger.debug(f"📊 [传统状态计算] 最终状态: {status}")
+
+            return {
+                'status': status,
+                'total_nodes': total_nodes,
+                'completed_nodes': completed_node_instances,  # 使用节点实例级别的统计
+                'failed_nodes': failed_node_instances,
+                'executing_nodes': executing_node_instances,
+                'pending_nodes': total_nodes - completed_node_instances - failed_node_instances - executing_node_instances,
+                # 保留原有字段用于兼容性
+                'completed_nodes_by_id': completed_nodes,
+                'failed_nodes_by_id': failed_nodes,
+                'executing_nodes_by_id': executing_nodes,
+                'is_path_based': False
+            }
     
     def register_completion_callback(self, callback: callable):
         """注册完成回调"""
@@ -956,6 +1089,654 @@ class WorkflowExecutionContext:
         self.node_states.clear()
         self.pending_triggers.clear()
         self.completion_callbacks.clear()
+
+    # ==================== 🆕 条件边和多路径执行支持 ====================
+
+    async def create_execution_path(self, parent_path_id: Optional[str] = None) -> str:
+        """创建新的执行路径（用于分支）"""
+        async with self._context_lock:
+            path_id = f"path_{uuid.uuid4().hex[:8]}_{len(self.execution_context['execution_paths'])}"
+
+            new_path = ExecutionPath(
+                path_id=path_id,
+                parent_path_id=parent_path_id,
+                workflow_instance_id=self.workflow_instance_id,
+                status="ACTIVE"
+            )
+
+            # 如果有父路径，继承其上下文
+            if parent_path_id and parent_path_id in self.execution_context['execution_paths']:
+                parent_path = self.execution_context['execution_paths'][parent_path_id]
+                new_path.path_context = parent_path.path_context.copy()
+                new_path.accumulated_outputs = parent_path.accumulated_outputs.copy()
+                logger.info(f"🌿 创建分支路径: {path_id} (父路径: {parent_path_id})")
+            else:
+                logger.info(f"🛤️ 创建独立路径: {path_id}")
+
+            self.execution_context['execution_paths'][path_id] = new_path
+            self.execution_context['active_paths'].add(path_id)
+            self.execution_context['node_outputs_by_path'][path_id] = {}
+
+            return path_id
+
+    async def record_node_execution(self, path_id: str, node_instance_id: uuid.UUID,
+                                  input_data: Dict[str, Any],
+                                  selected_next_nodes: Optional[List[uuid.UUID]] = None) -> ExecutionRecord:
+        """记录节点执行"""
+        async with self._context_lock:
+            if path_id not in self.execution_context['execution_paths']:
+                raise ValueError(f"路径不存在: {path_id}")
+
+            path = self.execution_context['execution_paths'][path_id]
+
+            # 计算执行次数
+            existing_records = self.execution_context['node_execution_records'].get(node_instance_id, [])
+            execution_count = len([r for r in existing_records if r.path_id == path_id]) + 1
+
+            # 创建执行记录
+            execution_id = f"{path_id}:{node_instance_id}:{execution_count}"
+            record = ExecutionRecord(
+                execution_id=execution_id,
+                path_id=path_id,
+                node_instance_id=node_instance_id,
+                execution_count=execution_count,
+                started_at=datetime.utcnow(),
+                input_data=input_data,
+                selected_next_nodes=selected_next_nodes or []
+            )
+
+            # 存储记录
+            if node_instance_id not in self.execution_context['node_execution_records']:
+                self.execution_context['node_execution_records'][node_instance_id] = []
+            self.execution_context['node_execution_records'][node_instance_id].append(record)
+
+            # 更新路径状态
+            path.execution_sequence.append(execution_id)
+            path.current_nodes.add(node_instance_id)
+            path.last_executed_node = node_instance_id
+
+            # 循环检测
+            if node_instance_id in path.visited_nodes:
+                path.loop_count[node_instance_id] = path.loop_count.get(node_instance_id, 0) + 1
+                logger.warning(f"🔄 检测到节点循环: {node_instance_id} (第{path.loop_count[node_instance_id]}次)")
+            else:
+                path.visited_nodes.add(node_instance_id)
+
+            logger.info(f"📝 记录节点执行: {execution_id}")
+            return record
+
+    async def complete_node_execution(self, path_id: str, node_instance_id: uuid.UUID,
+                                    output_data: Dict[str, Any], status: str = "COMPLETED") -> bool:
+        """完成节点执行，记录输出数据"""
+        async with self._context_lock:
+            if path_id not in self.execution_context['execution_paths']:
+                logger.error(f"路径不存在: {path_id}")
+                return False
+
+            path = self.execution_context['execution_paths'][path_id]
+
+            # 查找最新的执行记录
+            records = self.execution_context['node_execution_records'].get(node_instance_id, [])
+            latest_record = None
+            for record in reversed(records):
+                if record.path_id == path_id and record.status == "RUNNING":
+                    latest_record = record
+                    break
+
+            if not latest_record:
+                logger.error(f"未找到运行中的执行记录: {path_id}:{node_instance_id}")
+                return False
+
+            # 更新记录
+            latest_record.completed_at = datetime.utcnow()
+            latest_record.output_data = output_data
+            latest_record.status = status
+
+            # 更新路径数据
+            path.current_nodes.discard(node_instance_id)
+            path.accumulated_outputs[node_instance_id] = output_data
+
+            # 存储到路径特定的输出中
+            self.execution_context['node_outputs_by_path'][path_id][node_instance_id] = output_data
+
+            # 向后兼容：如果是主路径，也更新传统的node_outputs
+            main_path_id = f"main_{self.workflow_instance_id}"
+            if path_id == main_path_id:
+                self.execution_context['node_outputs'][node_instance_id] = output_data
+
+            logger.info(f"✅ 完成节点执行: {latest_record.execution_id} (状态: {status})")
+            return True
+
+    async def evaluate_conditional_edges(self, path_id: str, node_instance_id: uuid.UUID,
+                                       connections: List[Dict[str, Any]]) -> List[uuid.UUID]:
+        """评估条件边，返回应该激活的下游节点"""
+        async with self._context_lock:
+            if path_id not in self.execution_context['execution_paths']:
+                return []
+
+            path = self.execution_context['execution_paths'][path_id]
+            activated_nodes = []
+
+            # 获取节点输出数据用于条件评估
+            node_output = path.accumulated_outputs.get(node_instance_id, {})
+
+            for connection in connections:
+                to_node_base_id = connection.get('to_node_base_id')
+                condition_config = connection.get('condition_config', {})
+
+                # 🔧 Linus原则：消除特殊情况
+                # 所有边都是条件边，固定边就是条件永远为true的边
+                should_activate = await self._evaluate_condition(condition_config, node_output, path)
+                if should_activate:
+                    activated_nodes.append(to_node_base_id)
+                    logger.debug(f"✅ 边激活: {node_instance_id} -> {to_node_base_id}")
+                else:
+                    logger.debug(f"❌ 边未激活: {node_instance_id} -> {to_node_base_id}")
+
+            return activated_nodes
+
+    async def _evaluate_condition(self, condition_config: Dict[str, Any],
+                                node_output: Dict[str, Any],
+                                path: ExecutionPath) -> bool:
+        """评估单个条件（使用条件评估引擎）"""
+        if not condition_config:
+            return True  # 空条件默认为true
+
+        # 使用条件评估引擎
+        from .condition_evaluation_engine import get_condition_engine
+
+        engine = get_condition_engine()
+
+        # 构建评估上下文
+        context = {
+            'node_output': node_output,
+            'path_data': path.path_context,
+            'global_data': self.execution_context['global_data'],
+            'accumulated_outputs': path.accumulated_outputs,
+            'user_selections': path.user_selections,
+            'current_node_id': path.last_executed_node
+        }
+
+        return await engine.evaluate_condition(condition_config, context)
+
+    async def _trigger_downstream_nodes_unified(self, completed_node_instance_id: uuid.UUID) -> List[uuid.UUID]:
+        """
+        统一的下游节点触发逻辑 - Linus原则：消除特殊情况
+
+        唯一的触发方法：基于依赖满足检查
+        不再区分固定边、条件边、回环等特殊情况
+        """
+        triggered_nodes = []
+
+        async with self._context_lock:
+            logger.info(f"🔍 [统一触发] 检查完成节点 {completed_node_instance_id} 的下游依赖...")
+
+            # 核心逻辑：遍历所有节点，检查依赖是否满足
+            for node_instance_id, deps in self.node_dependencies.items():
+                # UUID类型一致性比较
+                completed_node_str = str(completed_node_instance_id)
+                upstream_nodes_str = [str(x) for x in deps['upstream_nodes']]
+
+                if completed_node_str in upstream_nodes_str:
+                    logger.debug(f"✅ [统一触发] 发现依赖关系: {node_instance_id} 依赖于 {completed_node_instance_id}")
+
+                    # 标记上游节点完成
+                    deps['completed_upstream'].add(completed_node_instance_id)
+
+                    # 检查是否所有上游依赖都完成
+                    all_upstream_completed = len(deps['completed_upstream']) >= len(deps['upstream_nodes'])
+
+                    if all_upstream_completed and self.node_states.get(node_instance_id) == 'PENDING':
+                        # 🔧 简化：只要依赖满足就触发，条件评估在实际执行时进行
+                        self.node_states[node_instance_id] = 'READY'
+                        triggered_nodes.append(node_instance_id)
+                        logger.info(f"🚀 [统一触发] 触发节点: {node_instance_id}")
+
+            logger.info(f"✅ [统一触发] 共触发 {len(triggered_nodes)} 个节点")
+
+        return triggered_nodes
+
+    # 🗑️ 废弃的方法 - 已被统一的触发逻辑替代
+    # 保留以防向后兼容需要，但不推荐使用
+
+    async def _check_and_trigger_downstream_nodes_with_conditions(self, completed_node_instance_id: uuid.UUID) -> List[uuid.UUID]:
+        """检查并触发下游节点（支持条件边和回环）"""
+        triggered_nodes = []
+
+        async with self._context_lock:
+            # 检查是否有执行路径，如果没有则回退到原始逻辑
+            main_path_id = f"main_{self.workflow_instance_id}"
+            if main_path_id not in self.execution_context.get('execution_paths', {}):
+                logger.warning(f"主路径不存在，回退到原始触发逻辑: {main_path_id}")
+                return await self._check_and_trigger_downstream_nodes(completed_node_instance_id)
+
+            # 获取完成节点的信息
+            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            node_repo = NodeInstanceRepository()
+            node_instance = await node_repo.get_instance_by_id(completed_node_instance_id)
+            if not node_instance:
+                logger.error(f"节点实例不存在: {completed_node_instance_id}")
+                return []
+
+            node_id = node_instance['node_id']
+
+            # 获取节点的下游连接（包含条件配置）
+            from ..services.execution_service import ExecutionEngine
+            execution_engine = ExecutionEngine()
+            connections = await execution_engine._get_next_nodes(node_id)
+
+            if not connections:
+                logger.debug(f"节点 {node_id} 没有下游连接")
+                return []
+
+            # 评估条件边，获取应该激活的下游节点（支持回环）
+            activated_results = await self.handle_conditional_edges_with_loops(main_path_id, completed_node_instance_id, connections)
+
+            logger.info(f"🔗 条件边评估完成: {len(activated_results)} 个下游目标被激活")
+
+            # 🆕 "好品味"重构：统一处理普通节点和回环节点
+            for activated_target in activated_results:
+                # 检查是否为新创建的回环节点实例（UUID格式）
+                if isinstance(activated_target, uuid.UUID):
+                    # 回环节点：直接触发（依赖关系已在创建时注册）
+                    if activated_target in self.node_dependencies:
+                        if activated_target not in self.pending_triggers:
+                            self.node_dependencies[activated_target]['ready_to_execute'] = True
+                            self.pending_triggers.add(activated_target)
+                            triggered_nodes.append(activated_target)
+                            logger.info(f"🔄 直接触发回环节点实例: {activated_target}")
+                        else:
+                            logger.debug(f"回环节点实例 {activated_target} 已在待触发队列中")
+                    else:
+                        logger.warning(f"⚠️ 回环节点实例 {activated_target} 依赖关系未注册")
+                else:
+                    # 普通节点：查找现有实例并检查依赖
+                    await self._trigger_normal_downstream_node(activated_target, connections, completed_node_instance_id, triggered_nodes)
+
+            logger.info(f"🎯 条件边触发完成，共触发 {len(triggered_nodes)} 个下游节点")
+
+        return triggered_nodes
+
+    async def _trigger_normal_downstream_node(self, to_node_base_id: uuid.UUID, connections: List[Dict[str, Any]],
+                                           completed_node_instance_id: uuid.UUID, triggered_nodes: List[uuid.UUID]):
+        """触发普通下游节点（非回环）"""
+        # 查找对应的连接信息
+        to_node_id = None
+        for connection in connections:
+            if connection['to_node_base_id'] == to_node_base_id:
+                to_node_id = connection['to_node_id']
+                break
+
+        if not to_node_id:
+            logger.warning(f"未找到节点 {to_node_base_id} 的连接信息")
+            return
+
+        # 查找对应的节点实例
+        downstream_node_instance_id = None
+        for node_instance_id, deps in self.node_dependencies.items():
+            if deps.get('node_id') == to_node_id:
+                downstream_node_instance_id = node_instance_id
+                break
+
+        if not downstream_node_instance_id:
+            logger.warning(f"未找到节点 {to_node_id} 的实例")
+            return
+
+        deps = self.node_dependencies[downstream_node_instance_id]
+
+        # 检查节点状态
+        current_state = self.node_states.get(downstream_node_instance_id, 'PENDING')
+        if current_state in ['EXECUTING', 'COMPLETED']:
+            logger.debug(f"节点实例 {downstream_node_instance_id} 状态为 {current_state}，跳过")
+            return
+
+        # 标记上游节点完成
+        if completed_node_instance_id not in deps['completed_upstream']:
+            deps['completed_upstream'].add(completed_node_instance_id)
+
+        # 检查所有上游依赖是否满足
+        total_upstream = len(deps['upstream_nodes'])
+        completed_upstream = len(deps['completed_upstream'])
+
+        if completed_upstream == total_upstream and total_upstream > 0:
+            if downstream_node_instance_id not in self.pending_triggers:
+                deps['ready_to_execute'] = True
+                self.pending_triggers.add(downstream_node_instance_id)
+                triggered_nodes.append(downstream_node_instance_id)
+
+                logger.info(f"🚀 条件边触发下游节点: {downstream_node_instance_id}")
+
+    async def handle_loop_back_execution(self, path_id: str, loop_back_node_base_id: uuid.UUID,
+                                       loop_trigger_node_instance_id: uuid.UUID) -> uuid.UUID:
+        """处理回环执行，创建新的节点实例"""
+        async with self._context_lock:
+            if path_id not in self.execution_context['execution_paths']:
+                raise ValueError(f"路径不存在: {path_id}")
+
+            path = self.execution_context['execution_paths'][path_id]
+
+            # 检查循环限制
+            loop_count = path.loop_count.get(loop_back_node_base_id, 0)
+            max_loops = 10  # 最大循环次数限制
+
+            if loop_count >= max_loops:
+                logger.error(f"❌ 节点 {loop_back_node_base_id} 循环次数超限: {loop_count} >= {max_loops}")
+                raise ValueError(f"节点循环次数超限: {loop_count}")
+
+            # 更新循环计数
+            path.loop_count[loop_back_node_base_id] = loop_count + 1
+
+            # 🆕 创建新的节点实例来处理回环
+            new_node_instance_id = await self._create_loop_node_instance(
+                loop_back_node_base_id,
+                path_id,
+                loop_count + 1,
+                loop_trigger_node_instance_id
+            )
+
+            logger.info(f"🔄 创建回环节点实例: {new_node_instance_id} (第{loop_count + 1}次循环)")
+
+            return new_node_instance_id
+
+    async def _create_loop_node_instance(self, node_base_id: uuid.UUID, path_id: str,
+                                       loop_iteration: int, trigger_node_instance_id: uuid.UUID) -> uuid.UUID:
+        """为回环创建新的节点实例"""
+        try:
+            # 获取原始节点信息
+            from ..repositories.node.node_repository import NodeRepository
+            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            from ..models.instance import NodeInstanceCreate, NodeInstanceStatus
+
+            node_repo = NodeRepository()
+            node_instance_repo = NodeInstanceRepository()
+
+            # 获取节点基本信息
+            node_query = """
+                SELECT * FROM node
+                WHERE node_base_id = %s AND is_current_version = TRUE AND is_deleted = FALSE
+            """
+            node_info = await node_repo.db.fetch_one(node_query, node_base_id)
+
+            if not node_info:
+                raise ValueError(f"节点不存在: {node_base_id}")
+
+            # 生成新的节点实例ID
+            new_node_instance_id = uuid.uuid4()
+
+            # 创建新的节点实例数据
+            loop_instance_data = NodeInstanceCreate(
+                node_instance_id=new_node_instance_id,
+                workflow_instance_id=self.workflow_instance_id,
+                node_id=node_info['node_id'],
+                node_base_id=node_base_id,
+                node_instance_name=f"{node_info['name']}_loop_{loop_iteration}",
+                task_description=node_info.get('task_description', ''),
+                status=NodeInstanceStatus.PENDING,
+                # 🆕 回环特有字段
+                loop_iteration=loop_iteration,
+                parent_instance_id=trigger_node_instance_id,
+                execution_path_id=path_id
+            )
+
+            # 保存到数据库
+            result = await node_instance_repo.create_node_instance(loop_instance_data)
+
+            if result:
+                # 在执行上下文中注册新实例
+                await self._register_loop_node_dependencies(new_node_instance_id, node_info['node_id'])
+
+                logger.info(f"✅ 回环节点实例创建成功: {new_node_instance_id}")
+                return new_node_instance_id
+            else:
+                raise ValueError("创建回环节点实例失败")
+
+        except Exception as e:
+            logger.error(f"❌ 创建回环节点实例失败: {e}")
+            raise
+
+    async def _register_loop_node_dependencies(self, loop_node_instance_id: uuid.UUID, node_id: uuid.UUID):
+        """注册回环节点实例的依赖关系
+
+        🔧 关键修复：回环节点应该依赖于触发回环的节点实例，而不是原始的上游节点实例
+        这样才能正确形成回环的执行链条
+        """
+        try:
+            # 🔧 重要修复：获取触发回环的节点实例ID
+            # 从loop_node_instance_id找到parent_instance_id（触发回环的节点）
+            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            node_repo = NodeInstanceRepository()
+
+            loop_node_data = await node_repo.get_instance_by_id(loop_node_instance_id)
+            if not loop_node_data:
+                raise ValueError(f"无法获取回环节点实例数据: {loop_node_instance_id}")
+
+            # 获取触发回环的父节点实例ID（这是真正的上游依赖）
+            parent_instance_id = loop_node_data.get('parent_instance_id')
+            if not parent_instance_id:
+                logger.warning(f"⚠️ 回环节点 {loop_node_instance_id} 没有父实例ID，使用原始上游依赖")
+                # 回退到原始逻辑：获取节点定义的上游依赖
+                upstream_node_instances = await self._get_original_upstream_instances(node_id)
+            else:
+                # 🆕 正确的回环依赖：只依赖于触发回环的节点实例
+                upstream_node_instances = [parent_instance_id]
+                logger.info(f"🔄 设置回环依赖: {loop_node_instance_id} -> 依赖于触发节点 {parent_instance_id}")
+
+            # 注册依赖关系
+            await self.register_node_dependencies(
+                loop_node_instance_id,
+                node_id,
+                upstream_node_instances
+            )
+
+            logger.info(f"📋 注册回环节点依赖完成: {loop_node_instance_id} -> {len(upstream_node_instances)} 个上游节点")
+
+        except Exception as e:
+            logger.error(f"❌ 注册回环节点依赖失败: {e}")
+            raise
+
+    async def _get_original_upstream_instances(self, node_id: uuid.UUID) -> List[uuid.UUID]:
+        """获取节点的原始上游节点实例（回退方法）"""
+        try:
+            from ..services.execution_service import ExecutionEngine
+            execution_engine = ExecutionEngine()
+            return await execution_engine._get_upstream_node_instances(node_id, self.workflow_instance_id)
+        except Exception as e:
+            logger.error(f"获取原始上游依赖失败: {e}")
+            return []
+
+    async def handle_conditional_edges_with_loops(self, path_id: str, completed_node_instance_id: uuid.UUID,
+                                                connections: List[Dict[str, Any]]) -> List[uuid.UUID]:
+        """评估条件边，支持回环处理"""
+        async with self._context_lock:
+            if path_id not in self.execution_context['execution_paths']:
+                return []
+
+            path = self.execution_context['execution_paths'][path_id]
+            activated_nodes = []
+
+            # 获取节点输出数据用于条件评估
+            node_output = path.accumulated_outputs.get(completed_node_instance_id, {})
+
+            for connection in connections:
+                to_node_base_id = connection.get('to_node_base_id')
+                condition_config = connection.get('condition_config', {})
+
+                # 🔧 Linus原则：消除特殊情况
+                # 所有边都是条件边，固定边就是条件永远为true的边
+                should_activate = await self._evaluate_condition(condition_config, node_output, path)
+                if should_activate:
+                    # 🔧 简化回环处理：通过状态重置而不是创建新实例
+                    if to_node_base_id in path.visited_nodes:
+                        logger.info(f"🔄 检测到回环: {completed_node_instance_id} -> {to_node_base_id}")
+                        # 简单的回环：重置节点状态到PENDING，允许重新执行
+                        await self._reset_node_for_loop(to_node_base_id, path)
+
+                    activated_nodes.append(to_node_base_id)
+                    logger.debug(f"✅ 边激活: {completed_node_instance_id} -> {to_node_base_id}")
+                else:
+                    logger.debug(f"❌ 边未激活: {completed_node_instance_id} -> {to_node_base_id}")
+
+            return activated_nodes
+
+    async def _reset_node_for_loop(self, node_base_id: uuid.UUID, path: ExecutionPath):
+        """
+        简化的回环处理：重置节点状态而不是创建新实例
+
+        Linus原则：回环不应该是特殊情况，只是状态的重置
+        """
+        try:
+            # 找到这个node_base_id对应的实例
+            for node_instance_id, deps in self.node_dependencies.items():
+                # 检查是否是同一个node_base_id的实例
+                if str(deps.get('node_id')) == str(node_base_id):
+                    # 重置状态到PENDING，允许重新执行
+                    self.node_states[node_instance_id] = 'PENDING'
+
+                    # 从完成集合中移除（如果存在）
+                    self.execution_context.get('completed_nodes', set()).discard(node_instance_id)
+
+                    # 重置依赖满足状态
+                    deps['ready_to_execute'] = False
+                    deps['completed_upstream'] = set()
+
+                    # 增加循环计数
+                    path.loop_count[node_base_id] = path.loop_count.get(node_base_id, 0) + 1
+
+                    logger.info(f"🔄 重置节点状态用于回环: {node_instance_id} (第{path.loop_count[node_base_id]}次)")
+                    break
+
+        except Exception as e:
+            logger.error(f"❌ 重置节点状态失败: {e}")
+
+    async def _check_workflow_completion(self):
+        """
+        检查工作流是否已完成 - Linus式简化版本
+
+        每次节点完成后调用，确保及时更新工作流状态
+        """
+        try:
+            # 延迟导入避免循环依赖
+            from .execution_service import execution_engine
+            await execution_engine._check_and_update_workflow_status(self.workflow_instance_id)
+        except Exception as e:
+            logger.error(f"❌ 检查工作流完成状态失败: {e}")
+
+    async def get_node_execution_history(self, node_base_id: uuid.UUID, path_id: Optional[str] = None) -> List[ExecutionRecord]:
+        """获取节点的执行历史记录"""
+        async with self._context_lock:
+            all_records = []
+
+            # 遍历所有执行记录，找到匹配的节点
+            for node_instance_id, records in self.execution_context['node_execution_records'].items():
+                for record in records:
+                    # 通过node_instance_id查找对应的node_base_id
+                    if (path_id is None or record.path_id == path_id):
+                        # 这里需要查询node_instance对应的node_base_id
+                        # 简化处理，直接返回记录
+                        all_records.append(record)
+
+            # 按执行时间排序
+            all_records.sort(key=lambda r: r.started_at)
+
+            return all_records
+
+    async def handle_user_path_selection(self, node_instance_id: uuid.UUID,
+                                       available_paths: List[Dict[str, Any]],
+                                       user_selected_paths: List[uuid.UUID]) -> List[str]:
+        """处理用户路径选择，可能创建多个分支路径"""
+        async with self._context_lock:
+            created_paths = []
+
+            # 找到当前节点所在的路径
+            current_path_id = None
+            for path_id, path in self.execution_context['execution_paths'].items():
+                if node_instance_id in path.current_nodes:
+                    current_path_id = path_id
+                    break
+
+            if not current_path_id:
+                logger.error(f"未找到节点的当前路径: {node_instance_id}")
+                return []
+
+            # 记录用户选择
+            path = self.execution_context['execution_paths'][current_path_id]
+            path.user_selections[node_instance_id] = user_selected_paths
+
+            # 根据用户选择创建路径
+            if len(user_selected_paths) <= 1:
+                # 单选或无选择，继续当前路径
+                created_paths.append(current_path_id)
+            else:
+                # 多选，创建分支路径
+                for selected_node in user_selected_paths:
+                    branch_path_id = await self.create_execution_path(current_path_id)
+                    created_paths.append(branch_path_id)
+
+                # 标记原路径为已分支
+                path.status = "BRANCHED"
+                self.execution_context['active_paths'].discard(current_path_id)
+
+            logger.info(f"🔀 用户路径选择处理完成: {len(created_paths)} 个路径")
+            return created_paths
+
+    async def check_path_completion(self, path_id: str) -> bool:
+        """检查路径是否完成"""
+        async with self._context_lock:
+            if path_id not in self.execution_context['execution_paths']:
+                return False
+
+            path = self.execution_context['execution_paths'][path_id]
+
+            # 如果路径中没有正在执行的节点，且没有等待条件的节点，则认为路径完成
+            if not path.current_nodes and not path.pending_conditions:
+                path.status = "COMPLETED"
+                path.completed_at = datetime.utcnow()
+                self.execution_context['active_paths'].discard(path_id)
+                self.execution_context['completed_paths'].add(path_id)
+
+                logger.info(f"🏁 路径完成: {path_id}")
+                return True
+
+            return False
+
+    async def is_workflow_completed(self) -> bool:
+        """检查工作流是否完成（基于路径状态而非节点计数）"""
+        async with self._context_lock:
+            # 检查是否有执行路径，如果没有则使用原始逻辑
+            if not self.execution_context.get('execution_paths') or not self.execution_context.get('active_paths'):
+                logger.debug("执行路径不存在，使用传统节点状态判断工作流完成")
+                # 传统方式：检查所有节点是否都完成
+                if not self.node_states:
+                    return False
+
+                # 检查是否所有节点都完成或失败
+                all_finished = all(state in ['COMPLETED', 'FAILED'] for state in self.node_states.values())
+                has_completed = any(state == 'COMPLETED' for state in self.node_states.values())
+
+                logger.debug(f"传统完成检查: 全部结束={all_finished}, 有完成={has_completed}")
+                return all_finished and has_completed
+
+            # 如果没有活跃路径，工作流完成
+            active_count = len(self.execution_context['active_paths'])
+            completed_count = len(self.execution_context['completed_paths'])
+            failed_count = len(self.execution_context['failed_paths'])
+
+            logger.debug(f"🔍 工作流完成检查: 活跃路径={active_count}, 完成路径={completed_count}, 失败路径={failed_count}")
+
+            # 工作流完成的条件：没有活跃路径
+            if active_count == 0 and (completed_count > 0 or failed_count > 0):
+                logger.info(f"🎯 工作流完成判定: 所有路径已结束")
+                return True
+
+            return False
+
+    def cleanup(self):
+        """清理上下文资源"""
+        logger.info(f"🧹 清理工作流上下文: {self.workflow_instance_id}")
+        self.execution_context.clear()
+        self.node_dependencies.clear()
+        self.node_states.clear()
+        self.pending_triggers.clear()
 
 
 # 工作流执行上下文管理器工厂

@@ -213,7 +213,8 @@ async def get_available_processors_test(
                     "entity_type": "agent",
                     "entity_id": str(agent['agent_id']),
                     "description": agent.get('description', ''),
-                    "capabilities": agent.get('capabilities', []),
+                    "capabilities": agent.get('tags', []),  # 修复：使用tags字段而不是capabilities
+                    "tags": agent.get('tags', []),  # 同时保留tags字段以备将来使用
                     "status": agent.get('status', True)
                 })
         
@@ -281,7 +282,8 @@ async def get_available_processors(
                     "entity_type": "agent",
                     "entity_id": str(agent['agent_id']),
                     "description": agent.get('description', ''),
-                    "capabilities": agent.get('capabilities', []),
+                    "capabilities": agent.get('tags', []),  # 修复：使用tags字段而不是capabilities
+                    "tags": agent.get('tags', []),  # 同时保留tags字段以备将来使用
                     "status": agent.get('status', True)
                 })
         
@@ -721,9 +723,10 @@ async def update_processor(
         )
 
 
+@router.put("/agents/{agent_id}", response_model=BaseResponse)
 async def update_agent(
-    agent_update: AgentUpdate,
     agent_id: uuid.UUID = Path(..., description="Agent ID"),
+    agent_update: AgentUpdate = ...,
     current_user: CurrentUser = Depends(get_current_user_context)
 ):
     """
@@ -891,6 +894,7 @@ async def create_agent(
                     "tool_config": new_agent['tool_config'],
                     "parameters": new_agent['parameters'],
                     "is_autonomous": new_agent['is_autonomous'],
+                    "tags": new_agent.get('tags', []),
                     "created_at": new_agent['created_at'].isoformat() if new_agent['created_at'] else None,
                 },
                 "created_by": str(current_user.user_id)

@@ -33,33 +33,46 @@ class OpenAIClient:
         # 初始化AsyncOpenAI客户端
         self.aclient = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
     
-    async def process_task(self, task_data: Dict[str, Any], 
+    async def process_task(self, task_data: Dict[str, Any],
                           model: Optional[str] = None) -> Dict[str, Any]:
-        """处理任务请求"""
+        """处理任务请求，支持多模态内容"""
         try:
             # 构建请求参数
             model_name = model or task_data.get('model', self.model)
-            
+
             logger.info(f"🚀 [OPENAI-CLIENT] 开始处理OpenAI任务")
             logger.info(f"   - 使用模型: {model_name}")
             logger.info(f"   - Base URL: {self.base_url}")
             logger.info(f"   - API Key存在: {'是' if self.api_key else '否'}")
-            
+
+            # 检查是否为多模态内容
+            has_multimodal = task_data.get('has_multimodal_content', False)
+            images = task_data.get('images', [])
+
+            if has_multimodal and images:
+                logger.info(f"📷 [OPENAI-CLIENT] 检测到多模态内容，图片数量: {len(images)}")
+
             # 从task_data中提取messages
             messages = task_data.get('messages', [])
             if not messages:
                 raise ValueError("task_data中缺少messages字段")
-            
+
+            # 如果有多模态内容，转换消息格式
+            if has_multimodal and images:
+                messages = self._convert_to_multimodal_messages(messages, images)
+                logger.info(f"📷 [OPENAI-CLIENT] 已转换为多模态消息格式")
+
             # 调用真实的OpenAI API
             result = await self._call_openai_api_with_messages(messages, model_name, task_data)
-            
+
             return {
                 'success': True,
                 'model': model_name,
                 'result': result,
-                'usage': result.get('usage', {})
+                'usage': result.get('usage', {}),
+                'has_multimodal_content': has_multimodal
             }
-            
+
         except Exception as e:
             logger.error(f"OpenAI处理任务失败: {e}")
             return {
@@ -67,6 +80,69 @@ class OpenAIClient:
                 'error': str(e),
                 'model': model or self.model
             }
+
+    def _convert_to_multimodal_messages(self, messages: List[Dict], images: List[Dict]) -> List[Dict]:
+        """
+        将普通消息转换为多模态消息格式
+
+        Args:
+            messages: 原始消息列表
+            images: 图片数据列表
+
+        Returns:
+            支持多模态的消息列表
+        """
+        try:
+            logger.debug(f"🔄 [MULTIMODAL] 开始转换消息格式")
+
+            multimodal_messages = []
+
+            for message in messages:
+                role = message.get('role', 'user')
+                content = message.get('content', '')
+
+                if role == 'user' and images:
+                    # 为用户消息添加图片内容
+                    content_parts = []
+
+                    # 添加文本内容
+                    if content:
+                        content_parts.append({
+                            "type": "text",
+                            "text": content
+                        })
+
+                    # 添加图片内容
+                    for image in images:
+                        image_content = {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{image['content_type']};base64,{image['base64_data']}",
+                                "detail": "high"  # 高分辨率分析
+                            }
+                        }
+                        content_parts.append(image_content)
+                        logger.debug(f"📷 [MULTIMODAL] 添加图片: {image['name']}")
+
+                    multimodal_messages.append({
+                        "role": role,
+                        "content": content_parts
+                    })
+
+                    # 图片只在第一个用户消息中添加
+                    images = []  # 清空，避免重复添加
+
+                else:
+                    # 非用户消息或无图片，保持原格式
+                    multimodal_messages.append(message)
+
+            logger.debug(f"✅ [MULTIMODAL] 消息转换完成，消息数量: {len(multimodal_messages)}")
+            return multimodal_messages
+
+        except Exception as e:
+            logger.error(f"❌ [MULTIMODAL] 消息转换失败: {e}")
+            # 转换失败时返回原始消息
+            return messages
     
     async def _call_openai_api_with_messages(self, messages: List[Dict[str, str]], 
                                            model: str, task_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -286,6 +362,102 @@ class OpenAIClient:
                 }, ensure_ascii=False),
                 "usage": {"prompt_tokens": 100, "completion_tokens": 100, "total_tokens": 200}
             }
+
+    async def generate_image(self, prompt: str, model: str = "black-forest-labs/FLUX.1-schnell",
+                           size: str = "1024x1024", quality: str = "standard",
+                           n: int = 1) -> Dict[str, Any]:
+        """
+        生成图像
+
+        Args:
+            prompt: 图像描述提示
+            model: 图像生成模型 (SiliconFlow支持的模型)
+            size: 图像尺寸
+            quality: 图像质量
+            n: 生成图像数量
+
+        Returns:
+            图像生成结果
+        """
+        try:
+            logger.info(f"🎨 [IMAGE-GEN-API] === 图像生成API调用开始 ===")
+            logger.info(f"🎨 [IMAGE-GEN-API] 接收到的参数:")
+            logger.info(f"   - prompt: {prompt}")
+            logger.info(f"   - model: {model}")
+            logger.info(f"   - size: {size}")
+            logger.info(f"   - quality: {quality}")
+            logger.info(f"   - n: {n}")
+            logger.info(f"🎨 [IMAGE-GEN-API] API配置:")
+            logger.info(f"   - Base URL: {self.base_url}")
+            logger.info(f"   - API Key存在: {'是' if self.api_key else '否'}")
+
+            # 调用SiliconFlow的图像生成API
+            logger.info(f"🎨 [IMAGE-GEN-API] 开始调用SiliconFlow API...")
+            response = await asyncio.wait_for(
+                self.aclient.images.generate(
+                    model=model,
+                    prompt=prompt,
+                    size=size,
+                    quality=quality,
+                    n=n
+                ),
+                timeout=60.0  # 图像生成需要更长时间
+            )
+
+            logger.info(f"🎨 [IMAGE-GEN-API] API调用成功，开始处理响应...")
+            logger.info(f"🎨 [IMAGE-GEN-API] 响应数据条数: {len(response.data)}")
+
+            # 处理响应
+            images = []
+            for i, image_data in enumerate(response.data):
+                logger.info(f"🎨 [IMAGE-GEN-API] 处理第 {i+1} 张图片...")
+                if hasattr(image_data, 'url'):
+                    # URL 格式返回
+                    images.append({
+                        'url': image_data.url,
+                        'revised_prompt': getattr(image_data, 'revised_prompt', prompt),
+                        'index': i
+                    })
+                    logger.info(f"   - URL格式: {image_data.url[:100]}...")
+                elif hasattr(image_data, 'b64_json'):
+                    # Base64 格式返回
+                    images.append({
+                        'b64_json': image_data.b64_json,
+                        'revised_prompt': getattr(image_data, 'revised_prompt', prompt),
+                        'index': i
+                    })
+                    logger.info(f"   - Base64格式: {len(image_data.b64_json)} 字符")
+
+            logger.info(f"✅ [IMAGE-GEN-API] 图像生成成功，生成了 {len(images)} 张图片")
+            logger.info(f"🎨 [IMAGE-GEN-API] 最终使用的prompt: {prompt}")
+
+            return {
+                'success': True,
+                'images': images,
+                'model': model,
+                'prompt': prompt
+            }
+
+        except Exception as e:
+            logger.error(f"❌ [IMAGE-GEN] 图像生成失败: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'model': model,
+                'prompt': prompt
+            }
+
+    def supports_image_generation(self, agent_tags: List[str]) -> bool:
+        """
+        检查Agent是否支持图像生成
+
+        Args:
+            agent_tags: Agent的标签列表
+
+        Returns:
+            是否支持图像生成
+        """
+        return 'image-generation' in (agent_tags or [])
     
 
 # 全局OpenAI客户端实例

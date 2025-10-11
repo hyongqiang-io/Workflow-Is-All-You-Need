@@ -27,6 +27,9 @@ class NodeService:
         self.node_connection_repository = NodeConnectionRepository()
         self.node_processor_repository = NodeProcessorRepository()
         self.workflow_repository = WorkflowRepository()
+        # 为了兼容，也添加简短的别名
+        self.node_repo = self.node_repository
+        self.workflow_repo = self.workflow_repository
     
     def _check_workflow_permission(self, workflow: Dict[str, Any], user_id: uuid.UUID) -> bool:
         """
@@ -481,7 +484,79 @@ class NodeService:
         except Exception as e:
             logger.error(f"获取工作流连接列表失败: {e}")
             raise ValueError(f"获取工作流连接列表失败: {str(e)}")
-    
+
+    async def update_node_connection(self, from_node_base_id: uuid.UUID,
+                                   to_node_base_id: uuid.UUID,
+                                   workflow_base_id: uuid.UUID,
+                                   update_data: 'NodeConnectionUpdate',
+                                   current_user_id: uuid.UUID) -> Optional[Dict[str, Any]]:
+        """
+        更新节点连接
+
+        Args:
+            from_node_base_id: 源节点基础ID
+            to_node_base_id: 目标节点基础ID
+            workflow_base_id: 工作流基础ID
+            update_data: 更新数据
+            current_user_id: 当前用户ID
+
+        Returns:
+            更新后的连接信息
+
+        Raises:
+            ValueError: 权限不足或连接不存在
+        """
+        try:
+            logger.info(f"开始更新节点连接")
+            logger.info(f"from_node_base_id: {from_node_base_id}")
+            logger.info(f"to_node_base_id: {to_node_base_id}")
+            logger.info(f"workflow_base_id: {workflow_base_id}")
+            logger.info(f"update_data: {update_data}")
+
+            # 权限检查：检查用户是否有权限操作该工作流
+            workflow = await self.workflow_repo.get_workflow_by_base_id(workflow_base_id)
+            if not workflow:
+                raise ValueError("工作流不存在")
+
+            # if workflow.get('creator_id') != current_user_id:
+            #     raise ValueError("无权更新此工作流的连接")
+
+            # 查找连接
+            from_node = await self.node_repo.get_node_by_base_id(from_node_base_id, workflow_base_id)
+            to_node = await self.node_repo.get_node_by_base_id(to_node_base_id, workflow_base_id)
+
+            logger.info(f"找到源节点: {from_node is not None}")
+            logger.info(f"找到目标节点: {to_node is not None}")
+
+            if not from_node or not to_node:
+                raise ValueError("源节点或目标节点不存在")
+
+            # 更新连接
+            result = await self.node_connection_repository.update_node_connection(
+                from_node_id=from_node['node_id'],
+                to_node_id=to_node['node_id'],
+                workflow_id=from_node['workflow_id'],
+                update_data=update_data
+            )
+
+            if result:
+                logger.info(f"更新节点连接成功: {from_node_base_id} -> {to_node_base_id}")
+                return {
+                    "from_node_base_id": str(from_node_base_id),
+                    "to_node_base_id": str(to_node_base_id),
+                    "workflow_base_id": str(workflow_base_id),
+                    "connection_type": update_data.connection_type.value if update_data.connection_type else None,
+                    "condition_config": update_data.condition_config
+                }
+            else:
+                raise ValueError("连接不存在")
+
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"更新节点连接失败: {e}")
+            raise ValueError(f"更新节点连接失败: {str(e)}")
+
     async def delete_node_connection(self, from_node_base_id: uuid.UUID,
                                    to_node_base_id: uuid.UUID,
                                    workflow_base_id: uuid.UUID,

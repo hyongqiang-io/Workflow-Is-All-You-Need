@@ -24,13 +24,13 @@ def now_utc() -> datetime:
 def safe_json_serializer(obj):
     """
     安全的JSON序列化器，处理特殊类型对象
-    
+
     Args:
         obj: 要序列化的对象
-        
+
     Returns:
         可序列化的值
-        
+
     Raises:
         TypeError: 如果对象类型不受支持
     """
@@ -38,6 +38,9 @@ def safe_json_serializer(obj):
         return obj.isoformat()
     elif isinstance(obj, uuid.UUID):
         return str(obj)
+    elif isinstance(obj, set):
+        # 🔧 修复：处理Set类型
+        return list(obj)
     elif hasattr(obj, '__dict__'):
         # 处理自定义对象
         return obj.__dict__
@@ -45,17 +48,37 @@ def safe_json_serializer(obj):
         raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
+def _convert_uuid_keys(obj):
+    """
+    递归转换字典中的UUID键为字符串
+    """
+    if isinstance(obj, dict):
+        return {
+            (str(k) if isinstance(k, uuid.UUID) else k): _convert_uuid_keys(v)
+            for k, v in obj.items()
+        }
+    elif isinstance(obj, list):
+        return [_convert_uuid_keys(item) for item in obj]
+    elif isinstance(obj, set):
+        return [_convert_uuid_keys(item) for item in obj]
+    else:
+        return obj
+
+
 def safe_json_dumps(data: Any, **kwargs) -> str:
     """
     安全的JSON dumps，自动处理特殊类型对象
-    
+
     Args:
         data: 要序列化的数据
         **kwargs: 传递给json.dumps的其他参数
-        
+
     Returns:
         JSON字符串
     """
+    # 预处理数据，转换UUID键
+    processed_data = _convert_uuid_keys(data)
+
     # 设置默认参数
     default_kwargs = {
         'ensure_ascii': False,
@@ -63,8 +86,8 @@ def safe_json_dumps(data: Any, **kwargs) -> str:
         'default': safe_json_serializer
     }
     default_kwargs.update(kwargs)
-    
-    return json.dumps(data, **default_kwargs)
+
+    return json.dumps(processed_data, **default_kwargs)
 
 
 def safe_json_loads(json_str: Optional[str], default: Any = None) -> Any:

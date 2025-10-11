@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Card, 
-  Button, 
-  Table, 
-  Space, 
-  Modal, 
-  Form, 
-  Input, 
-  Select, 
+import {
+  Card,
+  Button,
+  Table,
+  Space,
+  Modal,
+  Form,
+  Input,
+  Select,
   Switch,
-  Tag, 
+  Tag,
   message,
   Drawer,
   Tabs,
@@ -19,7 +19,8 @@ import {
   Divider,
   Tooltip,
   Alert,
-  Badge
+  Badge,
+  AutoComplete
 } from 'antd';
 import { 
   PlusOutlined, 
@@ -60,6 +61,7 @@ interface AgentData {
   tool_config?: any;
   parameters?: any;
   is_autonomous: boolean;
+  tags?: string[];  // 添加tags字段支持
   created_at: string;
   updated_at: string;
   status?: string;
@@ -84,6 +86,13 @@ const AgentManagement: React.FC = () => {
   const [currentAgent, setCurrentAgent] = useState<AgentData | null>(null);
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState('agents');
+
+  // Tags编辑相关状态
+  const [inputVisible, setInputVisible] = useState(false);
+  const [inputValue, setInputValue] = useState('');
+  const [editInputIndex, setEditInputIndex] = useState(-1);
+  const [editInputValue, setEditInputValue] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
 
   useEffect(() => {
     loadAgents();
@@ -136,6 +145,7 @@ const AgentManagement: React.FC = () => {
           ...values.parameters
         },
         is_autonomous: values.is_autonomous || false,
+        tags: tags, // 添加tags字段
       };
 
       if (currentAgent) {
@@ -150,6 +160,7 @@ const AgentManagement: React.FC = () => {
 
       setModalVisible(false);
       setCurrentAgent(null);
+      setTags([]); // 清空tags状态
       form.resetFields();
       loadAgents();
     } catch (error: any) {
@@ -182,6 +193,7 @@ const AgentManagement: React.FC = () => {
   // 编辑Agent
   const handleEdit = (agent: AgentData) => {
     setCurrentAgent(agent);
+    setTags(agent.tags || []); // 设置tags状态
     form.setFieldsValue({
       agent_name: agent.agent_name,
       description: agent.description,
@@ -194,6 +206,43 @@ const AgentManagement: React.FC = () => {
     });
     setModalVisible(true);
   };
+
+  // Tags处理函数
+  const handleTagClose = (removedTag: string) => {
+    const newTags = tags.filter(tag => tag !== removedTag);
+    setTags(newTags);
+  };
+
+  const showInput = () => {
+    setInputVisible(true);
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInputValue(e.target.value);
+  };
+
+  const handleInputConfirm = () => {
+    if (inputValue && tags.indexOf(inputValue) === -1) {
+      setTags([...tags, inputValue]);
+    }
+    setInputVisible(false);
+    setInputValue('');
+  };
+
+  const handleEditInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setEditInputValue(e.target.value);
+  };
+
+  const handleEditInputConfirm = () => {
+    const newTags = [...tags];
+    newTags[editInputIndex] = editInputValue;
+    setTags(newTags);
+    setEditInputIndex(-1);
+    setEditInputValue('');
+  };
+
+  // 预定义的常用tags
+  const commonTags = ['multimodal', 'vision', 'text', 'code', 'reasoning', 'search', 'analysis', 'image-generation'];
 
   // 配置工具
   const handleConfigureTools = (agent: AgentData) => {
@@ -232,6 +281,36 @@ const AgentManagement: React.FC = () => {
       width: 150,
       render: (text: string) => (
         <Tag color="blue">{text}</Tag>
+      )
+    },
+    {
+      title: '能力标签',
+      dataIndex: 'tags',
+      key: 'tags',
+      width: 200,
+      render: (tags: string[]) => (
+        <div>
+          {(tags || []).map(tag => {
+            let color = 'default';
+            if (tag === 'multimodal' || tag === 'vision') {
+              color = 'green';
+            } else if (tag === 'text') {
+              color = 'blue';
+            } else if (tag === 'code') {
+              color = 'purple';
+            } else if (tag === 'reasoning') {
+              color = 'orange';
+            }
+            return (
+              <Tag key={tag} color={color} style={{ marginBottom: '2px' }}>
+                {tag}
+              </Tag>
+            );
+          })}
+          {(!tags || tags.length === 0) && (
+            <Tag color="default">未设置</Tag>
+          )}
+        </div>
       )
     },
     {
@@ -439,6 +518,7 @@ const AgentManagement: React.FC = () => {
                         icon={<PlusOutlined />}
                         onClick={() => {
                           setCurrentAgent(null);
+                          setTags([]); // 清空tags状态
                           form.resetFields();
                           setModalVisible(true);
                         }}
@@ -501,6 +581,7 @@ const AgentManagement: React.FC = () => {
         onCancel={() => {
           setModalVisible(false);
           setCurrentAgent(null);
+          setTags([]); // 清空tags状态
           form.resetFields();
         }}
         onOk={() => form.submit()}
@@ -544,6 +625,117 @@ const AgentManagement: React.FC = () => {
             label="描述"
           >
             <TextArea rows={3} placeholder="请输入Agent描述" />
+          </Form.Item>
+
+          {/* Tags编辑器 */}
+          <Form.Item
+            label="能力标签"
+            help="设置Agent的能力标签，如multimodal（多模态）、vision（视觉）、text（文本）等"
+          >
+            <div style={{ border: '1px solid #d9d9d9', borderRadius: '4px', padding: '8px', minHeight: '32px' }}>
+              {tags.map((tag, index) => {
+                if (editInputIndex === index) {
+                  return (
+                    <Input
+                      key={tag}
+                      size="small"
+                      style={{ width: '78px', marginRight: '8px', marginBottom: '4px' }}
+                      value={editInputValue}
+                      onChange={handleEditInputChange}
+                      onBlur={handleEditInputConfirm}
+                      onPressEnter={handleEditInputConfirm}
+                    />
+                  );
+                }
+
+                const isLongTag = tag.length > 20;
+                const tagElem = (
+                  <Tag
+                    key={tag}
+                    closable
+                    style={{ marginBottom: '4px' }}
+                    onClose={() => handleTagClose(tag)}
+                    color={
+                      tag === 'multimodal' || tag === 'vision' ? 'green' :
+                      tag === 'text' ? 'blue' :
+                      tag === 'code' ? 'purple' :
+                      tag === 'reasoning' ? 'orange' : 'default'
+                    }
+                  >
+                    <span
+                      onDoubleClick={(e) => {
+                        setEditInputIndex(index);
+                        setEditInputValue(tag);
+                        e.preventDefault();
+                      }}
+                    >
+                      {isLongTag ? `${tag.slice(0, 20)}...` : tag}
+                    </span>
+                  </Tag>
+                );
+                return isLongTag ? (
+                  <Tooltip title={tag} key={tag}>
+                    {tagElem}
+                  </Tooltip>
+                ) : (
+                  tagElem
+                );
+              })}
+
+              {inputVisible && (
+                <AutoComplete
+                  size="small"
+                  style={{ width: '78px', marginBottom: '4px' }}
+                  value={inputValue}
+                  onChange={setInputValue}
+                  onBlur={handleInputConfirm}
+                  onSelect={handleInputConfirm}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleInputConfirm();
+                    } else if (e.key === 'Escape') {
+                      setInputVisible(false);
+                      setInputValue('');
+                    }
+                  }}
+                  options={commonTags
+                    .filter(tag => !tags.includes(tag) && tag.includes(inputValue))
+                    .map(tag => ({ value: tag, label: tag }))
+                  }
+                  placeholder="输入标签"
+                  autoFocus
+                />
+              )}
+
+              {!inputVisible && (
+                <Tag
+                  onClick={showInput}
+                  style={{
+                    background: '#fff',
+                    borderStyle: 'dashed',
+                    marginBottom: '4px'
+                  }}
+                  icon={<PlusOutlined />}
+                >
+                  添加标签
+                </Tag>
+              )}
+            </div>
+            <div style={{ marginTop: '8px', fontSize: '12px', color: '#666' }}>
+              常用标签: {commonTags.filter(tag => !tags.includes(tag)).map(tag => (
+                <Tag
+                  key={tag}
+                  style={{ cursor: 'pointer', marginBottom: '2px', fontSize: '11px', padding: '0 4px' }}
+                  onClick={() => {
+                    if (!tags.includes(tag)) {
+                      setTags([...tags, tag]);
+                    }
+                  }}
+                >
+                  {tag}
+                </Tag>
+              ))}
+            </div>
           </Form.Item>
 
           <Row gutter={16}>

@@ -564,19 +564,55 @@ class ExecutionEngine:
             return []
     
     async def _get_next_nodes(self, node_id: uuid.UUID):
-        """获取节点的下游节点（修复版本：使用具体node_id）"""
+        """获取节点的下游节点（支持条件边）"""
         try:
+            # 修改查询以获取连接信息，包括条件配置
             query = """
-                SELECT tn.node_id as to_node_id
+                SELECT
+                    nc.to_node_id,
+                    nc.connection_type,
+                    nc.condition_config,
+                    tn.node_base_id as to_node_base_id,
+                    tn.name as to_node_name,
+                    tn.type as to_node_type
                 FROM node_connection nc
                 JOIN node tn ON tn.node_id = nc.to_node_id
                 WHERE nc.from_node_id = $1
+                  AND tn.is_deleted = FALSE
                 ORDER BY nc.created_at ASC
             """
             results = await self.node_repo.db.fetch_all(query, node_id)
-            return [result['to_node_id'] for result in results]
+
+            connections = []
+            for result in results:
+                connection = {
+                    'to_node_id': result['to_node_id'],
+                    'to_node_base_id': result['to_node_base_id'],
+                    'to_node_name': result['to_node_name'],
+                    'to_node_type': result['to_node_type'],
+                    'connection_type': result['connection_type'] or 'normal',
+                    'condition_config': {}
+                }
+
+                # 解析条件配置
+                if result['condition_config']:
+                    try:
+                        if isinstance(result['condition_config'], str):
+                            import json
+                            connection['condition_config'] = json.loads(result['condition_config'])
+                        else:
+                            connection['condition_config'] = result['condition_config']
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(f"解析条件配置失败: {e}")
+                        connection['condition_config'] = {}
+
+                connections.append(connection)
+
+            logger.debug(f"获取节点 {node_id} 的下游连接: {len(connections)} 个")
+            return connections
+
         except Exception as e:
-            logger.error(f"获取节点下游节点失败: {e}")
+            logger.error(f"获取节点下游连接失败: {e}")
             return []
     
     def _determine_task_type(self, processor_type: str) -> TaskInstanceType:
@@ -3371,14 +3407,37 @@ class ExecutionEngine:
                 logger.info(f"❌ 工作流标记为失败")
                 return
             
-            # 如果所有节点都已完成，标记工作流为完成
-            if len(completed_nodes) == len(all_nodes) and len(all_nodes) > 0:
-                from ..models.instance import WorkflowInstanceUpdate, WorkflowInstanceStatus
-                update_data = WorkflowInstanceUpdate(status=WorkflowInstanceStatus.COMPLETED)
-                await self.workflow_instance_repo.update_instance(workflow_instance_id, update_data)
-                logger.info(f"✅ 工作流标记为完成")
+            # 🆕 使用基于路径状态的工作流完成检查
+            workflow_context = await self.context_manager.get_context(workflow_instance_id)
+            if workflow_context:
+                # 检查工作流是否完成（基于路径状态）
+                is_completed = await workflow_context.is_workflow_completed()
+
+                if is_completed:
+                    from ..models.instance import WorkflowInstanceUpdate, WorkflowInstanceStatus
+                    update_data = WorkflowInstanceUpdate(status=WorkflowInstanceStatus.COMPLETED)
+                    await self.workflow_instance_repo.update_instance(workflow_instance_id, update_data)
+                    logger.info(f"✅ 基于路径状态检测，工作流标记为完成")
+                else:
+                    # 提供详细的路径状态信息
+                    active_paths = len(workflow_context.execution_context.get('active_paths', set()))
+                    completed_paths = len(workflow_context.execution_context.get('completed_paths', set()))
+                    failed_paths = len(workflow_context.execution_context.get('failed_paths', set()))
+
+                    logger.info(f"⏳ 工作流仍在进行中: 活跃路径={active_paths}, 完成路径={completed_paths}, 失败路径={failed_paths}")
+                    logger.info(f"   传统统计: {len(completed_nodes)}/{len(all_nodes)} 节点完成, {len(pending_nodes)} 节点等待, {len(running_nodes)} 节点运行中")
             else:
-                logger.info(f"⏳ 工作流仍在进行中: {len(completed_nodes)}/{len(all_nodes)} 节点完成, {len(pending_nodes)} 节点等待, {len(running_nodes)} 节点运行中")
+                # 向后兼容：如果没有上下文，使用原有逻辑
+                logger.warning("⚠️ 工作流上下文不存在，使用传统完成检查逻辑")
+
+                # 如果所有节点都已完成，标记工作流为完成
+                if len(completed_nodes) == len(all_nodes) and len(all_nodes) > 0:
+                    from ..models.instance import WorkflowInstanceUpdate, WorkflowInstanceStatus
+                    update_data = WorkflowInstanceUpdate(status=WorkflowInstanceStatus.COMPLETED)
+                    await self.workflow_instance_repo.update_instance(workflow_instance_id, update_data)
+                    logger.info(f"✅ 传统逻辑：工作流标记为完成")
+                else:
+                    logger.info(f"⏳ 传统逻辑：工作流仍在进行中: {len(completed_nodes)}/{len(all_nodes)} 节点完成, {len(pending_nodes)} 节点等待, {len(running_nodes)} 节点运行中")
             
         except Exception as e:
             logger.error(f"❌ 检查工作流完成状态失败: {e}")
@@ -4312,7 +4371,8 @@ class ExecutionEngine:
             raise
     
     async def submit_human_task_result(self, task_id: uuid.UUID, user_id: uuid.UUID,
-                                     result_data: Dict[str, Any], result_summary: Optional[str] = None) -> Dict[str, Any]:
+                                     result_data: Dict[str, Any], result_summary: Optional[str] = None,
+                                     selected_next_nodes: Optional[List[uuid.UUID]] = None) -> Dict[str, Any]:
         """提交人工任务结果"""
         try:
             # logger.info(f"📝 [任务提交] 用户提交任务结果:")
@@ -4382,10 +4442,34 @@ class ExecutionEngine:
             result = await self.task_instance_repo.update_task(task_id, update_data)
             if result:
                 logger.info(f"✅ [任务提交] 任务状态已更新为 COMPLETED")
-                
+
                 # 获取更新后的任务
                 updated_task = await self.task_instance_repo.get_task_by_id(task_id)
-                
+
+                # 🆕 处理用户条件边选择
+                if selected_next_nodes:
+                    logger.info(f"🔀 [条件边] 处理用户选择的下游节点: {selected_next_nodes}")
+                    # 将用户选择保存到上下文中
+                    workflow_instance_id = updated_task.get('workflow_instance_id')
+                    node_instance_id = updated_task.get('node_instance_id')
+
+                    if workflow_instance_id and node_instance_id:
+                        try:
+                            context = await self.context_manager.get_context(workflow_instance_id)
+                            if context:
+                                # 获取主路径ID
+                                main_path_id = f"main_{workflow_instance_id}"
+                                if main_path_id in context.execution_context['execution_paths']:
+                                    path = context.execution_context['execution_paths'][main_path_id]
+                                    path.user_selections[node_instance_id] = selected_next_nodes
+                                    logger.info(f"✅ [条件边] 用户选择已保存到执行路径")
+                                else:
+                                    logger.warning(f"⚠️ [条件边] 主执行路径不存在: {main_path_id}")
+                            else:
+                                logger.warning(f"⚠️ [条件边] 工作流上下文不存在: {workflow_instance_id}")
+                        except Exception as e:
+                            logger.error(f"❌ [条件边] 保存用户选择失败: {e}")
+
                 # 统一处理任务完成 - 避免重复调用 mark_node_completed
                 await self._handle_task_completion_unified(task, updated_task, result_data, "human")
                 
@@ -5170,11 +5254,14 @@ class ExecutionEngine:
 
     async def _check_and_update_workflow_status(self, workflow_instance_id: uuid.UUID):
         """
-        检查工作流是否应该被标记为取消状态
-        简单逻辑：如果所有节点都是完成/失败/取消状态，则工作流结束
+        🔧 Linus式修复：简化工作流状态检查逻辑
+
+        消除特殊情况：只有一个简单的规则
+        - 没有运行中节点 = 工作流结束
+        - 根据完成/失败/取消节点决定最终状态
         """
         try:
-            logger.info(f"🔍 [工作流检查] 检查工作流状态: {workflow_instance_id}")
+            logger.info(f"🔍 [工作流状态检查] 检查工作流: {workflow_instance_id}")
 
             # 获取所有节点实例状态
             from ..repositories.instance.node_instance_repository import NodeInstanceRepository
@@ -5182,7 +5269,7 @@ class ExecutionEngine:
 
             nodes = await node_repo.get_instances_by_workflow_instance(workflow_instance_id)
             if not nodes:
-                logger.warning(f"⚠️ [工作流检查] 未找到节点实例")
+                logger.warning(f"⚠️ 未找到节点实例，跳过状态检查")
                 return
 
             # 统计节点状态 - 简单分类
@@ -5200,24 +5287,20 @@ class ExecutionEngine:
                     failed_nodes += 1
                 elif status == 'cancelled':
                     cancelled_nodes += 1
-                elif status in ['running', 'pending']:
+                elif status in ['running', 'pending', 'waiting']:
                     running_nodes += 1
 
-            logger.info(f"📊 [工作流检查] 节点状态统计:")
-            logger.info(f"   - 总数: {total_nodes}")
-            logger.info(f"   - 完成: {completed_nodes}")
-            logger.info(f"   - 失败: {failed_nodes}")
-            logger.info(f"   - 取消: {cancelled_nodes}")
-            logger.info(f"   - 运行中: {running_nodes}")
+            logger.info(f"📊 节点状态: 总={total_nodes}, 完成={completed_nodes}, 失败={failed_nodes}, 取消={cancelled_nodes}, 运行中={running_nodes}")
 
-            # 简单逻辑：如果没有运行中的节点，工作流结束
+            # 🔧 Linus原则：简单的判断逻辑，无特殊情况
             if running_nodes == 0:
+                # 没有运行中的节点，工作流结束
                 from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
                 from ..models.instance import WorkflowInstanceUpdate, WorkflowInstanceStatus
 
                 workflow_repo = WorkflowInstanceRepository()
 
-                # 决定最终状态：有取消的节点就是取消，有失败的就是失败，否则完成
+                # 决定最终状态：优先级 取消 > 失败 > 完成
                 if cancelled_nodes > 0:
                     final_status = WorkflowInstanceStatus.CANCELLED
                     status_name = "已取消"
@@ -5228,6 +5311,7 @@ class ExecutionEngine:
                     final_status = WorkflowInstanceStatus.COMPLETED
                     status_name = "已完成"
 
+                from ..utils.helpers import now_utc
                 workflow_update = WorkflowInstanceUpdate(
                     status=final_status,
                     completed_at=now_utc()
@@ -5235,14 +5319,16 @@ class ExecutionEngine:
 
                 result = await workflow_repo.update_instance(workflow_instance_id, workflow_update)
                 if result:
-                    logger.info(f"✅ [工作流检查] 工作流状态已更新为: {status_name}")
+                    logger.info(f"✅ 工作流状态已更新: {status_name}")
                 else:
-                    logger.error(f"❌ [工作流检查] 更新工作流状态失败")
+                    logger.error(f"❌ 更新工作流状态失败")
             else:
-                logger.info(f"ℹ️ [工作流检查] 工作流仍在运行中，无需更新状态")
+                logger.info(f"ℹ️ 工作流仍在运行中 ({running_nodes} 个节点)")
 
         except Exception as e:
-            logger.error(f"❌ [工作流检查] 检查工作流状态失败: {e}")
+            logger.error(f"❌ 检查工作流状态失败: {e}")
+            import traceback
+            logger.error(f"   堆栈: {traceback.format_exc()}")
 
 
 # 全局执行引擎实例

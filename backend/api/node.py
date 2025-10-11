@@ -4,7 +4,7 @@ Node Management API Routes
 """
 
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Path, Body
 from loguru import logger
 
@@ -77,10 +77,16 @@ async def get_workflow_connections(
         连接列表
     """
     try:
+        logger.info(f"🔗 [API-Get] 获取工作流连接列表: {workflow_base_id}")
+
         connections = await node_service.get_workflow_connections(
             workflow_base_id, current_user.user_id
         )
-        
+
+        logger.info(f"🔗 [API-Get] 从服务层获取到 {len(connections)} 个连接")
+        for i, conn in enumerate(connections):
+            logger.info(f"🔗 [API-Get] 连接 {i+1}: {conn}")
+
         # Ensure all UUID fields are converted to strings for JSON serialization
         serialized_connections = []
         for conn in connections:
@@ -91,7 +97,9 @@ async def get_workflow_connections(
                 else:
                     serialized_conn[key] = value
             serialized_connections.append(serialized_conn)
-        
+
+        logger.info(f"🔗 [API-Get] 序列化后的连接: {serialized_connections}")
+
         return BaseResponse(
             success=True,
             message="获取连接列表成功",
@@ -398,6 +406,99 @@ async def create_node_connection(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="创建节点连接失败，请稍后再试"
             )
+
+
+@router.put("/connections", response_model=BaseResponse)
+async def update_node_connection(
+    from_node_base_id: uuid.UUID = Body(..., description="源节点基础ID"),
+    to_node_base_id: uuid.UUID = Body(..., description="目标节点基础ID"),
+    workflow_base_id: uuid.UUID = Body(..., description="工作流基础ID"),
+    connection_type: Optional[str] = Body(None, description="连接类型"),
+    condition_config: Optional[Dict[str, Any]] = Body(None, description="条件配置"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """
+    更新节点连接
+
+    Args:
+        from_node_base_id: 源节点基础ID
+        to_node_base_id: 目标节点基础ID
+        workflow_base_id: 工作流基础ID
+        connection_type: 连接类型
+        condition_config: 条件配置
+        current_user: 当前用户
+
+    Returns:
+        更新结果
+    """
+    try:
+        from ..models.node import NodeConnectionUpdate, ConnectionType
+
+        logger.info(f"接收到更新连接请求")
+        logger.info(f"from_node_base_id: {from_node_base_id}")
+        logger.info(f"to_node_base_id: {to_node_base_id}")
+        logger.info(f"workflow_base_id: {workflow_base_id}")
+        logger.info(f"connection_type: {connection_type}")
+        logger.info(f"condition_config: {condition_config}")
+
+        # 构建更新数据
+        update_data = NodeConnectionUpdate()
+        if connection_type is not None:
+            update_data.connection_type = ConnectionType(connection_type)
+        if condition_config is not None:
+            update_data.condition_config = condition_config
+
+        logger.info(f"构建的更新数据: {update_data}")
+
+        result = await node_service.update_node_connection(
+            from_node_base_id=from_node_base_id,
+            to_node_base_id=to_node_base_id,
+            workflow_base_id=workflow_base_id,
+            update_data=update_data,
+            current_user_id=current_user.user_id
+        )
+
+        if result:
+            logger.info(f"用户 {current_user.username} 更新了节点连接")
+            return BaseResponse(
+                success=True,
+                message="节点连接更新成功",
+                data={
+                    "connection": result,
+                    "message": "连接配置已更新"
+                }
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="更新节点连接失败"
+            )
+    except ValueError as e:
+        logger.warning(f"更新节点连接业务逻辑错误: {e}")
+        error_msg = str(e)
+        if "无权" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权更新此工作流的连接"
+            )
+        elif "不存在" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="连接不存在"
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=error_msg
+            )
+    except Exception as e:
+        logger.error(f"更新节点连接异常: {e}")
+        import traceback
+        logger.error(f"异常堆栈: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="更新连接失败，请稍后再试"
+        )
 
 
 @router.delete("/connections", response_model=BaseResponse)

@@ -414,6 +414,10 @@ export const nodeAPI = {
   createConnection: (data: { from_node_base_id: string; to_node_base_id: string; workflow_base_id: string }) =>
     api.post('/nodes/connections', data),
 
+  // 更新节点连接
+  updateConnection: (data: { from_node_base_id: string; to_node_base_id: string; workflow_base_id: string; connection_type?: string; condition_config?: any }) =>
+    api.put('/nodes/connections', data),
+
   // 删除节点连接
   deleteConnection: (data: { from_node_base_id: string; to_node_base_id: string; workflow_base_id: string }) =>
     api.delete('/nodes/connections', { data }),

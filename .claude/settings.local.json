@@ -14,7 +14,8 @@
       "Bash(tree:*)",
       "mcp__grep__searchGitHub",
       "Bash(npx:*)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:docs.siliconflow.cn)"
     ],
     "deny": [],
     "ask": [],

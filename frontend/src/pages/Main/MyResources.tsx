@@ -67,7 +67,7 @@ const MyResources: React.FC = () => {
   return (
     <div className="my-resources-container">
       {/* 页面头部 */}
-      <Card className="page-header-card">
+      {/* <Card className="page-header-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <div>
             <Title level={2} style={{ margin: 0, marginBottom: '4px' }}>
@@ -93,10 +93,10 @@ const MyResources: React.FC = () => {
             </Button>
           </Space>
         </div>
-      </Card>
+      </Card> */}
 
       {/* 使用说明 */}
-      <Card style={{ marginBottom: 24 }}>
+      {/* <Card style={{ marginBottom: 24 }}>
         <Alert
           message="文件管理功能说明"
           description={
@@ -125,7 +125,7 @@ const MyResources: React.FC = () => {
           showIcon
           closable
         />
-      </Card>
+      </Card> */}
 
       {/* 主要内容区域 */}
       <Card>

@@ -150,11 +150,16 @@ class NodeInstanceCreate(NodeInstanceBase, CreateRequest):
     workflow_instance_id: uuid.UUID = Field(..., description="工作流实例ID")
     node_id: uuid.UUID = Field(..., description="节点ID")
     node_base_id: uuid.UUID = Field(..., description="节点基础ID")
-    node_instance_name: str = Field(..., description="节点实例名称")
+    node_instance_name: str = Field("", description="节点实例名称")  # 改为可选
     task_description: str = Field("", description="任务描述")
     status: NodeInstanceStatus = Field(NodeInstanceStatus.PENDING, description="执行状态")
     error_message: Optional[str] = Field(None, description="错误信息")
     retry_count: int = Field(0, description="重试次数")
+
+    # 🆕 回环支持字段
+    loop_iteration: Optional[int] = Field(None, description="循环迭代次数（回环时使用）")
+    parent_instance_id: Optional[uuid.UUID] = Field(None, description="父节点实例ID（回环时指向触发回环的实例）")
+    execution_path_id: Optional[str] = Field(None, description="执行路径ID")
 
 
 class NodeInstanceUpdate(UpdateRequest):

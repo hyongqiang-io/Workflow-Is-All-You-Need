@@ -917,14 +917,24 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
         try:
             # 查找最近的自动快照
             query = """
-                SELECT snapshot_id FROM workflow_context_snapshot 
+                SELECT snapshot_id FROM workflow_context_snapshot
                 WHERE workflow_instance_id = %s AND snapshot_type = 'auto'
-                ORDER BY created_at DESC 
+                ORDER BY created_at DESC
                 LIMIT 1
             """
-            
+
             result = await self.db.fetch_one(query, workflow_instance_id)
-            
+
+            def json_serializer(obj):
+                """自定义JSON序列化器，处理Set、UUID等类型"""
+                if isinstance(obj, set):
+                    return list(obj)
+                elif isinstance(obj, uuid.UUID):
+                    return str(obj)
+                elif hasattr(obj, 'isoformat'):  # datetime对象
+                    return obj.isoformat()
+                return str(obj)
+
             if result:
                 # 更新现有快照 - 移除updated_at字段因为数据库表中不存在
                 update_query = """
@@ -932,7 +942,8 @@ class WorkflowInstanceRepository(BaseRepository[WorkflowInstance]):
                     SET context_data = %s
                     WHERE snapshot_id = %s
                 """
-                await self.db.execute(update_query, json.dumps(context_data, default=str), result['snapshot_id'])
+                serialized_data = json.dumps(context_data, default=json_serializer)
+                await self.db.execute(update_query, serialized_data, result['snapshot_id'])
                 logger.trace(f"✅ 更新上下文快照: {result['snapshot_id']}")
             else:
                 # 创建新快照

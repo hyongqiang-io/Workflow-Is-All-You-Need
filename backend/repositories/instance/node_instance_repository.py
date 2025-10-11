@@ -93,6 +93,10 @@ class NodeInstanceRepository(BaseRepository[NodeInstance]):
                 "error_message": instance_data.error_message,
                 "retry_count": instance_data.retry_count or 0,
                 "created_at": now_utc(),
+                # 🆕 添加回环支持字段
+                "loop_iteration": getattr(instance_data, 'loop_iteration', None),
+                "parent_instance_id": getattr(instance_data, 'parent_instance_id', None),
+                "execution_path_id": getattr(instance_data, 'execution_path_id', None),
             }
             logger.trace(f"   - 节点实例名称: {data['node_instance_name']}")
             logger.trace(f"   - 任务描述: {data['task_description'] or '无'}")

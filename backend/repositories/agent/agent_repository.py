@@ -24,7 +24,7 @@ class AgentRepository(BaseRepository[Agent]):
             # 检查Agent名称是否已存在
             if await self.agent_name_exists(agent_data.agent_name):
                 raise ValueError(f"Agent名称 '{agent_data.agent_name}' 已存在")
-            
+
             # 准备数据
             data = {
                 "agent_id": uuid.uuid4(),
@@ -36,11 +36,12 @@ class AgentRepository(BaseRepository[Agent]):
                 "tool_config": agent_data.tool_config,
                 "parameters": agent_data.parameters,
                 "is_autonomous": agent_data.is_autonomous,
+                "tags": agent_data.tags,  # 添加tags字段支持
                 "created_at": now_utc(),
                 "updated_at": now_utc(),
                 "is_deleted": False
             }
-            
+
             result = await self.create(data)
             return result
         except Exception as e:
@@ -49,38 +50,62 @@ class AgentRepository(BaseRepository[Agent]):
     
     async def get_agent_by_id(self, agent_id: uuid.UUID) -> Optional[Dict[str, Any]]:
         """根据ID获取Agent"""
+        logger.info(f"🔥 [AGENT-READ] 开始读取Agent: {agent_id}")
+
         result = await self.get_by_id(agent_id, "agent_id")
+
+        logger.info(f"🔥 [AGENT-READ] 从数据库读取的原始数据: {result}")
+
         if result:
             # 解析JSON字段
             result = self._parse_json_fields(result)
+            logger.info(f"🔥 [AGENT-READ] 解析JSON字段后的数据: {result}")
+            logger.info(f"🔥 [AGENT-READ] 最终tags字段: {result.get('tags')}")
+
         return result
     
     def _parse_json_fields(self, agent_data: Dict[str, Any]) -> Dict[str, Any]:
         """解析Agent数据中的JSON字段"""
         import json
-        
+
+        logger.info(f"🔥 [JSON-PARSE] 开始解析JSON字段，原始数据: {agent_data}")
+
         # 解析JSON字段
-        json_fields = ['tool_config', 'parameters', 'capabilities']
+        json_fields = ['tool_config', 'parameters', 'capabilities', 'tags']
         for field in json_fields:
             if field in agent_data and agent_data[field]:
+                logger.info(f"🔥 [JSON-PARSE] 处理字段 {field}, 原始值: {agent_data[field]}, 类型: {type(agent_data[field])}")
                 if isinstance(agent_data[field], str):
                     try:
-                        agent_data[field] = json.loads(agent_data[field])
-                    except (json.JSONDecodeError, ValueError):
+                        parsed_value = json.loads(agent_data[field])
+                        agent_data[field] = parsed_value
+                        logger.info(f"🔥 [JSON-PARSE] {field} 解析成功: {parsed_value}")
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.error(f"🔥 [JSON-PARSE] {field} 解析失败: {e}")
                         # 如果解析失败，设为默认值
-                        if field == 'capabilities':
+                        if field in ['capabilities', 'tags']:
                             agent_data[field] = []
                         else:
                             agent_data[field] = {}
-                        
+                        logger.info(f"🔥 [JSON-PARSE] {field} 设置为默认值: {agent_data[field]}")
+
         # 确保必要字段存在且为正确类型
         if 'tool_config' not in agent_data or not isinstance(agent_data['tool_config'], dict):
             agent_data['tool_config'] = {}
+            logger.info(f"🔥 [JSON-PARSE] tool_config 设置为默认值: {{}}")
         if 'parameters' not in agent_data or not isinstance(agent_data['parameters'], dict):
             agent_data['parameters'] = {}
+            logger.info(f"🔥 [JSON-PARSE] parameters 设置为默认值: {{}}")
         if 'capabilities' not in agent_data or not isinstance(agent_data['capabilities'], list):
             agent_data['capabilities'] = []
-            
+            logger.info(f"🔥 [JSON-PARSE] capabilities 设置为默认值: []")
+        if 'tags' not in agent_data or not isinstance(agent_data['tags'], list):
+            agent_data['tags'] = []
+            logger.info(f"🔥 [JSON-PARSE] tags 设置为默认值: []")
+
+        logger.info(f"🔥 [JSON-PARSE] 最终解析结果: {agent_data}")
+        logger.info(f"🔥 [JSON-PARSE] 最终tags值: {agent_data.get('tags')}")
+
         return agent_data
     
     async def get_agent_by_name(self, agent_name: str) -> Optional[Dict[str, Any]]:
@@ -98,34 +123,52 @@ class AgentRepository(BaseRepository[Agent]):
     async def update_agent(self, agent_id: uuid.UUID, agent_data: AgentUpdate) -> Optional[Dict[str, Any]]:
         """更新Agent"""
         try:
+            logger.info(f"🔥 [AGENT-UPDATE] 开始更新Agent: {agent_id}")
+            logger.info(f"🔥 [AGENT-UPDATE] 原始更新数据: {agent_data.model_dump(exclude_unset=True)}")
+
             # 检查Agent是否存在
             existing_agent = await self.get_by_id(agent_id, "agent_id")
             if not existing_agent:
                 raise ValueError(f"Agent {agent_id} 不存在")
-            
+
+            logger.info(f"🔥 [AGENT-UPDATE] 现有Agent数据: {existing_agent}")
+
             # 准备更新数据
             update_data = {}
-            
+
             if agent_data.agent_name is not None:
                 if agent_data.agent_name != existing_agent['agent_name']:
                     if await self.agent_name_exists(agent_data.agent_name):
                         raise ValueError(f"Agent名称 '{agent_data.agent_name}' 已存在")
                 update_data["agent_name"] = agent_data.agent_name
-            
+
             # 其他字段
-            for field in ['description', 'base_url', 'api_key', 'model_name', 
-                         'tool_config', 'parameters', 'is_autonomous']:
+            for field in ['description', 'base_url', 'api_key', 'model_name',
+                         'tool_config', 'parameters', 'is_autonomous', 'tags']:
                 value = getattr(agent_data, field, None)
                 if value is not None:
                     update_data[field] = value
-            
+                    if field == 'tags':
+                        logger.info(f"🔥 [AGENT-UPDATE] 准备更新tags: {value}")
+
             if not update_data:
                 return existing_agent
-            
+
+            logger.info(f"🔥 [AGENT-UPDATE] 构建的更新数据: {update_data}")
+
             result = await self.update(agent_id, update_data, "agent_id")
+
+            logger.info(f"🔥 [AGENT-UPDATE] 更新操作返回结果: {result}")
+
+            # 重新读取数据验证
+            verification_agent = await self.get_by_id(agent_id, "agent_id")
+            logger.info(f"🔥 [AGENT-UPDATE] 验证读取Agent数据: {verification_agent}")
+
             return result
         except Exception as e:
             logger.error(f"更新Agent失败: {e}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
             raise
     
     async def delete_agent(self, agent_id: uuid.UUID, soft_delete: bool = True) -> bool:
@@ -237,20 +280,40 @@ class AgentRepository(BaseRepository[Agent]):
     async def get_all_active_agents(self, limit: int = 100) -> List[Dict[str, Any]]:
         """获取所有激活Agent"""
         try:
+            logger.info(f"🔥 [GET-ALL-AGENTS] 开始获取所有激活Agent，限制: {limit}")
+
             query = """
-                SELECT agent_id, agent_name, description, base_url, 
-                       created_at, updated_at, is_deleted
-                FROM agent 
-                WHERE is_deleted = FALSE 
-                ORDER BY created_at DESC 
+                SELECT agent_id, agent_name, description, base_url, api_key,
+                       model_name, tool_config, parameters, is_autonomous,
+                       tags, created_at, updated_at, is_deleted
+                FROM agent
+                WHERE is_deleted = FALSE
+                ORDER BY created_at DESC
                 LIMIT $1
             """
             results = await self.db.fetch_all(query, limit)
-            # 为每个agent添加兼容性字段
+
+            logger.info(f"🔥 [GET-ALL-AGENTS] 查询到 {len(results)} 个Agent")
+
+            # 解析JSON字段并添加兼容性字段
+            processed_results = []
             for result in results:
-                result['capabilities'] = []
-                result['status'] = True  # 默认为激活状态
-            return results
+                logger.info(f"🔥 [GET-ALL-AGENTS] 处理Agent: {result.get('agent_name')}")
+                logger.info(f"🔥 [GET-ALL-AGENTS] 原始tags值: {result.get('tags')}")
+
+                # 解析JSON字段
+                parsed_result = self._parse_json_fields(dict(result))
+
+                # 添加兼容性字段
+                parsed_result['status'] = True  # 默认为激活状态
+
+                logger.info(f"🔥 [GET-ALL-AGENTS] 解析后tags值: {parsed_result.get('tags')}")
+                processed_results.append(parsed_result)
+
+            logger.info(f"🔥 [GET-ALL-AGENTS] 返回 {len(processed_results)} 个处理后的Agent")
+            return processed_results
         except Exception as e:
             logger.error(f"获取所有激活Agent失败: {e}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
             raise

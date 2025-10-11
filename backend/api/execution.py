@@ -31,6 +31,7 @@ class TaskSubmissionRequest(BaseModel):
     result_data: Optional[dict] = Field(default={}, description="任务结果数据")
     result_summary: Optional[str] = Field(None, description="结果摘要")
     attachment_file_ids: Optional[List[str]] = Field(default=[], description="附件文件ID列表")
+    selected_next_nodes: Optional[List[str]] = Field(default=[], description="用户选择的下游节点ID列表（条件边）")
 
 
 class TaskActionRequest(BaseModel):
@@ -1375,11 +1376,22 @@ async def submit_task_result(
         # 确保 result_data 不为 None
         result_data = request.result_data if request.result_data is not None else {}
         attachment_file_ids = request.attachment_file_ids or []
-        logger.info(f"  🔄 准备提交任务结果: result_data={result_data}, attachments={len(attachment_file_ids)}个")
-        
+        selected_next_nodes = request.selected_next_nodes or []
+
+        # 转换selected_next_nodes为UUID列表
+        selected_node_uuids = []
+        if selected_next_nodes:
+            try:
+                selected_node_uuids = [uuid.UUID(node_id) for node_id in selected_next_nodes]
+                logger.info(f"  🔀 用户选择的下游节点: {selected_node_uuids}")
+            except ValueError as e:
+                logger.warning(f"  ⚠️ 无效的节点ID格式: {e}")
+
+        logger.info(f"  🔄 准备提交任务结果: result_data={result_data}, attachments={len(attachment_file_ids)}个, selected_nodes={len(selected_node_uuids)}个")
+
         result = await execution_engine.submit_human_task_result(
-            task_id, current_user.user_id, 
-            result_data, request.result_summary
+            task_id, current_user.user_id,
+            result_data, request.result_summary, selected_node_uuids
         )
         
         # 🆕 处理附件关联
@@ -3775,7 +3787,182 @@ async def _process_mapping_for_template_graph(mapping_data: dict,
                         connection_repo,
                         include_template_structure
                     )
-        
+
     except Exception as e:
         logger.error(f"处理映射数据失败: {e}")
         raise
+
+
+@router.get("/tasks/{task_id}/conditional-edges")
+async def get_task_conditional_edges(
+    task_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """获取任务的条件边选择项"""
+    try:
+        logger.info(f"🔗 获取任务条件边: {task_id} by user {current_user.user_id}")
+
+        # 获取任务信息
+        task_instance_repo = TaskInstanceRepository()
+        task = await task_instance_repo.get_task_by_id(task_id)
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="任务不存在"
+            )
+
+        # 验证用户权限
+        assigned_user_id = task.get('assigned_user_id')
+        if str(assigned_user_id) != str(current_user.user_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权限访问此任务"
+            )
+
+        # 获取节点信息
+        node_instance_id = task.get('node_instance_id')
+        workflow_instance_id = task.get('workflow_instance_id')
+
+        if not node_instance_id or not workflow_instance_id:
+            return {
+                "success": True,
+                "data": {"conditional_edges": []},
+                "message": "任务不包含条件边信息"
+            }
+
+        # 获取节点实例信息
+        from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+        node_repo = NodeInstanceRepository()
+        node_instance = await node_repo.get_instance_by_id(node_instance_id)
+
+        if not node_instance:
+            return {
+                "success": True,
+                "data": {"conditional_edges": []},
+                "message": "节点实例不存在"
+            }
+
+        node_id = node_instance['node_id']
+
+        # 获取节点的下游连接
+        connections = await execution_engine._get_next_nodes(node_id)
+
+        # 过滤出条件边
+        conditional_edges = []
+        for connection in connections:
+            if connection.get('connection_type') == 'conditional':
+                condition_config = connection.get('condition_config', {})
+
+                # 检查是否需要用户选择
+                condition_type = condition_config.get('type', 'expression')
+                if condition_type == 'user_choice':
+                    conditional_edges.append({
+                        "to_node_id": str(connection['to_node_id']),
+                        "to_node_base_id": str(connection['to_node_base_id']),
+                        "to_node_name": connection.get('to_node_name', ''),
+                        "to_node_type": connection.get('to_node_type', ''),
+                        "choice_label": condition_config.get('choice_label', connection.get('to_node_name', '')),
+                        "choice_description": condition_config.get('choice_description', ''),
+                        "choice_key": condition_config.get('choice_key', 'default'),
+                        "is_required": condition_config.get('required', False),
+                        "multiple_selection": condition_config.get('multiple_selection', False)
+                    })
+
+        return {
+            "success": True,
+            "data": {
+                "conditional_edges": conditional_edges,
+                "task_id": str(task_id),
+                "node_instance_id": str(node_instance_id),
+                "total_conditional_edges": len(conditional_edges)
+            },
+            "message": f"找到 {len(conditional_edges)} 个条件边选择项"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取任务条件边失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取任务条件边失败: {str(e)}"
+        )
+
+
+@router.get("/workflows/{workflow_instance_id}/available-next-nodes/{node_instance_id}")
+async def get_available_next_nodes(
+    workflow_instance_id: uuid.UUID,
+    node_instance_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """获取节点的可选下游节点（用于条件边选择）"""
+    try:
+        logger.info(f"🔀 获取可选下游节点: workflow={workflow_instance_id}, node={node_instance_id}")
+
+        # 获取节点实例信息
+        from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+        node_repo = NodeInstanceRepository()
+        node_instance = await node_repo.get_instance_by_id(node_instance_id)
+
+        if not node_instance:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="节点实例不存在"
+            )
+
+        node_id = node_instance['node_id']
+
+        # 获取节点的所有下游连接
+        connections = await execution_engine._get_next_nodes(node_id)
+
+        # 构建可选节点列表
+        available_nodes = []
+        for connection in connections:
+            connection_type = connection.get('connection_type', 'normal')
+            condition_config = connection.get('condition_config', {})
+
+            node_info = {
+                "node_id": str(connection['to_node_id']),
+                "node_base_id": str(connection['to_node_base_id']),
+                "node_name": connection.get('to_node_name', ''),
+                "node_type": connection.get('to_node_type', ''),
+                "connection_type": connection_type,
+                "is_conditional": connection_type == 'conditional',
+                "requires_user_choice": False,
+                "choice_info": {}
+            }
+
+            # 如果是条件边，添加选择信息
+            if connection_type == 'conditional':
+                condition_type = condition_config.get('type', 'expression')
+
+                if condition_type == 'user_choice':
+                    node_info["requires_user_choice"] = True
+                    node_info["choice_info"] = {
+                        "choice_label": condition_config.get('choice_label', connection.get('to_node_name', '')),
+                        "choice_description": condition_config.get('choice_description', ''),
+                        "is_required": condition_config.get('required', False),
+                        "multiple_selection": condition_config.get('multiple_selection', False)
+                    }
+
+            available_nodes.append(node_info)
+
+        return {
+            "success": True,
+            "data": {
+                "available_nodes": available_nodes,
+                "workflow_instance_id": str(workflow_instance_id),
+                "node_instance_id": str(node_instance_id),
+                "total_nodes": len(available_nodes)
+            },
+            "message": f"找到 {len(available_nodes)} 个可选下游节点"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取可选下游节点失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取可选下游节点失败: {str(e)}"
+        )

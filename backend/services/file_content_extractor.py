@@ -468,6 +468,122 @@ class FileContentExtractor:
             }
         }
 
+    # ==================== 多模态AI支持方法 ====================
+
+    async def extract_content_for_multimodal(self, file_path: str, content_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        为多模态AI提取内容，图片返回base64编码
+
+        Args:
+            file_path: 文件路径
+            content_type: MIME类型
+
+        Returns:
+            包含content、content_type、is_image等信息的字典
+        """
+        try:
+            # 确定文件类型
+            if not content_type:
+                content_type, _ = mimetypes.guess_type(file_path)
+
+            file_ext = Path(file_path).suffix.lower().lstrip('.')
+
+            # 判断是否为图片文件
+            image_extensions = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp']
+            image_mime_types = ['image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/tiff', 'image/webp']
+
+            is_image = (file_ext in image_extensions) or (content_type in image_mime_types)
+
+            if is_image:
+                # 图片文件：返回base64编码
+                return await self._extract_image_as_base64(file_path, content_type)
+            else:
+                # 非图片文件：使用常规文本提取
+                result = await self.extract_content(file_path, content_type)
+                return {
+                    'success': result['success'],
+                    'content': result.get('content', ''),
+                    'content_type': 'text',
+                    'is_image': False,
+                    'extractor': result.get('extractor', 'text'),
+                    'error': result.get('error')
+                }
+
+        except Exception as e:
+            logger.error(f"多模态内容提取失败: {file_path}, 错误: {e}")
+            return {
+                'success': False,
+                'content': '',
+                'content_type': 'text',
+                'is_image': False,
+                'error': f"多模态内容提取失败: {str(e)}"
+            }
+
+    async def _extract_image_as_base64(self, file_path: str, content_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        将图片文件转换为base64编码
+
+        Args:
+            file_path: 图片文件路径
+            content_type: MIME类型
+
+        Returns:
+            包含base64编码的结果字典
+        """
+        try:
+            import base64
+
+            # 读取文件二进制数据
+            with open(file_path, 'rb') as f:
+                image_data = f.read()
+
+            # 转换为base64
+            base64_data = base64.b64encode(image_data).decode('utf-8')
+
+            # 确定MIME类型
+            if not content_type:
+                content_type, _ = mimetypes.guess_type(file_path)
+                if not content_type:
+                    # 根据文件扩展名推断
+                    ext = Path(file_path).suffix.lower()
+                    mime_map = {
+                        '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                        '.png': 'image/png', '.gif': 'image/gif',
+                        '.bmp': 'image/bmp', '.tiff': 'image/tiff',
+                        '.webp': 'image/webp'
+                    }
+                    content_type = mime_map.get(ext, 'image/jpeg')
+
+            # 获取图片基本信息
+            file_size = len(image_data)
+            file_name = os.path.basename(file_path)
+
+            logger.info(f"✅ [MULTIMODAL] 图片转base64成功: {file_name}, 大小: {file_size} bytes")
+
+            return {
+                'success': True,
+                'content': base64_data,
+                'content_type': content_type,
+                'is_image': True,
+                'extractor': 'base64_encoder',
+                'metadata': {
+                    'file_name': file_name,
+                    'file_size': file_size,
+                    'mime_type': content_type,
+                    'encoding': 'base64'
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"❌ [MULTIMODAL] 图片base64转换失败: {file_path}, 错误: {e}")
+            return {
+                'success': False,
+                'content': f"[图片处理失败: {os.path.basename(file_path)}]",
+                'content_type': 'text',
+                'is_image': False,
+                'error': f"图片base64转换失败: {str(e)}"
+            }
+
     # ==================== 工具方法 ====================
 
     def get_supported_formats(self) -> Dict[str, list]:

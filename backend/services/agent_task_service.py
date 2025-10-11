@@ -325,23 +325,34 @@ class AgentTaskService:
             
             # 构建用户消息（作为任务输入）
             logger.trace(f"✉️ [AGENT-PROCESS] 构建用户消息")
-            user_message = await self._build_user_message(task, context_info)
+            message_data = await self._build_user_message(task, context_info, agent)
+            user_message = message_data['text_message']
+            images = message_data.get('images', [])
+            has_multimodal = message_data.get('has_multimodal_content', False)
+
             logger.trace(f"   - 用户消息长度: {len(user_message)} 字符")
             logger.trace(f"   - 用户消息预览: {user_message[:200]}...")
-        
+            if has_multimodal:
+                logger.trace(f"   - 包含多模态内容: {len(images)} 个图片")
+
             # 整理成AI Client可接收的数据结构
             ai_client_data = {
                 'task_id': str(task_id),
                 'system_prompt': system_prompt,
                 'user_message': user_message,
+                'images': images,  # 新增：多模态图片数据
+                'has_multimodal_content': has_multimodal,  # 新增：多模态标识
                 'task_metadata': {
                     'task_title': task['task_title'],
+                    'task_description': task.get('task_description', '') or task.get('description', ''),
                     'estimated_duration': task.get('estimated_duration', 30)
                 }
             }
             
             logger.trace(f"📦 [AGENT-PROCESS] AI Client数据准备完成:")
             logger.trace(f"   - 任务ID: {ai_client_data['task_id']}")
+            logger.trace(f"   - 任务标题: {ai_client_data['task_metadata']['task_title']}")
+            logger.trace(f"   - 任务描述: {ai_client_data['task_metadata']['task_description'][:100] if ai_client_data['task_metadata']['task_description'] else '无'}")
             logger.trace(f"   - 系统Prompt: {len(ai_client_data['system_prompt'])} 字符")
             logger.trace(f"   - 用户消息: {len(ai_client_data['user_message'])} 字符")
             logger.trace(f"   - 元数据: {ai_client_data['task_metadata']}")
@@ -362,13 +373,17 @@ class AgentTaskService:
             logger.trace(f"   - 结束时间: {end_time.isoformat()}")
             logger.trace(f"   - 实际用时: {actual_duration} 分钟")
             
+            # 处理AI生成的图片内容（如果有）
+            logger.trace(f"🖼️ [AI-IMAGE] 检查AI响应中的图片内容")
+            await self._process_ai_generated_images(task_id, result, agent)
+
             # 更新任务状态为已完成（将结果转换为文本格式）
             logger.trace(f"💾 [AGENT-PROCESS] 更新任务状态为COMPLETED")
-            
+
             # 将结果转换为文本格式存储
             output_text = result['result'] if isinstance(result, dict) and 'result' in result else str(result)
             result_summary = output_text[:500] + '...' if len(output_text) > 500 else output_text  # 摘要为前500字符
-            
+
             complete_update = TaskInstanceUpdate(
                 status=TaskInstanceStatus.COMPLETED,
                 output_data=output_text,
@@ -474,13 +489,41 @@ class AgentTaskService:
             logger.error(f"   - 错误堆栈: {traceback.format_exc()}")
             raise
     
-    async def _process_with_openai_format(self, agent: Dict[str, Any], 
+    async def _process_with_openai_format(self, agent: Dict[str, Any],
                                         ai_client_data: Dict[str, Any]) -> Dict[str, Any]:
         """使用OpenAI规范格式处理任务"""
         try:
             task_title = ai_client_data['task_metadata']['task_title']
+            user_message = ai_client_data.get('user_message', '')
             logger.trace(f"🚀 [OPENAI-FORMAT] 使用OpenAI规范处理任务: {task_title}")
-            
+
+            # 检查是否为图像生成请求
+            is_image_request = self._is_image_generation_request(user_message)
+
+            if is_image_request:
+                logger.info(f"🎨 [IMAGE-GEN] 检测到图像生成请求")
+
+                # 检查Agent是否有图像生成权限
+                agent_tags = agent.get('tags', []) if isinstance(agent, dict) else []
+                has_image_permission = 'image-generation' in agent_tags
+
+                if not has_image_permission:
+                    logger.warning(f"⚠️ [IMAGE-GEN] Agent缺少图像生成权限，标签: {agent_tags}")
+                    return {
+                        'success': False,
+                        'error': '该Agent没有图像生成权限。请为Agent添加 "image-generation" 标签以启用图像生成功能。',
+                        'content': '抱歉，我无法生成图像。管理员需要为我添加图像生成权限。',
+                        'permission_required': 'image-generation'
+                    }
+
+                # 执行图像生成 - 传递任务元数据
+                logger.info(f"✅ [IMAGE-GEN] Agent具有图像生成权限，开始生成图像")
+                task_id = ai_client_data.get('task_id')
+                task_metadata = ai_client_data.get('task_metadata', {})
+                if task_id and isinstance(task_id, str):
+                    task_id = uuid.UUID(task_id)
+                return await self._handle_image_generation(user_message, agent, task_id, task_metadata)
+
             # 构建符合OpenAI API规范的请求数据
             logger.trace(f"🛠️ [OPENAI-FORMAT] 构建 OpenAI API 请求数据")
             
@@ -1093,15 +1136,28 @@ class AgentTaskService:
         except:
             return "数据"
     
-    async def _build_user_message(self, task: Dict[str, Any], context_info: str) -> str:
-        """构建用户消息（包含任务标题、上游节点信息和附件内容）"""
+    async def _build_user_message(self, task: Dict[str, Any], context_info: str, agent: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        构建用户消息（包含任务标题、上游节点信息和附件内容）
+        支持多模态内容传输
+
+        Returns:
+            包含text_message、images等的字典
+        """
         try:
             message_parts = []
 
-            # 任务标题
+            # 任务标题和描述
             logger.trace(f"上下文信息: {context_info}")
             task_title = task.get('task_title', '未命名任务')
+            task_description = task.get('task_description', '') or task.get('description', '')
+
             message_parts.append(f"任务：{task_title}")
+            if task_description and task_description.strip():
+                message_parts.append(f"任务描述：{task_description.strip()}")
+                logger.debug(f"✅ [消息构建] 添加任务描述: {task_description[:100]}...")
+            else:
+                logger.debug(f"⚠️ [消息构建] 任务缺少描述信息")
 
             # 添加上下文信息（上游节点信息）
             # 检查是否有有效的上下文信息
@@ -1126,17 +1182,24 @@ class AgentTaskService:
                 message_parts.append("\n当前没有上游节点数据。")
                 logger.warning(f"⚠️ [消息构建] 上下文信息无效或为空: '{context_info}'")
 
-            # 🆕 处理任务附件内容
+            # 处理任务附件内容（多模态支持）
+            images = []
             try:
                 task_id = task.get('task_instance_id')
                 if task_id:
                     logger.debug(f"📎 [附件处理] 开始处理任务附件, task_id: {task_id}")
-                    attachments_content = await self._process_task_attachments(uuid.UUID(task_id))
+                    attachment_result = await self._process_task_attachments(uuid.UUID(task_id), agent)
 
-                    if attachments_content:
-                        message_parts.append("\n附件内容：")
-                        message_parts.append(attachments_content)
-                        logger.debug(f"✅ [附件处理] 成功添加附件内容，长度: {len(attachments_content)}")
+                    if attachment_result['has_content']:
+                        if attachment_result['text_content']:
+                            message_parts.append("\n附件内容：")
+                            message_parts.append(attachment_result['text_content'])
+                            logger.debug(f"✅ [附件处理] 成功添加附件文本内容，长度: {len(attachment_result['text_content'])}")
+
+                        # 提取图片数据用于多模态传输
+                        images = attachment_result.get('images', [])
+                        if images:
+                            logger.debug(f"📷 [附件处理] 提取到 {len(images)} 个图片用于多模态传输")
                     else:
                         logger.debug(f"ℹ️ [附件处理] 当前任务无附件")
                 else:
@@ -1146,11 +1209,31 @@ class AgentTaskService:
                 # 附件处理失败不应该影响主流程
                 pass
 
-            return "\n".join(message_parts)
-            
+            text_message = "\n".join(message_parts)
+
+            # 添加用户消息构建完成的日志
+            logger.info(f"📝 [消息构建] === 用户消息构建完成 ===")
+            logger.info(f"📝 [消息构建] 任务标题: {task_title}")
+            logger.info(f"📝 [消息构建] 任务描述: {task_description if task_description else '无'}")
+            logger.info(f"📝 [消息构建] 最终用户消息长度: {len(text_message)} 字符")
+            logger.info(f"📝 [消息构建] 完整用户消息内容:")
+            logger.info(f"--- 开始 ---")
+            logger.info(text_message)
+            logger.info(f"--- 结束 ---")
+
+            return {
+                'text_message': text_message,
+                'images': images,
+                'has_multimodal_content': bool(images)
+            }
+
         except Exception as e:
             logger.error(f"构建用户消息失败: {e}")
-            return f"任务：{task.get('task_title', '未知任务')}"
+            return {
+                'text_message': f"任务：{task.get('task_title', '未知任务')}",
+                'images': [],
+                'has_multimodal_content': False
+            }
     
     async def _process_with_tools(self, agent: Dict[str, Any], 
                                 openai_request: Dict[str, Any], 
@@ -1295,38 +1378,1073 @@ class AgentTaskService:
                 'error': f'工具调用处理失败: {str(e)}'
             }
 
-    async def _process_task_attachments(self, task_id: uuid.UUID) -> str:
+    async def _process_task_attachments(self, task_id: uuid.UUID, agent: Dict[str, Any]) -> Dict[str, Any]:
         """
-        处理任务附件，提取内容并整合为AI可理解的文本
-        使用支持节点级别附件传递的提取器
+        处理任务附件，根据agent的能力提取内容
+        支持多模态AI的图片base64传输
 
         Args:
             task_id: 任务实例ID
+            agent: Agent信息，包含tags等能力标识
 
         Returns:
-            整合后的附件内容文本，如果没有附件则返回空字符串
+            包含文本内容和图片内容的字典
         """
         try:
             from .file_content_extractor import FileContentExtractor
 
             logger.debug(f"📎 [附件处理] 开始处理任务附件: {task_id}")
 
+            # 检查agent是否支持多模态
+            agent_tags = agent.get('tags', [])
+            if isinstance(agent_tags, str):
+                import json
+                try:
+                    agent_tags = json.loads(agent_tags)
+                except:
+                    agent_tags = []
+
+            supports_multimodal = 'multimodal' in agent_tags or 'vision' in agent_tags
+            logger.debug(f"🔍 [附件处理] Agent多模态支持: {supports_multimodal}, 标签: {agent_tags}")
+
             # 使用支持节点级别附件传递的提取器
             extractor = FileContentExtractor()
-            attachments_content = await extractor.extract_task_attachments(task_id)
 
-            if attachments_content:
-                logger.debug(f"✅ [附件处理] 成功提取附件内容，长度: {len(attachments_content)} 字符")
-                return attachments_content
+            if supports_multimodal:
+                # 多模态模式：分别处理文本和图片
+                result = await self._extract_multimodal_attachments(extractor, task_id)
+            else:
+                # 文本模式：所有附件转为文本
+                attachments_content = await extractor.extract_task_attachments(task_id)
+                result = {
+                    'has_content': bool(attachments_content),
+                    'text_content': attachments_content,
+                    'images': [],
+                    'mode': 'text_only'
+                }
+
+            if result['has_content']:
+                logger.debug(f"✅ [附件处理] 成功处理附件，模式: {result['mode']}")
+                if result.get('images'):
+                    logger.debug(f"📷 [附件处理] 包含 {len(result['images'])} 个图片")
             else:
                 logger.debug(f"📎 [附件处理] 任务 {task_id} 没有附件内容")
-                return ""
+
+            return result
 
         except Exception as e:
             logger.error(f"❌ [附件处理] 处理附件失败: {e}")
             import traceback
             logger.error(f"   错误堆栈: {traceback.format_exc()}")
-            return f"附件处理失败: {str(e)}"
+            return {
+                'has_content': False,
+                'text_content': f"附件处理失败: {str(e)}",
+                'images': [],
+                'mode': 'error'
+            }
+
+    async def _extract_multimodal_attachments(self, extractor: 'FileContentExtractor', task_id: uuid.UUID) -> Dict[str, Any]:
+        """
+        提取多模态附件内容
+
+        Args:
+            extractor: 文件内容提取器
+            task_id: 任务实例ID
+
+        Returns:
+            包含文本和图片的多模态内容
+        """
+        try:
+            # 获取任务的所有附件文件
+            from .file_association_service import FileAssociationService
+            file_service = FileAssociationService()
+
+            # 1. 首先查询直接关联的任务附件
+            task_files = await file_service.get_task_instance_files(task_id)
+
+            # 2. 如果没有直接任务附件，查询节点级别的附件
+            if not task_files:
+                try:
+                    from ..repositories.instance.task_instance_repository import TaskInstanceRepository
+                    task_repo = TaskInstanceRepository()
+                    task_info = await task_repo.get_task_by_id(task_id)
+
+                    if task_info and task_info.get('node_instance_id'):
+                        node_instance_id = task_info['node_instance_id']
+                        task_files = await file_service.get_node_instance_files(uuid.UUID(str(node_instance_id)))
+
+                except Exception as e:
+                    logger.warning(f"⚠️ [多模态附件] 查询节点附件失败: {e}")
+
+            if not task_files:
+                return {
+                    'has_content': False,
+                    'text_content': '',
+                    'images': [],
+                    'mode': 'multimodal'
+                }
+
+            logger.debug(f"📎 [多模态附件] 找到 {len(task_files)} 个文件")
+
+            text_parts = []
+            images = []
+
+            # 处理每个文件
+            for file_info in task_files:
+                try:
+                    file_path = file_info.get('file_path', '')
+                    file_name = file_info.get('file_name', '') or file_info.get('original_filename', 'unknown')
+                    content_type = file_info.get('content_type', '')
+
+                    logger.debug(f"📄 [多模态附件] 处理文件: {file_name}")
+
+                    if not os.path.exists(file_path):
+                        logger.warning(f"⚠️ [多模态附件] 文件不存在: {file_path}")
+                        text_parts.append(f"## 文件: {file_name}\n[文件不存在或路径无效]")
+                        continue
+
+                    # 使用多模态提取器
+                    result = await extractor.extract_content_for_multimodal(file_path, content_type)
+
+                    if result['success']:
+                        if result['is_image']:
+                            # 图片文件：添加到images列表
+                            images.append({
+                                'name': file_name,
+                                'content_type': result['content_type'],
+                                'base64_data': result['content'],
+                                'metadata': result.get('metadata', {})
+                            })
+                            # 在文本中也添加图片引用
+                            text_parts.append(f"## 图片: {file_name}\n[图片已以多模态方式处理]")
+                        else:
+                            # 文本文件：添加到文本内容
+                            text_parts.append(f"## 文件: {file_name}\n{result['content']}")
+
+                        logger.debug(f"✅ [多模态附件] 文件 {file_name} 处理成功")
+                    else:
+                        logger.warning(f"⚠️ [多模态附件] 文件 {file_name} 处理失败: {result.get('error', 'unknown')}")
+                        text_parts.append(f"## 文件: {file_name}\n[处理失败: {result.get('error', 'unknown')}]")
+
+                except Exception as e:
+                    logger.error(f"❌ [多模态附件] 处理单个文件失败: {e}")
+                    text_parts.append(f"## 文件: {file_name if 'file_name' in locals() else 'unknown'}\n[处理异常: {str(e)}]")
+
+            # 整合结果
+            text_content = "\n\n".join(text_parts) if text_parts else ""
+            has_content = bool(text_content or images)
+
+            logger.info(f"📊 [多模态附件] 处理完成 - 文本: {len(text_content)} 字符, 图片: {len(images)} 个")
+
+            return {
+                'has_content': has_content,
+                'text_content': text_content,
+                'images': images,
+                'mode': 'multimodal'
+            }
+
+        except Exception as e:
+            logger.error(f"❌ [多模态附件] 提取失败: {e}")
+            import traceback
+            logger.error(f"   错误堆栈: {traceback.format_exc()}")
+            return {
+                'has_content': False,
+                'text_content': f"多模态附件提取失败: {str(e)}",
+                'images': [],
+                'mode': 'error'
+            }
+
+    async def _process_ai_generated_images(self, task_id: uuid.UUID, ai_result: Dict[str, Any], agent: Dict[str, Any]) -> None:
+        """
+        处理AI生成的图片内容，保存到本地并关联到任务和节点实例
+
+        Args:
+            task_id: 任务实例ID
+            ai_result: AI响应结果
+            agent: Agent信息
+        """
+        try:
+            logger.info(f"🖼️ [AI-IMAGE-SAVE] 开始处理AI生成的图片内容")
+
+            # 检测AI响应中的图片内容
+            images_to_save = await self._extract_images_from_ai_response(ai_result)
+
+            if not images_to_save:
+                logger.debug(f"📝 [AI-IMAGE-SAVE] AI响应中没有检测到图片内容")
+                return
+
+            logger.info(f"🖼️ [AI-IMAGE-SAVE] 检测到 {len(images_to_save)} 个图片")
+
+            # 获取任务信息以便关联到节点实例
+            task_info = await self.task_repo.get_task_by_id(task_id)
+            node_instance_id = task_info.get('node_instance_id') if task_info else None
+
+            # 获取系统用户ID（用于标记为AI生成）
+            system_user_id = await self._get_system_user_id()
+
+            # 保存和关联每个图片
+            for i, image_data in enumerate(images_to_save):
+                try:
+                    logger.info(f"💾 [AI-IMAGE-SAVE] 处理第 {i+1} 个图片")
+
+                    # 保存图片到本地文件系统
+                    saved_file_info = await self._save_ai_generated_image(
+                        image_data,
+                        f"ai_generated_{i+1}",
+                        system_user_id
+                    )
+
+                    if saved_file_info:
+                        logger.info(f"✅ [AI-IMAGE-SAVE] 图片保存成功: {saved_file_info['filename']}")
+
+                        # 创建workflow_file记录
+                        file_record = await self._create_workflow_file_record(saved_file_info)
+
+                        if file_record:
+                            file_id = uuid.UUID(file_record['file_id'])
+
+                            # 只关联到任务实例 - 移除节点绑定
+                            await self._associate_image_to_task(task_id, file_id, system_user_id)
+
+                            logger.info(f"🔗 [AI-IMAGE-SAVE] 图片关联到任务完成: task={task_id}, file={file_id}")
+                        else:
+                            logger.error(f"❌ [AI-IMAGE-SAVE] 创建文件记录失败")
+                    else:
+                        logger.error(f"❌ [AI-IMAGE-SAVE] 图片保存失败")
+
+                except Exception as e:
+                    logger.error(f"❌ [AI-IMAGE-SAVE] 处理第 {i+1} 个图片失败: {e}")
+                    continue
+
+            logger.info(f"🎉 [AI-IMAGE-SAVE] AI生成图片处理完成")
+
+        except Exception as e:
+            logger.error(f"❌ [AI-IMAGE-SAVE] 处理AI生成图片失败: {e}")
+            import traceback
+            logger.error(f"   错误堆栈: {traceback.format_exc()}")
+
+    async def _extract_images_from_ai_response(self, ai_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        从AI响应中提取图片内容
+
+        Args:
+            ai_result: AI响应结果
+
+        Returns:
+            图片数据列表，每个包含base64_data、content_type等信息
+        """
+        images = []
+
+        try:
+            # 方案1: 检查结果文本中的base64图片
+            result_text = ai_result.get('result', '') if isinstance(ai_result, dict) else str(ai_result)
+
+            # 查找base64图片标识
+            import re
+
+            # 匹配 data:image/xxx;base64,xxxx 格式
+            base64_pattern = r'data:image/([^;]+);base64,([A-Za-z0-9+/=]+)'
+            matches = re.findall(base64_pattern, result_text)
+
+            for i, (image_type, base64_data) in enumerate(matches):
+                images.append({
+                    'base64_data': base64_data,
+                    'content_type': f'image/{image_type}',
+                    'source': 'inline_base64',
+                    'index': i
+                })
+                logger.debug(f"📷 [IMAGE-EXTRACT] 找到内联base64图片: image/{image_type}")
+
+            # 方案2: 检查是否有专门的图片字段（某些AI可能会单独返回图片）
+            if isinstance(ai_result, dict):
+                # 检查常见的图片字段名
+                image_fields = ['images', 'generated_images', 'image_outputs', 'pictures']
+                for field in image_fields:
+                    if field in ai_result and ai_result[field]:
+                        field_images = ai_result[field]
+                        if isinstance(field_images, list):
+                            for i, img in enumerate(field_images):
+                                if isinstance(img, dict):
+                                    images.append({
+                                        'base64_data': img.get('data', img.get('base64', '')),
+                                        'content_type': img.get('content_type', img.get('format', 'image/png')),
+                                        'source': f'field_{field}',
+                                        'index': i
+                                    })
+                                    logger.debug(f"📷 [IMAGE-EXTRACT] 找到字段图片: {field}[{i}]")
+
+            # 方案3: 检查OpenAI风格的工具调用结果（可能包含图片生成）
+            if isinstance(ai_result, dict) and 'message' in ai_result:
+                message = ai_result['message']
+                if isinstance(message, dict) and 'tool_calls' in message:
+                    # 这里可以扩展处理特定的图片生成工具调用结果
+                    pass
+
+            logger.info(f"🔍 [IMAGE-EXTRACT] 从AI响应中提取到 {len(images)} 个图片")
+            return images
+
+        except Exception as e:
+            logger.error(f"❌ [IMAGE-EXTRACT] 提取AI响应图片失败: {e}")
+            return []
+
+    async def _save_ai_generated_image(self, image_data: Dict[str, Any], base_filename: str,
+                                     uploaded_by: uuid.UUID) -> Optional[Dict[str, Any]]:
+        """
+        保存AI生成的图片到本地文件系统
+
+        Args:
+            image_data: 图片数据，包含base64_data、content_type等
+            base_filename: 基础文件名
+            uploaded_by: 上传者ID
+
+        Returns:
+            保存的文件信息字典
+        """
+        try:
+            import base64
+            import os
+            from pathlib import Path
+            import hashlib
+            from datetime import datetime
+
+            base64_data = image_data.get('base64_data', '')
+            content_type = image_data.get('content_type', 'image/png')
+
+            if not base64_data:
+                logger.error(f"❌ [AI-IMAGE-SAVE] 图片数据为空")
+                return None
+
+            # 确定文件扩展名
+            type_map = {
+                'image/png': '.png',
+                'image/jpeg': '.jpg',
+                'image/jpg': '.jpg',
+                'image/gif': '.gif',
+                'image/webp': '.webp',
+                'image/bmp': '.bmp'
+            }
+            file_ext = type_map.get(content_type, '.png')
+
+            # 生成唯一文件名
+            unique_id = str(uuid.uuid4())
+            filename = f"{base_filename}_{unique_id}{file_ext}"
+
+            # 确保上传目录存在
+            from ..config.settings import get_settings
+            settings = get_settings()
+            upload_root = Path(settings.upload_root_dir if hasattr(settings, 'upload_root_dir') else "./uploads")
+
+            now = datetime.now()
+            date_path = upload_root / str(now.year) / f"{now.month:02d}" / f"{now.day:02d}"
+            date_path.mkdir(parents=True, exist_ok=True)
+
+            file_path = date_path / filename
+
+            # 解码并保存图片
+            try:
+                image_bytes = base64.b64decode(base64_data)
+            except Exception as e:
+                logger.error(f"❌ [AI-IMAGE-SAVE] Base64解码失败: {e}")
+                return None
+
+            # 写入文件
+            with open(file_path, 'wb') as f:
+                f.write(image_bytes)
+
+            # 计算文件哈希
+            hash_sha256 = hashlib.sha256()
+            hash_sha256.update(image_bytes)
+            file_hash = hash_sha256.hexdigest()
+
+            file_size = len(image_bytes)
+
+            logger.info(f"💾 [AI-IMAGE-SAVE] 图片保存成功: {filename} ({file_size} bytes)")
+
+            return {
+                'filename': filename,
+                'original_filename': f"{base_filename}_ai_generated{file_ext}",
+                'file_path': str(file_path),
+                'file_size': file_size,
+                'content_type': content_type,
+                'file_hash': file_hash,
+                'uploaded_by': uploaded_by
+            }
+
+        except Exception as e:
+            logger.error(f"❌ [AI-IMAGE-SAVE] 保存AI图片失败: {e}")
+            return None
+
+    async def _create_workflow_file_record(self, file_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        创建workflow_file数据库记录
+
+        Args:
+            file_info: 文件信息字典
+
+        Returns:
+            创建的文件记录
+        """
+        try:
+            from .file_association_service import FileAssociationService
+            from ..models.file_attachment import WorkflowFileCreate
+
+            file_service = FileAssociationService()
+
+            # 创建文件记录对象
+            file_create = WorkflowFileCreate(
+                filename=file_info['filename'],
+                original_filename=file_info['original_filename'],
+                file_path=file_info['file_path'],
+                file_size=file_info['file_size'],
+                content_type=file_info['content_type'],
+                file_hash=file_info['file_hash'],
+                uploaded_by=file_info['uploaded_by']
+            )
+
+            # 创建数据库记录
+            file_record = await file_service.create_workflow_file(file_create)
+
+            if file_record:
+                logger.info(f"✅ [AI-IMAGE-SAVE] 文件记录创建成功: {file_record['file_id']}")
+                return file_record
+            else:
+                logger.error(f"❌ [AI-IMAGE-SAVE] 文件记录创建失败")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ [AI-IMAGE-SAVE] 创建文件记录失败: {e}")
+            return None
+
+    async def _associate_image_to_task(self, task_id: uuid.UUID, file_id: uuid.UUID,
+                                     uploaded_by: uuid.UUID) -> bool:
+        """
+        关联图片到任务实例
+
+        Args:
+            task_id: 任务实例ID
+            file_id: 文件ID
+            uploaded_by: 上传者ID
+
+        Returns:
+            是否成功关联
+        """
+        try:
+            from .file_association_service import FileAssociationService
+            from ..models.file_attachment import AttachmentType
+
+            file_service = FileAssociationService()
+
+            # 关联为输出附件
+            success = await file_service.associate_task_instance_file(
+                task_id,
+                file_id,
+                uploaded_by,
+                AttachmentType.OUTPUT
+            )
+
+            if success:
+                logger.info(f"✅ [AI-IMAGE-SAVE] 图片关联到任务成功: task={task_id}, file={file_id}")
+            else:
+                logger.error(f"❌ [AI-IMAGE-SAVE] 图片关联到任务失败: task={task_id}, file={file_id}")
+
+            return success
+
+        except Exception as e:
+            logger.error(f"❌ [AI-IMAGE-SAVE] 关联图片到任务失败: {e}")
+            return False
+
+    async def _associate_image_to_node_instance(self, node_instance_id: uuid.UUID,
+                                              file_id: uuid.UUID) -> bool:
+        """
+        关联图片到节点实例
+
+        Args:
+            node_instance_id: 节点实例ID
+            file_id: 文件ID
+
+        Returns:
+            是否成功关联
+        """
+        try:
+            from .file_association_service import FileAssociationService
+            from ..models.file_attachment import AttachmentType
+
+            file_service = FileAssociationService()
+
+            # 关联为输出附件
+            success = await file_service.associate_node_instance_file(
+                node_instance_id,
+                file_id,
+                AttachmentType.OUTPUT
+            )
+
+            if success:
+                logger.info(f"✅ [AI-IMAGE-SAVE] 图片关联到节点实例成功: node={node_instance_id}, file={file_id}")
+            else:
+                logger.error(f"❌ [AI-IMAGE-SAVE] 图片关联到节点实例失败: node={node_instance_id}, file={file_id}")
+
+            return success
+
+        except Exception as e:
+            logger.error(f"❌ [AI-IMAGE-SAVE] 关联图片到节点实例失败: {e}")
+            return False
+
+    async def _get_system_user_id(self) -> uuid.UUID:
+        """
+        获取系统用户ID，用于标记AI生成的文件
+
+        Returns:
+            系统用户ID
+        """
+        try:
+            # 查询系统用户
+            system_user_query = """
+                SELECT user_id FROM user
+                WHERE username = 'system' OR username = 'ai_agent'
+                LIMIT 1
+            """
+
+            result = await self.task_repo.db.fetch_one(system_user_query)
+
+            if result:
+                return uuid.UUID(str(result['user_id']))
+            else:
+                # 如果没有系统用户，创建一个
+                logger.warning(f"⚠️ [AI-IMAGE-SAVE] 未找到系统用户，创建默认系统用户")
+                return await self._create_system_user()
+
+        except Exception as e:
+            logger.error(f"❌ [AI-IMAGE-SAVE] 获取系统用户ID失败: {e}")
+            # 返回一个默认的UUID
+            return uuid.UUID('00000000-0000-0000-0000-000000000001')
+
+    async def _create_system_user(self) -> uuid.UUID:
+        """
+        创建系统用户
+
+        Returns:
+            系统用户ID
+        """
+        try:
+            system_user_id = uuid.uuid4()
+
+            create_user_query = """
+                INSERT INTO user (user_id, username, email, password_hash, status, created_at, updated_at)
+                VALUES (%s, 'ai_agent', 'ai@system.local', 'system_generated', 1, NOW(), NOW())
+                ON DUPLICATE KEY UPDATE user_id = user_id
+            """
+
+            await self.task_repo.db.execute(create_user_query, system_user_id)
+
+            logger.info(f"✅ [AI-IMAGE-SAVE] 系统用户创建成功: {system_user_id}")
+            return system_user_id
+
+        except Exception as e:
+            logger.error(f"❌ [AI-IMAGE-SAVE] 创建系统用户失败: {e}")
+            # 返回一个默认的UUID
+            return uuid.UUID('00000000-0000-0000-0000-000000000001')
+
+    def _is_image_generation_request(self, user_message: str) -> bool:
+        """
+        检测用户消息是否为图像生成请求
+
+        Args:
+            user_message: 用户消息内容
+
+        Returns:
+            是否为图像生成请求
+        """
+        # 图像生成关键词
+        image_keywords = [
+            '生成图片', '生成图像', '画', '画一个', '画一张', '绘制', '创建图片', '创建图像',
+            'generate image', 'generate picture', 'create image', 'draw', 'paint',
+            '制作图片', '生成', '图片', '图像', 'picture', 'image'
+        ]
+
+        # 转换为小写进行匹配
+        message_lower = user_message.lower()
+
+        # 检查是否包含图像生成关键词
+        for keyword in image_keywords:
+            if keyword in message_lower:
+                logger.debug(f"🔍 [IMAGE-DETECT] 匹配到关键词: {keyword}")
+                return True
+
+        return False
+
+    async def _handle_image_generation(self, user_message: str, agent: Dict[str, Any],
+                                     task_id: uuid.UUID = None, task_metadata: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        处理图像生成请求
+
+        Args:
+            user_message: 用户消息
+            agent: Agent信息
+            task_id: 任务ID（用于关联生成的图片）
+            task_metadata: 任务元数据（包含任务标题和描述）
+
+        Returns:
+            图像生成结果
+        """
+        try:
+            from ..utils.openai_client import openai_client
+
+            logger.info(f"🎨 [IMAGE-GEN] 开始处理图像生成请求")
+            logger.info(f"🎨 [IMAGE-GEN] === PROMPT处理流程 ===")
+            logger.info(f"🎨 [IMAGE-GEN] 1. 原始用户输入: {user_message}")
+            logger.info(f"🎨 [IMAGE-GEN] 2. 任务元数据: {task_metadata}")
+
+            # 提取图像描述提示
+            image_prompt = self._extract_image_prompt(user_message)
+            logger.info(f"🎨 [IMAGE-GEN] 3. 提取后的基础提示: {image_prompt}")
+
+            # 增强提示：加入任务上下文信息
+            if task_metadata:
+                task_title = task_metadata.get('task_title', '')
+                task_description = task_metadata.get('task_description', '')
+
+                logger.info(f"🎨 [IMAGE-GEN] 4. 任务上下文信息:")
+                logger.info(f"   - 任务标题: {task_title}")
+                logger.info(f"   - 任务描述: {task_description}")
+
+                if task_title or task_description:
+                    context_parts = []
+                    if task_title:
+                        context_parts.append(f"任务：{task_title}")
+                    if task_description:
+                        context_parts.append(f"描述：{task_description}")
+
+                    context_info = "，".join(context_parts)
+                    enhanced_prompt = f"{image_prompt}。任务背景：{context_info}"
+
+                    logger.info(f"🎨 [IMAGE-GEN] 5. 增强后的最终提示: {enhanced_prompt}")
+                    image_prompt = enhanced_prompt
+                else:
+                    logger.info(f"🎨 [IMAGE-GEN] 5. 无任务上下文，使用基础提示: {image_prompt}")
+            else:
+                logger.info(f"🎨 [IMAGE-GEN] 4. 无任务元数据，使用基础提示: {image_prompt}")
+            logger.info(f"🎨 [IMAGE-GEN] === API调用准备 ===")
+            logger.info(f"🎨 [IMAGE-GEN] 6. 发送到图像生成API的最终prompt: {image_prompt}")
+
+            # 调用图像生成API
+            image_result = await openai_client.generate_image(
+                prompt=image_prompt,
+                model="black-forest-labs/FLUX.1-schnell",  # SiliconFlow支持的模型
+                size="1024x1024",
+                quality="standard",
+                n=1
+            )
+
+            if image_result['success']:
+                logger.info(f"✅ [IMAGE-GEN] 图像生成成功")
+
+                # 下载并保存生成的图片
+                saved_images = await self._download_and_save_images(
+                    image_result.get('images', []),
+                    task_id,
+                    image_prompt
+                )
+
+                # 构建响应消息
+                response_content = f"我为您生成了图像：\n\n描述：{image_prompt}\n\n"
+
+                if saved_images:
+                    response_content += f"已保存 {len(saved_images)} 张图片到本地。\n"
+                    for i, saved_img in enumerate(saved_images):
+                        response_content += f"图片 {i+1}: {saved_img['filename']}\n"
+                else:
+                    # 如果保存失败，仍显示原始URL或Base64
+                    if 'images' in image_result and image_result['images']:
+                        first_image = image_result['images'][0]
+                        if 'url' in first_image:
+                            response_content += f"图像链接：{first_image['url']}\n\n"
+                            response_content += "注意：图像链接有效期为1小时，请及时保存。"
+                        elif 'b64_json' in first_image:
+                            response_content += f"data:image/png;base64,{first_image['b64_json']}"
+
+                return {
+                    'success': True,
+                    'content': response_content,
+                    'image_data': image_result.get('images', []),
+                    'saved_images': saved_images,
+                    'prompt': image_prompt,
+                    'model': image_result.get('model', 'unknown'),
+                    'usage': {'total_tokens': 100}  # 估算
+                }
+            else:
+                logger.error(f"❌ [IMAGE-GEN] 图像生成失败: {image_result.get('error')}")
+                return {
+                    'success': False,
+                    'error': f"图像生成失败: {image_result.get('error')}",
+                    'content': '抱歉，图像生成过程中出现了错误，请稍后再试。'
+                }
+
+        except Exception as e:
+            logger.error(f"❌ [IMAGE-GEN] 处理图像生成请求失败: {e}")
+            import traceback
+            logger.error(f"   错误堆栈: {traceback.format_exc()}")
+            return {
+                'success': False,
+                'error': str(e),
+                'content': '抱歉，图像生成功能暂时不可用，请稍后再试。'
+            }
+
+    def _extract_image_prompt(self, user_message: str) -> str:
+        """
+        从用户消息中提取图像描述提示
+
+        Args:
+            user_message: 用户消息
+
+        Returns:
+            图像描述提示
+        """
+        logger.info(f"🔍 [PROMPT-EXTRACT] === 提示词提取过程 ===")
+        logger.info(f"🔍 [PROMPT-EXTRACT] 原始输入: {user_message}")
+
+        # 移除常见的指令词
+        prompt_text = user_message
+
+        # 移除指令性词汇
+        remove_patterns = [
+            r'生成图片.*?[:：]\s*',
+            r'生成图像.*?[:：]\s*',
+            r'画.*?[:：]\s*',
+            r'绘制.*?[:：]\s*',
+            r'create\s+image.*?[:：]\s*',
+            r'generate\s+image.*?[:：]\s*',
+            r'请.*?画',
+            r'请.*?生成',
+            r'帮我.*?画',
+            r'帮我.*?生成'
+        ]
+
+        import re
+        for i, pattern in enumerate(remove_patterns):
+            before = prompt_text
+            prompt_text = re.sub(pattern, '', prompt_text, flags=re.IGNORECASE)
+            if before != prompt_text:
+                logger.info(f"🔍 [PROMPT-EXTRACT] 规则 {i+1} 匹配: {pattern}")
+                logger.info(f"   - 处理前: {before}")
+                logger.info(f"   - 处理后: {prompt_text}")
+
+        # 清理多余的空白字符
+        cleaned_prompt = prompt_text.strip()
+        logger.info(f"🔍 [PROMPT-EXTRACT] 清理空白字符后: {cleaned_prompt}")
+
+        # 如果提取后为空，使用默认提示
+        if not cleaned_prompt:
+            cleaned_prompt = "生成一个图像"
+            logger.info(f"🔍 [PROMPT-EXTRACT] 提取结果为空，使用默认提示: {cleaned_prompt}")
+
+        logger.info(f"🔍 [PROMPT-EXTRACT] 最终提取结果: {cleaned_prompt}")
+        return cleaned_prompt
+
+    async def _download_and_save_images(self, images: List[Dict[str, Any]],
+                                      task_id: uuid.UUID = None,
+                                      prompt: str = "") -> List[Dict[str, Any]]:
+        """
+        下载并保存图片到本地，支持URL和Base64格式
+
+        Args:
+            images: 图片数据列表
+            task_id: 任务ID
+            prompt: 图片生成提示
+
+        Returns:
+            保存的图片信息列表
+        """
+        saved_images = []
+
+        try:
+            for i, image_data in enumerate(images):
+                try:
+                    logger.info(f"📥 [IMAGE-SAVE] 处理第 {i+1} 张图片")
+
+                    # 确定图片来源和数据
+                    image_bytes = None
+                    original_url = None
+                    content_type = 'image/png'  # 默认格式
+
+                    if 'url' in image_data:
+                        # URL格式 - 需要下载
+                        original_url = image_data['url']
+                        logger.info(f"🌐 [IMAGE-SAVE] 从URL下载图片: {original_url[:100]}...")
+                        image_bytes = await self._download_image_from_url(original_url)
+                        if not image_bytes:
+                            logger.error(f"❌ [IMAGE-SAVE] URL图片下载失败")
+                            continue
+
+                    elif 'b64_json' in image_data:
+                        # Base64格式
+                        logger.info(f"📄 [IMAGE-SAVE] 处理Base64图片数据")
+                        image_bytes = await self._decode_base64_image(image_data['b64_json'])
+                        if not image_bytes:
+                            logger.error(f"❌ [IMAGE-SAVE] Base64图片解码失败")
+                            continue
+
+                    else:
+                        logger.warning(f"⚠️ [IMAGE-SAVE] 图片数据格式不支持: {list(image_data.keys())}")
+                        continue
+
+                    # 检测图片格式并转换为标准格式
+                    image_format, processed_bytes = await self._process_image_format(image_bytes)
+                    if not processed_bytes:
+                        logger.error(f"❌ [IMAGE-SAVE] 图片格式处理失败")
+                        continue
+
+                    # 保存图片到本地
+                    saved_info = await self._save_image_to_local(
+                        processed_bytes,
+                        image_format,
+                        f"generated_{i+1}",
+                        prompt
+                    )
+
+                    if saved_info:
+                        # 关联到任务和节点
+                        if task_id:
+                            await self._associate_saved_image_to_task(saved_info, task_id)
+
+                        saved_info['original_url'] = original_url
+                        saved_info['index'] = i
+                        saved_images.append(saved_info)
+                        logger.info(f"✅ [IMAGE-SAVE] 图片 {i+1} 保存成功: {saved_info['filename']}")
+                    else:
+                        logger.error(f"❌ [IMAGE-SAVE] 图片 {i+1} 保存失败")
+
+                except Exception as e:
+                    logger.error(f"❌ [IMAGE-SAVE] 处理第 {i+1} 张图片失败: {e}")
+                    continue
+
+            logger.info(f"🎉 [IMAGE-SAVE] 图片保存完成，成功保存 {len(saved_images)} 张")
+            return saved_images
+
+        except Exception as e:
+            logger.error(f"❌ [IMAGE-SAVE] 图片保存过程失败: {e}")
+            import traceback
+            logger.error(f"   错误堆栈: {traceback.format_exc()}")
+            return []
+
+    async def _download_image_from_url(self, url: str) -> Optional[bytes]:
+        """
+        从URL下载图片
+
+        Args:
+            url: 图片URL
+
+        Returns:
+            图片字节数据
+        """
+        try:
+            import aiohttp
+            import asyncio
+
+            logger.debug(f"🌐 [URL-DOWNLOAD] 开始下载图片: {url}")
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                    if response.status == 200:
+                        image_bytes = await response.read()
+                        logger.info(f"✅ [URL-DOWNLOAD] 图片下载成功，大小: {len(image_bytes)} bytes")
+                        return image_bytes
+                    else:
+                        logger.error(f"❌ [URL-DOWNLOAD] HTTP错误: {response.status}")
+                        return None
+
+        except Exception as e:
+            logger.error(f"❌ [URL-DOWNLOAD] 下载图片失败: {e}")
+            return None
+
+    async def _decode_base64_image(self, b64_data: str) -> Optional[bytes]:
+        """
+        解码Base64图片数据
+
+        Args:
+            b64_data: Base64编码的图片数据
+
+        Returns:
+            图片字节数据
+        """
+        try:
+            import base64
+
+            logger.debug(f"📄 [BASE64-DECODE] 开始解码Base64数据，长度: {len(b64_data)}")
+
+            # 移除可能的data URL前缀
+            if b64_data.startswith('data:'):
+                if ',' in b64_data:
+                    b64_data = b64_data.split(',', 1)[1]
+
+            image_bytes = base64.b64decode(b64_data)
+            logger.info(f"✅ [BASE64-DECODE] Base64解码成功，大小: {len(image_bytes)} bytes")
+            return image_bytes
+
+        except Exception as e:
+            logger.error(f"❌ [BASE64-DECODE] Base64解码失败: {e}")
+            return None
+
+    async def _process_image_format(self, image_bytes: bytes) -> tuple:
+        """
+        处理图片格式，转换为JPG或PNG
+
+        Args:
+            image_bytes: 原始图片字节
+
+        Returns:
+            (格式名称, 处理后的字节数据)
+        """
+        try:
+            from PIL import Image
+            import io
+
+            logger.debug(f"🔄 [FORMAT-PROCESS] 开始处理图片格式")
+
+            # 加载图片
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                # 检测原始格式
+                original_format = img.format
+                logger.debug(f"   - 原始格式: {original_format}")
+
+                # 转换为RGB模式（去除透明度）
+                if img.mode in ('RGBA', 'LA', 'P'):
+                    # 有透明度，保存为PNG
+                    target_format = 'PNG'
+                    if img.mode == 'P':
+                        img = img.convert('RGBA')
+                else:
+                    # 无透明度，保存为JPG（更小的文件）
+                    target_format = 'JPEG'
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+
+                # 保存处理后的图片
+                output_buffer = io.BytesIO()
+                if target_format == 'JPEG':
+                    img.save(output_buffer, format='JPEG', quality=95, optimize=True)
+                    file_ext = 'jpg'
+                else:
+                    img.save(output_buffer, format='PNG', optimize=True)
+                    file_ext = 'png'
+
+                processed_bytes = output_buffer.getvalue()
+
+                logger.info(f"✅ [FORMAT-PROCESS] 格式处理完成: {original_format} -> {target_format}")
+                logger.info(f"   - 原始大小: {len(image_bytes)} bytes")
+                logger.info(f"   - 处理后大小: {len(processed_bytes)} bytes")
+
+                return file_ext, processed_bytes
+
+        except Exception as e:
+            logger.error(f"❌ [FORMAT-PROCESS] 图片格式处理失败: {e}")
+            # 如果处理失败，返回原始数据和默认格式
+            return 'png', image_bytes
+
+    async def _save_image_to_local(self, image_bytes: bytes, file_ext: str,
+                                 base_name: str, prompt: str = "") -> Optional[Dict[str, Any]]:
+        """
+        保存图片到本地文件系统
+
+        Args:
+            image_bytes: 图片字节数据
+            file_ext: 文件扩展名
+            base_name: 基础文件名
+            prompt: 图片描述
+
+        Returns:
+            保存的文件信息
+        """
+        try:
+            import os
+            from pathlib import Path
+            import hashlib
+            from datetime import datetime
+
+            logger.debug(f"💾 [LOCAL-SAVE] 开始保存图片到本地")
+
+            # 生成唯一文件名
+            unique_id = str(uuid.uuid4())
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{base_name}_{timestamp}_{unique_id[:8]}.{file_ext}"
+
+            # 创建保存目录
+            upload_root = Path("uploads")
+            now = datetime.now()
+            date_path = upload_root / str(now.year) / f"{now.month:02d}" / f"{now.day:02d}"
+            date_path.mkdir(parents=True, exist_ok=True)
+
+            file_path = date_path / filename
+
+            # 写入文件
+            with open(file_path, 'wb') as f:
+                f.write(image_bytes)
+
+            # 计算文件哈希
+            hash_sha256 = hashlib.sha256()
+            hash_sha256.update(image_bytes)
+            file_hash = hash_sha256.hexdigest()
+
+            file_size = len(image_bytes)
+
+            logger.info(f"💾 [LOCAL-SAVE] 图片保存成功: {filename} ({file_size} bytes)")
+
+            # 获取系统用户ID
+            system_user_id = await self._get_system_user_id()
+
+            return {
+                'filename': filename,
+                'original_filename': f"{base_name}_ai_generated.{file_ext}",
+                'file_path': str(file_path),
+                'content_type': f'image/{file_ext}',
+                'file_size': file_size,
+                'file_hash': file_hash,
+                'uploaded_by': system_user_id,
+                'description': prompt[:200] if prompt else f"AI生成的图片: {base_name}",
+                'tags': ['ai-generated', 'image-generation']
+            }
+
+        except Exception as e:
+            logger.error(f"❌ [LOCAL-SAVE] 保存图片到本地失败: {e}")
+            return None
+
+    async def _associate_saved_image_to_task(self, image_info: Dict[str, Any],
+                                           task_id: uuid.UUID) -> bool:
+        """
+        关联保存的图片到任务和节点
+
+        Args:
+            image_info: 图片信息
+            task_id: 任务ID
+
+        Returns:
+            是否成功关联
+        """
+        try:
+            logger.info(f"🔗 [IMAGE-ASSOC] 开始关联图片到任务: {task_id}")
+
+            # 创建workflow_file记录
+            file_record = await self._create_workflow_file_record(image_info)
+            if not file_record:
+                logger.error(f"❌ [IMAGE-ASSOC] 创建文件记录失败")
+                return False
+
+            file_id = uuid.UUID(file_record['file_id'])
+            system_user_id = image_info['uploaded_by']
+
+            # 关联到任务实例
+            task_success = await self._associate_image_to_task(task_id, file_id, system_user_id)
+
+            # 只关联到任务实例 - 移除节点绑定
+            if task_success:
+                logger.info(f"✅ [IMAGE-ASSOC] 图片关联成功: file={file_id}, task={task_id}")
+            else:
+                logger.error(f"❌ [IMAGE-ASSOC] 图片关联失败")
+
+            return task_success
+
+        except Exception as e:
+            logger.error(f"❌ [IMAGE-ASSOC] 关联图片到任务失败: {e}")
+            return False
 
 # 全局Agent任务服务实例
 agent_task_service = AgentTaskService()
