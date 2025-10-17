@@ -82,14 +82,8 @@ class WorkflowService:
             # 验证输入数据
             if not workflow_data.name or len(workflow_data.name.strip()) < 1:
                 raise ValidationError("工作流名称不能为空", "name")
-            
-            # 检查同名工作流是否已存在（同一创建者）
-            if await self.workflow_repository.workflow_name_exists(
-                workflow_data.name, workflow_data.creator_id
-            ):
-                raise ConflictError(f"工作流名称 '{workflow_data.name}' 已存在")
-            
-            # 创建工作流
+
+            # 创建工作流（允许同名，因为ID唯一即可保证区分）
             workflow_record = await self.workflow_repository.create_workflow(workflow_data)
             if not workflow_record:
                 raise ValueError("创建工作流失败")
@@ -171,14 +165,7 @@ class WorkflowService:
             if not existing_workflow:
                 raise ValueError("工作流不存在")
             
-            # 验证名称冲突（如果更新了名称）
-            if workflow_data.name and workflow_data.name != existing_workflow['name']:
-                if await self.workflow_repository.workflow_name_exists(
-                    workflow_data.name, existing_workflow['creator_id']
-                ):
-                    raise ConflictError(f"工作流名称 '{workflow_data.name}' 已存在")
-            
-            # 更新工作流
+            # 更新工作流（允许同名，因为ID唯一即可保证区分）
             updated_workflow = await self.workflow_repository.update_workflow(
                 workflow_base_id, workflow_data, editor_user_id
             )

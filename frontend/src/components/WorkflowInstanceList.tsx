@@ -4,6 +4,7 @@ import { PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined, 
 
 // 导入统一的节点组件
 import { CustomInstanceNode } from './CustomInstanceNode';
+import FilePreview from './FilePreview';
 import ReactFlow, {
   Node,
   Edge,
@@ -130,7 +131,11 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
   const [pendingAction, setPendingAction] = useState<{instanceId: string; instanceName: string; action: 'cancel' | 'delete'} | null>(null);
   const [nodesDetail, setNodesDetail] = useState<any>(null);
   const [loadingNodesDetail, setLoadingNodesDetail] = useState(false);
-  
+
+  // 文件预览状态
+  const [previewModalVisible, setPreviewModalVisible] = useState(false);
+  const [previewFile, setPreviewFile] = useState<any>(null);
+
   // ReactFlow states
   const [activeTab, setActiveTab] = useState('detail');
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -152,6 +157,59 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
       console.log('🔍 [WorkflowInstanceList] Node expansion changed:', nodeId, isExpanded);
     }
   });
+
+  // Linus式简洁设计：判断文件是否支持预览
+  const isPreviewSupported = (contentType: string): boolean => {
+    if (!contentType) return false;
+
+    const supportedTypes = [
+      'text/', 'image/', 'application/pdf',
+      'application/json', 'application/xml',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/msword', 'application/vnd.ms-excel'
+    ];
+
+    return supportedTypes.some(type => contentType.startsWith(type) || contentType === type);
+  };
+
+  // 处理文件预览
+  const handlePreviewFile = (attachment: any) => {
+    // 转换attachment为FileInfo格式
+    const fileInfo = {
+      file_id: attachment.file_id,
+      filename: attachment.filename || attachment.original_filename,
+      original_filename: attachment.original_filename || attachment.filename,
+      content_type: attachment.content_type || 'application/octet-stream',
+      file_size: attachment.file_size || 0,
+      created_at: attachment.created_at || new Date().toISOString(),
+      uploaded_by_name: attachment.uploaded_by_name,
+      file_path: attachment.file_path,
+      file_hash: attachment.file_hash,
+      uploaded_by: attachment.uploaded_by,
+      updated_at: attachment.updated_at
+    };
+
+    setPreviewFile(fileInfo);
+    setPreviewModalVisible(true);
+  };
+
+  // 处理预览模态框关闭
+  const handleClosePreview = () => {
+    setPreviewModalVisible(false);
+    setPreviewFile(null);
+  };
+
+  // 处理文件下载
+  const handleDownloadFile = async (fileId: string) => {
+    try {
+      const { FileAPI } = await import('../services/fileAPI');
+      await FileAPI.downloadFile(fileId);
+    } catch (error) {
+      console.error('文件下载失败:', error);
+      message.error('文件下载失败');
+    }
+  };
 
 
 
@@ -1306,28 +1364,41 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                                     )}
                                   </div>
                                 </div>
-                                <button
-                                  style={{
-                                    fontSize: '10px',
-                                    padding: '3px 8px',
-                                    backgroundColor: '#1890ff',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '3px',
-                                    cursor: 'pointer',
-                                    marginLeft: '10px'
-                                  }}
-                                  onClick={async () => {
-                                    try {
-                                      const { FileAPI } = await import('../services/fileAPI');
-                                      await FileAPI.downloadFile(attachment.file_id);
-                                    } catch (error) {
-                                      console.error('文件下载失败:', error);
-                                    }
-                                  }}
-                                >
-                                  下载
-                                </button>
+                                <div style={{ display: 'flex', gap: '4px' }}>
+                                  {/* 预览按钮 - 仅支持预览的文件类型显示 */}
+                                  {isPreviewSupported(attachment.content_type) && (
+                                    <button
+                                      style={{
+                                        fontSize: '10px',
+                                        padding: '3px 8px',
+                                        backgroundColor: '#52c41a',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '3px',
+                                        cursor: 'pointer'
+                                      }}
+                                      onClick={() => handlePreviewFile(attachment)}
+                                      title="预览文件"
+                                    >
+                                      预览
+                                    </button>
+                                  )}
+                                  {/* 下载按钮 */}
+                                  <button
+                                    style={{
+                                      fontSize: '10px',
+                                      padding: '3px 8px',
+                                      backgroundColor: '#1890ff',
+                                      color: 'white',
+                                      border: 'none',
+                                      borderRadius: '3px',
+                                      cursor: 'pointer'
+                                    }}
+                                    onClick={() => handleDownloadFile(attachment.file_id)}
+                                  >
+                                    下载
+                                  </button>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -1733,28 +1804,41 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
                           )}
                         </div>
                       </div>
-                      <button
-                        style={{
-                          fontSize: '11px',
-                          padding: '4px 10px',
-                          backgroundColor: '#1890ff',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                          marginLeft: '12px'
-                        }}
-                        onClick={async () => {
-                          try {
-                            const { FileAPI } = await import('../services/fileAPI');
-                            await FileAPI.downloadFile(attachment.file_id);
-                          } catch (error) {
-                            console.error('文件下载失败:', error);
-                          }
-                        }}
-                      >
-                        下载
-                      </button>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        {/* 预览按钮 - 仅支持预览的文件类型显示 */}
+                        {isPreviewSupported(attachment.content_type) && (
+                          <button
+                            style={{
+                              fontSize: '11px',
+                              padding: '4px 10px',
+                              backgroundColor: '#52c41a',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer'
+                            }}
+                            onClick={() => handlePreviewFile(attachment)}
+                            title="预览文件"
+                          >
+                            预览
+                          </button>
+                        )}
+                        {/* 下载按钮 */}
+                        <button
+                          style={{
+                            fontSize: '11px',
+                            padding: '4px 10px',
+                            backgroundColor: '#1890ff',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => handleDownloadFile(attachment.file_id)}
+                        >
+                          下载
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1829,6 +1913,14 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
           </p>
         </div>
       </Modal>
+
+      {/* 文件预览模态框 */}
+      <FilePreview
+        file={previewFile}
+        visible={previewModalVisible}
+        onClose={handleClosePreview}
+        onDownload={(file) => handleDownloadFile(file.file_id)}
+      />
     </>
   );
 };

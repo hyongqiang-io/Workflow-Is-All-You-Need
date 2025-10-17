@@ -82,6 +82,8 @@ from backend.api.context_health import router as context_health_router
 from backend.api.feishu import router as feishu_router
 from backend.api.feishu_bot import router as feishu_bot_router
 from backend.api.files import router as files_router
+from backend.api.tab_completion import router as tab_completion_router
+from backend.api.workflow_store import router as workflow_store_router
 from backend.utils.database import initialize_database, close_database
 from backend.utils.exceptions import BusinessException, ErrorResponse
 from backend.services.execution_service import execution_engine
@@ -458,6 +460,8 @@ logger.trace("飞书OAuth路由注册完成")
 # 注册文件管理路由
 logger.trace("注册文件管理路由...")
 app.include_router(files_router, tags=["文件管理"])
+app.include_router(tab_completion_router, tags=["Tab补全"])
+app.include_router(workflow_store_router, prefix="/api", tags=["工作流商店"])
 logger.trace("文件管理路由注册完成")
 
 logger.trace("所有路由注册完成")

@@ -304,8 +304,16 @@ async def get_workflow_status(
         # 检查是否需要主动更新工作流状态
         current_status = result.get("status")
         should_trigger_completion_check = False
-        
-        if total_nodes > 0 and completed_nodes == total_nodes and failed_nodes == 0:
+
+        # 🆕 检查是否有END节点完成 - 如果有，立即触发完成检查
+        end_nodes_completed = sum(1 for node in node_instances if node.get('node_type') == 'end' and node.get('status') == 'completed')
+
+        if end_nodes_completed > 0:
+            # 有END节点完成
+            if current_status not in ['completed', 'COMPLETED']:
+                logger.info(f"🔄 检测到END节点已完成但工作流状态为 {current_status}，主动触发完成检查")
+                should_trigger_completion_check = True
+        elif total_nodes > 0 and completed_nodes == total_nodes and failed_nodes == 0:
             # 所有节点都完成且没有失败节点
             if current_status not in ['completed', 'COMPLETED']:
                 logger.info(f"🔄 检测到所有节点已完成但工作流状态为 {current_status}，主动触发完成检查")
@@ -1431,6 +1439,114 @@ async def submit_task_result(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"提交任务结果失败: {str(e)}"
+        )
+
+
+@router.get("/tasks/{task_id}/conditional-downstream-nodes")
+async def get_conditional_downstream_nodes(
+    task_id: uuid.UUID,
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """获取任务的下游条件节点列表"""
+    try:
+        # 获取任务信息
+        from ..repositories.instance.task_instance_repository import TaskInstanceRepository
+        task_repo = TaskInstanceRepository()
+        task = await task_repo.get_task_by_id(task_id)
+
+        if not task:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="任务不存在"
+            )
+
+        node_instance_id = task['node_instance_id']
+        workflow_instance_id = task['workflow_instance_id']
+
+        # 查询当前节点的下游条件连接
+        from ..repositories.node.node_repository import NodeRepository
+        node_repo = NodeRepository()
+
+        downstream_query = """
+        SELECT DISTINCT
+            target_node.node_id as downstream_node_id,
+            target_node.name as downstream_node_name,
+            target_node.type as downstream_node_type,
+            target_node.task_description as downstream_node_description,
+            nc.connection_type,
+            nc.condition_config,
+            target_ni.node_instance_id as downstream_node_instance_id,
+            target_ni.status as downstream_node_status
+        FROM node_instance current_ni
+        JOIN node current_node ON current_ni.node_id = current_node.node_id
+        JOIN node_connection nc ON current_node.node_id = nc.from_node_id
+        JOIN node target_node ON nc.to_node_id = target_node.node_id
+        JOIN node_instance target_ni ON target_node.node_id = target_ni.node_id
+            AND target_ni.workflow_instance_id = current_ni.workflow_instance_id
+        WHERE current_ni.node_instance_id = $1
+        AND current_ni.is_deleted = FALSE
+        AND target_ni.is_deleted = FALSE
+        ORDER BY target_node.name
+        """
+
+        downstream_nodes = await node_repo.db.fetch_all(downstream_query, node_instance_id)
+
+        # 格式化结果
+        conditional_nodes = []
+        for node in downstream_nodes:
+            # 解析条件配置
+            condition_config = {}
+            if node['condition_config']:
+                try:
+                    condition_config = json.loads(node['condition_config']) if isinstance(node['condition_config'], str) else node['condition_config']
+                except:
+                    condition_config = {}
+
+            # 🔧 改进：区分边类型，为所有边提供选择界面
+            connection_type = node['connection_type'] or 'normal'
+
+            # 生成条件描述
+            if connection_type == 'conditional' and condition_config:
+                condition_description = condition_config.get('description', '条件边')
+            else:
+                condition_description = '固定边（始终执行）'
+
+            conditional_nodes.append({
+                'node_id': str(node['downstream_node_id']),
+                'node_instance_id': str(node['downstream_node_instance_id']),
+                'name': node['downstream_node_name'],
+                'type': node['downstream_node_type'],
+                'description': node['downstream_node_description'],
+                'connection_type': connection_type,
+                'condition_description': condition_description,
+                'status': node['downstream_node_status'],
+                'can_trigger': True,  # 🔧 允许触发所有节点（包括已完成的）
+                'is_conditional': connection_type == 'conditional',
+                'can_retrigger': node['downstream_node_status'] == 'completed'  # 标识是否为重新触发
+            })
+
+        logger.info(f"📋 获取任务 {task_id} 的下游节点: 找到 {len(conditional_nodes)} 个")
+        logger.info(f"   - 固定边: {len([n for n in conditional_nodes if not n['is_conditional']])} 个")
+        logger.info(f"   - 条件边: {len([n for n in conditional_nodes if n['is_conditional']])} 个")
+
+        return {
+            "success": True,
+            "data": {
+                "task_id": str(task_id),
+                "conditional_downstream_nodes": conditional_nodes,
+                "total_downstream_nodes": len(conditional_nodes),
+                "has_conditional_edges": any(n['is_conditional'] for n in conditional_nodes),
+                "has_fixed_edges": any(not n['is_conditional'] for n in conditional_nodes)
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 获取下游条件节点失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取下游条件节点失败: {str(e)}"
         )
 
 

@@ -382,22 +382,33 @@ class MySQLConnectionWrapper:
     def __init__(self, mysql_connection):
         self.connection = mysql_connection
     
-    async def execute(self, query: str, *args) -> str:
+    async def execute(self, query: str, params=None) -> str:
         """执行SQL - PostgreSQL兼容接口"""
         db_manager = DatabaseManager()
         converted_query = db_manager._convert_postgresql_query(query)
-        
+
         async with self.connection.cursor() as cursor:
-            affected_rows = await cursor.execute(converted_query, args)
+            if params is None:
+                affected_rows = await cursor.execute(converted_query)
+            else:
+                # 如果params是元组或列表，直接传递；如果是单个参数，包装成元组
+                if isinstance(params, (tuple, list)):
+                    affected_rows = await cursor.execute(converted_query, params)
+                else:
+                    affected_rows = await cursor.execute(converted_query, (params,))
             return f"UPDATE {affected_rows}" if affected_rows > 0 else "UPDATE 0"
     
     async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
         """获取单行 - PostgreSQL兼容接口"""
         db_manager = DatabaseManager()
         converted_query = db_manager._convert_postgresql_query(query)
-        
+
         async with self.connection.cursor(aiomysql.DictCursor) as cursor:
-            await cursor.execute(converted_query, args)
+            # 修复参数传递：如果有参数则传递，否则不传递参数
+            if args:
+                await cursor.execute(converted_query, args)
+            else:
+                await cursor.execute(converted_query)
             result = await cursor.fetchone()
             return result
     
@@ -405,11 +416,15 @@ class MySQLConnectionWrapper:
         """获取多行 - PostgreSQL兼容接口"""
         db_manager = DatabaseManager()
         converted_query = db_manager._convert_postgresql_query(query)
-        
+
         async with self.connection.cursor(aiomysql.DictCursor) as cursor:
-            await cursor.execute(converted_query, args)
-            results = await cursor.fetchall()
-            return results or []
+            # 修复参数传递：如果有参数则传递，否则不传递参数
+            if args:
+                await cursor.execute(converted_query, args)
+            else:
+                await cursor.execute(converted_query)
+            result = await cursor.fetchall()
+            return result
     
     async def fetchval(self, query: str, *args) -> Any:
         """获取单个值 - PostgreSQL兼容接口"""
@@ -457,4 +472,9 @@ async def close_database() -> None:
 
 def get_db_manager() -> DatabaseManager:
     """获取数据库管理器实例"""
+    return db_manager
+
+
+def get_database() -> DatabaseManager:
+    """获取数据库实例 - 兼容旧版本API"""
     return db_manager

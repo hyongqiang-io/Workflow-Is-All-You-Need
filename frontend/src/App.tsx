@@ -18,6 +18,8 @@ import Profile from './pages/Profile/Profile';
 import TaskFlow from './pages/Workflow/TaskFlow';
 import AgentManagement from './pages/Agent/AgentManagement';
 import Help from './pages/Main/Help';
+import WorkflowStore from './pages/Store/WorkflowStore';
+import WorkflowStoreDetail from './pages/Store/WorkflowStoreDetail';
 
 // 组件
 import ProtectedRoute from './components/ProtectedRoute';
@@ -50,6 +52,8 @@ function App() {
             <Route path="todo" element={<Todo />} />
             <Route path="agent" element={<AgentManagement />} />
             <Route path="help" element={<Help />} />
+            <Route path="store" element={<WorkflowStore />} />
+            <Route path="store/workflow/:storeId" element={<WorkflowStoreDetail />} />
           </Route>
           <Route path="*" element={<Navigate to="/login" />} />
         </Routes>

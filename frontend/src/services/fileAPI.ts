@@ -70,6 +70,19 @@ export interface FileSearchParams {
   sort_order?: 'asc' | 'desc';
 }
 
+export interface FilePreviewData {
+  preview_type: 'text' | 'image' | 'pdf_text' | 'pdf_viewer' | 'office_text' | 'metadata' | 'error';
+  content: string | any;
+  file_url?: string;
+  content_type?: string;
+  encoding?: string;
+  truncated?: boolean;
+  file_size?: number;
+  error?: string;
+  extractor?: string;
+  metadata?: any;
+}
+
 export interface FileStatistics {
   total_files: number;
   total_size: number;
@@ -189,6 +202,19 @@ export class FileAPI {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('文件下载失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 预览文件内容
+   */
+  static async previewFile(fileId: string): Promise<FilePreviewData> {
+    try {
+      const response = await fileAPI.get(`/files/${fileId}/preview`);
+      return response.data.data;
+    } catch (error) {
+      console.error('文件预览失败:', error);
       throw error;
     }
   }

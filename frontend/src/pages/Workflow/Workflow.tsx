@@ -1,23 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Button, Table, Tag, Modal, Form, Input, Select, Space, message, Row, Col, Typography, Empty, Drawer } from 'antd';
-import { 
-  PlusOutlined, 
-  PlayCircleOutlined, 
-  EditOutlined, 
+import { Card, Button, Table, Tag, Modal, Form, Input, Select, Space, message, Row, Col, Typography, Empty, Drawer, Switch } from 'antd';
+import {
+  PlusOutlined,
+  PlayCircleOutlined,
+  EditOutlined,
   DeleteOutlined,
   ReloadOutlined,
   HistoryOutlined,
   DownloadOutlined,
   UploadOutlined,
-  RobotOutlined
+  RobotOutlined,
+  ExperimentOutlined,
+  AppstoreOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { workflowAPI, executionAPI, aiWorkflowAPI } from '../../services/api';
 import { useAuthStore } from '../../stores/authStore';
 import WorkflowDesigner from '../../components/WorkflowDesigner';
+import TabCompletionEnhancedDesigner from '../../components/TabCompletionEnhancedDesigner';
+import GhostEnhancedDesigner from '../../components/GhostEnhancedDesigner';
 import WorkflowInstanceList from '../../components/WorkflowInstanceList';
 import WorkflowImportExport from '../../components/WorkflowImportExport';
 import AIWorkflowGenerator from '../../components/AIWorkflowGenerator';
+import PublishWorkflowModal from '../../components/PublishWorkflowModal';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -52,12 +57,23 @@ const WorkflowPage: React.FC = () => {
   const [importExportMode, setImportExportMode] = useState<'export' | 'import'>('export');
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowItem | null>(null);
 
+  // 发布到商店相关状态
+  const [publishModalVisible, setPublishModalVisible] = useState(false);
+  const [publishWorkflow, setPublishWorkflow] = useState<WorkflowItem | null>(null);
+
   // AI生成相关状态
   const [aiGenerateVisible, setAiGenerateVisible] = useState(false);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiForm] = Form.useForm();
   const [aiGeneratorVisible, setAiGeneratorVisible] = useState(false);
   const [aiGeneratedData, setAiGeneratedData] = useState<any>(null);
+
+  // Tab补全相关状态
+  // Tab补全和幽灵编辑模式
+  const [designerMode, setDesignerMode] = useState<'normal' | 'tab_completion' | 'ghost_editing'>('normal');
+
+  // 兼容旧版本（保留旧状态以防其他地方使用）
+  const [tabCompletionEnabled, setTabCompletionEnabled] = useState(false);
 
   useEffect(() => {
     loadWorkflows();
@@ -437,6 +453,25 @@ const WorkflowPage: React.FC = () => {
     loadWorkflows();
   };
 
+  // 发布到商店处理函数
+  const handlePublish = (workflow: WorkflowItem) => {
+    setPublishWorkflow(workflow);
+    setPublishModalVisible(true);
+  };
+
+  const handlePublishSuccess = () => {
+    // 发布成功后刷新工作流列表
+    loadWorkflows();
+    setPublishModalVisible(false);
+    setPublishWorkflow(null);
+    message.success('工作流发布成功');
+  };
+
+  const handlePublishCancel = () => {
+    setPublishModalVisible(false);
+    setPublishWorkflow(null);
+  };
+
   // AI生成处理函数
   const handleAIGenerateNew = () => {
     setAiGeneratorVisible(true);
@@ -528,17 +563,25 @@ const WorkflowPage: React.FC = () => {
           >
             编辑
           </Button>
-          <Button 
-            type="link" 
-            size="small" 
+          <Button
+            type="link"
+            size="small"
             icon={<DownloadOutlined />}
             onClick={() => handleExport(record)}
           >
             导出
           </Button>
-          <Button 
-            type="link" 
-            size="small" 
+          <Button
+            type="link"
+            size="small"
+            icon={<AppstoreOutlined />}
+            onClick={() => handlePublish(record)}
+          >
+            发布
+          </Button>
+          <Button
+            type="link"
+            size="small"
             danger
             icon={<DeleteOutlined />}
             onClick={() => handleDelete(record)}
@@ -745,19 +788,69 @@ const WorkflowPage: React.FC = () => {
 
       {/* 工作流设计器抽屉 */}
       <Drawer
-        title={`工作流设计器 - ${currentWorkflow?.name || ''}`}
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>工作流设计器 - {currentWorkflow?.name || ''}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '12px', color: '#666' }}>设计模式:</span>
+              <Select
+                size="small"
+                value={designerMode}
+                onChange={(value) => {
+                  setDesignerMode(value);
+                  // 兼容旧版本
+                  setTabCompletionEnabled(value !== 'normal');
+                }}
+                style={{ width: 120 }}
+              >
+                <Option value="normal">
+                  <span>📋 普通模式</span>
+                </Option>
+                <Option value="tab_completion">
+                  <span>⚡ Tab补全</span>
+                </Option>
+                <Option value="ghost_editing">
+                  <span>👻 幽灵编辑</span>
+                </Option>
+              </Select>
+              {designerMode !== 'normal' && (
+                <Tag color={designerMode === 'ghost_editing' ? 'purple' : 'green'} style={{ fontSize: '10px' }}>
+                  {designerMode === 'ghost_editing' ? 'AI增强' : '智能补全'}
+                </Tag>
+              )}
+            </div>
+          </div>
+        }
         placement="right"
         width="80%"
         open={designerVisible}
         onClose={() => setDesignerVisible(false)}
         styles={{ body: { padding: 0 } }}
       >
-        <WorkflowDesigner
-          workflowId={currentWorkflow?.baseId} // 传递workflow_base_id
-          onSave={handleWorkflowSave}
-          onExecute={handleWorkflowExecute}
-          readOnly={false}
-        />
+{designerMode === 'ghost_editing' ? (
+          <GhostEnhancedDesigner
+            workflowId={currentWorkflow?.baseId}
+            workflowName={currentWorkflow?.name}
+            workflowDescription={currentWorkflow?.description}
+            onSave={handleWorkflowSave}
+            onExecute={handleWorkflowExecute}
+            readOnly={false}
+          />
+        ) : designerMode === 'tab_completion' ? (
+          <TabCompletionEnhancedDesigner
+            workflowId={currentWorkflow?.baseId}
+            onSave={handleWorkflowSave}
+            onExecute={handleWorkflowExecute}
+            readOnly={false}
+          />
+        ) : (
+          <WorkflowDesigner
+            workflowId={currentWorkflow?.baseId}
+            onSave={handleWorkflowSave}
+            onExecute={handleWorkflowExecute}
+            readOnly={false}
+          />
+        )}
       </Drawer>
 
       {/* 执行实例列表弹窗 */}
@@ -793,6 +886,16 @@ const WorkflowPage: React.FC = () => {
           onImportToEditor={handleAIImportToEditor}
         />
       </Modal>
+
+      {/* 发布工作流模态框 */}
+      <PublishWorkflowModal
+        visible={publishModalVisible}
+        onCancel={handlePublishCancel}
+        onSuccess={handlePublishSuccess}
+        workflowBaseId={publishWorkflow?.baseId || ''}
+        workflowName={publishWorkflow?.name || ''}
+        workflowDescription={publishWorkflow?.description || ''}
+      />
     </div>
   );
 };

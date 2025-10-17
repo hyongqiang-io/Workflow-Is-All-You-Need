@@ -11,7 +11,8 @@ import {
   SettingOutlined,
   DashboardOutlined,
   QuestionCircleOutlined,
-  FileTextOutlined
+  FileTextOutlined,
+  AppstoreOutlined
 } from '@ant-design/icons';
 
 const { Header, Sider, Content } = Layout;
@@ -40,6 +41,11 @@ const MainLayout: React.FC = () => {
       key: '/workflow',
       icon: <BranchesOutlined />,
       label: '工作流管理',
+    },
+    {
+      key: '/store',
+      icon: <AppstoreOutlined />,
+      label: '工作流商店',
     },
     {
       key: '/todo',

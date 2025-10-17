@@ -197,6 +197,94 @@ async def get_file_info(
         raise HTTPException(status_code=500, detail="获取文件信息失败")
 
 
+@router.get("/{file_id}/preview", response_model=BaseResponse[dict])
+async def preview_file(
+    file_id: uuid.UUID = Path(..., description="文件ID"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """预览文件内容 - Linus式简洁实现"""
+    try:
+        logger.info(f"文件预览请求: file_id={file_id}, user_id={current_user.user_id}")
+
+        # 获取文件信息
+        file_info = await file_association.get_workflow_file_by_id(file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="文件不存在")
+
+        # 获取文件路径
+        file_path = await file_storage.get_file_path(file_info['file_path'])
+
+        # 预览内容生成
+        from ..services.file_content_extractor import get_file_content_extractor
+        extractor = get_file_content_extractor()
+
+        # PDF文件特殊处理：返回文件访问URL而不是文本提取
+        if file_info['content_type'] == 'application/pdf':
+            preview_data = {
+                'preview_type': 'pdf_viewer',
+                'content': f'/api/files/{file_id}/raw',  # 直接访问PDF文件的URL
+                'file_url': f'/api/files/{file_id}/raw',
+                'content_type': file_info['content_type'],
+                'file_size': file_info['file_size']
+            }
+        else:
+            # 其他文件类型使用原有的预览内容生成
+            preview_data = await extractor.extract_preview_content(
+                file_path=str(file_path),
+                content_type=file_info['content_type'],
+                max_size=1024 * 1024  # 1MB预览限制
+            )
+
+        # 添加文件基础信息
+        preview_data.update({
+            'file_id': str(file_id),
+            'filename': file_info['original_filename'],
+            'content_type': file_info['content_type'],
+            'file_size': file_info['file_size']
+        })
+
+        return create_response(data=preview_data, message="文件预览成功")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"文件预览失败: {e}")
+        raise HTTPException(status_code=500, detail="文件预览失败")
+
+
+@router.get("/{file_id}/raw")
+async def get_raw_file(
+    file_id: uuid.UUID = Path(..., description="文件ID"),
+    current_user: CurrentUser = Depends(get_current_user_context)
+):
+    """直接访问原始文件内容 - 主要用于PDF等需要原生预览的文件"""
+    try:
+        logger.info(f"原始文件访问请求: file_id={file_id}, user_id={current_user.user_id}")
+
+        # 获取文件信息
+        file_info = await file_association.get_workflow_file_by_id(file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="文件不存在")
+
+        # 获取文件路径
+        file_path = await file_storage.get_file_path(file_info['file_path'])
+
+        # 返回文件流
+        return FileResponse(
+            path=str(file_path),
+            media_type=file_info['content_type'],
+            headers={
+                'Content-Disposition': f'inline; filename="{file_info["original_filename"]}"'
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"原始文件访问失败: {e}")
+        raise HTTPException(status_code=500, detail="文件访问失败")
+
+
 @router.get("/{file_id}/download")
 async def download_file(
     file_id: uuid.UUID = Path(..., description="文件ID"),
@@ -206,22 +294,22 @@ async def download_file(
     try:
         # Linus式修复: 移除权限检查，允许所有用户下载
         logger.info(f"文件下载请求: file_id={file_id}, user_id={current_user.user_id}")
-        
+
         # 获取文件信息
         file_info = await file_association.get_workflow_file_by_id(file_id)
         if not file_info:
             raise HTTPException(status_code=404, detail="文件不存在")
-        
+
         # 获取文件路径
         file_path = await file_storage.get_file_path(file_info['file_path'])
-        
+
         # 返回文件流
         return FileResponse(
             path=str(file_path),
             filename=file_info['original_filename'],
             media_type=file_info['content_type']
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:

@@ -282,23 +282,9 @@ class WorkflowExecutionContext:
                 logger.warning(f"🔄 节点实例 {node_instance_id} 已经在内存中标记为完成，跳过重复处理")
                 return
             
-            # 防重复处理 - 检查数据库状态
-            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
-            node_repo = NodeInstanceRepository()
-            try:
-                existing_node = await node_repo.get_instance_by_id(node_instance_id)
-                if existing_node and existing_node.get('status') == 'completed':
-                    logger.warning(f"🔄 节点实例 {node_instance_id} 在数据库中已经完成，同步内存状态")
-                    # 同步内存状态
-                    self.node_states[node_instance_id] = 'COMPLETED'
-                    # 🔧 修复：统一使用node_instance_id管理完成状态
-                    self.execution_context['completed_nodes'].add(node_instance_id)
-                    # 🔧 修复：使用node_instance_id存储输出数据
-                    self.execution_context['node_outputs'][node_instance_id] = output_data
-                    self.execution_context['current_executing_nodes'].discard(node_instance_id)
-                    return
-            except Exception as e:
-                logger.warning(f"⚠️ 检查节点数据库状态时出错: {e}")
+            # 🔧 Linus原则修复：移除过度聪明的数据库状态检查
+            # 不再检查数据库状态，只相信内存状态和当前调用的有效性
+            # 这消除了重置场景下的竞态条件
             
             # 更新状态
             self.node_states[node_instance_id] = 'COMPLETED'
@@ -478,10 +464,10 @@ class WorkflowExecutionContext:
             # 🆕 收集所有上游节点（全局上下文）
             all_upstream_results = await self._collect_all_upstream_results(node_instance_id)
             logger.debug(f"🌐 [全局上下文] 为节点实例 {node_instance_id} 收集了 {len(all_upstream_results)} 个全局上游结果")
-            
+
             # 当前节点信息
             current_node_name = await self._get_node_name_by_id(deps.get('node_id'))
-            
+
             context_data = {
                 'immediate_upstream_results': immediate_upstream_results,
                 'all_upstream_results': all_upstream_results,  # 🆕 新增全局上游结果
@@ -629,34 +615,28 @@ class WorkflowExecutionContext:
             return ready_nodes
 
     async def get_ready_nodes(self) -> List[uuid.UUID]:
-        """获取准备执行的节点（修复版：主动扫描准备好的节点）"""
+        """获取准备执行的节点（修复版：支持条件边触发）"""
         async with self._context_lock:
-            # 1. 先获取pending_triggers中的节点
-            ready_nodes = list(self.pending_triggers)
-            self.pending_triggers.clear()
-            
-            # 2. 🔧 修复：主动扫描所有依赖关系，找出准备执行但未在pending_triggers中的节点
-            for node_instance_id, deps in self.node_dependencies.items():
-                node_state = self.node_states.get(node_instance_id, 'UNKNOWN')
-                
-                # 🔧 修复：现在状态都是大写的，简化检查
-                if (deps.get('ready_to_execute', False) and 
-                    node_instance_id not in ready_nodes and
-                    node_state == 'PENDING'):
-                    
+            ready_nodes = []
+
+            # 🔧 简化逻辑：只扫描PENDING状态的节点
+            for node_instance_id, node_state in self.node_states.items():
+                if node_state == 'PENDING':
                     ready_nodes.append(node_instance_id)
-                    logger.debug(f"🔍 [主动扫描] 发现准备执行的节点: {node_instance_id} (状态: {node_state})")
-            
+                    logger.debug(f"🔍 [准备执行] 发现PENDING节点: {node_instance_id}")
+
+            # 清空pending_triggers（兼容性）
+            self.pending_triggers.clear()
+
             if ready_nodes:
                 logger.info(f"🚀 [准备执行] 共发现 {len(ready_nodes)} 个准备执行的节点: {ready_nodes}")
             else:
                 logger.trace(f"⏳ [准备执行] 暂无准备执行的节点")
-                # 调试信息：打印所有节点的准备状态
-                for node_instance_id, deps in self.node_dependencies.items():
+                # 调试信息：打印所有节点的状态
+                for node_instance_id in self.node_states.keys():
                     node_state = self.node_states.get(node_instance_id, 'UNKNOWN')
-                    ready_status = deps.get('ready_to_execute', False)
-                    logger.trace(f"   - 节点 {node_instance_id}: 状态={node_state}, 准备执行={ready_status}")
-            
+                    logger.trace(f"   - 节点 {node_instance_id}: 状态={node_state}")
+
             return ready_nodes
     
     async def build_node_context(self, node_instance_id: uuid.UUID) -> Dict[str, Any]:
@@ -1080,7 +1060,7 @@ class WorkflowExecutionContext:
         except Exception as e:
             logger.error(f"获取节点附件失败: {e}")
             return []
-    
+
     def cleanup(self):
         """清理上下文资源"""
         logger.info(f"🧹 清理工作流上下文: {self.workflow_instance_id}")
@@ -1263,38 +1243,309 @@ class WorkflowExecutionContext:
         """
         统一的下游节点触发逻辑 - Linus原则：消除特殊情况
 
-        唯一的触发方法：基于依赖满足检查
-        不再区分固定边、条件边、回环等特殊情况
+        🔧 修复回环问题：不再要求所有上游都完成，而是基于边类型智能触发
+        - 固定边：直接触发下游
+        - 条件边：根据条件评估决定是否触发
         """
         triggered_nodes = []
 
         async with self._context_lock:
-            logger.info(f"🔍 [统一触发] 检查完成节点 {completed_node_instance_id} 的下游依赖...")
+            logger.info(f"🔍 [智能触发] 检查完成节点 {completed_node_instance_id} 的下游依赖...")
 
-            # 核心逻辑：遍历所有节点，检查依赖是否满足
-            for node_instance_id, deps in self.node_dependencies.items():
-                # UUID类型一致性比较
-                completed_node_str = str(completed_node_instance_id)
-                upstream_nodes_str = [str(x) for x in deps['upstream_nodes']]
+            # 🆕 添加详细的调试信息
+            logger.info(f"🔍 [智能触发] 当前所有节点依赖关系:")
+            for node_id, deps in self.node_dependencies.items():
+                logger.info(f"    节点 {node_id}: 上游={deps['upstream_nodes']}, 状态={self.node_states.get(node_id, 'UNKNOWN')}")
 
-                if completed_node_str in upstream_nodes_str:
-                    logger.debug(f"✅ [统一触发] 发现依赖关系: {node_instance_id} 依赖于 {completed_node_instance_id}")
+            # 🔧 改进的触发逻辑：通过条件边评估而不是依赖计数
+            triggered_nodes = await self._trigger_via_conditional_edges(completed_node_instance_id)
 
-                    # 标记上游节点完成
-                    deps['completed_upstream'].add(completed_node_instance_id)
-
-                    # 检查是否所有上游依赖都完成
-                    all_upstream_completed = len(deps['completed_upstream']) >= len(deps['upstream_nodes'])
-
-                    if all_upstream_completed and self.node_states.get(node_instance_id) == 'PENDING':
-                        # 🔧 简化：只要依赖满足就触发，条件评估在实际执行时进行
-                        self.node_states[node_instance_id] = 'READY'
-                        triggered_nodes.append(node_instance_id)
-                        logger.info(f"🚀 [统一触发] 触发节点: {node_instance_id}")
-
-            logger.info(f"✅ [统一触发] 共触发 {len(triggered_nodes)} 个节点")
+            logger.info(f"✅ [智能触发] 共触发 {len(triggered_nodes)} 个节点")
 
         return triggered_nodes
+
+    async def _trigger_via_conditional_edges(self, completed_node_instance_id: uuid.UUID) -> List[uuid.UUID]:
+        """基于条件边评估的触发逻辑 - 真正的Linus方式"""
+        triggered_nodes = []
+
+        try:
+            # 获取完成节点的下游连接信息
+            completed_node_deps = self.node_dependencies.get(completed_node_instance_id)
+            if not completed_node_deps:
+                logger.debug(f"完成节点 {completed_node_instance_id} 无依赖信息")
+                return []
+
+            completed_node_id = completed_node_deps.get('node_id')
+            if not completed_node_id:
+                logger.debug(f"完成节点 {completed_node_instance_id} 无node_id")
+                return []
+
+            # 获取该节点的下游连接
+            from ..services.execution_service import ExecutionEngine
+            execution_engine = ExecutionEngine()
+            connections = await execution_engine._get_next_nodes(completed_node_id)
+
+            # 🔧 首先检查用户是否选择了特定的下游节点
+            user_selected_nodes = await self._get_user_selected_nodes(completed_node_instance_id)
+            if user_selected_nodes:
+                logger.info(f"🎯 [用户选择] 发现用户选择的下游节点: {user_selected_nodes}")
+                # 如果用户有选择，直接触发选择的节点
+                for selected_node_instance_id in user_selected_nodes:
+                    downstream_instance = uuid.UUID(selected_node_instance_id)
+                    current_state = self.node_states.get(downstream_instance, 'PENDING')
+
+                    # 🔧 关键修复：检查数据库中的实际状态，防止内存状态滞后
+                    from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+                    node_repo = NodeInstanceRepository()
+                    try:
+                        db_node = await node_repo.get_instance_by_id(downstream_instance)
+                        db_status = db_node.get('status', 'pending').upper() if db_node else 'PENDING'
+
+                        # 如果数据库状态与内存状态不一致，以数据库为准
+                        if db_status != current_state:
+                            logger.info(f"🔄 [用户选择] 状态不一致 - 内存:{current_state}, 数据库:{db_status}, 以数据库为准")
+                            current_state = db_status
+                            self.node_states[downstream_instance] = current_state
+                    except Exception as e:
+                        logger.warning(f"⚠️ [用户选择] 检查数据库状态失败: {e}")
+
+                    logger.info(f"🔍 [用户选择] 检查节点 {downstream_instance}，当前状态: {current_state}")
+
+                    # 允许重新触发已完成的节点（创建新任务）
+                    if current_state in ['PENDING', 'COMPLETED']:
+                        if current_state == 'COMPLETED':
+                            logger.info(f"🔄 [用户选择] 重新触发已完成节点: {downstream_instance}")
+
+                            # 🔧 重置已完成节点的状态为pending，允许创建新任务
+                            try:
+                                await self._reset_completed_node_to_pending(downstream_instance)
+                            except Exception as e:
+                                logger.error(f"❌ 重置节点状态失败: {e}")
+                                import traceback
+                                logger.error(f"详细错误: {traceback.format_exc()}")
+
+                        self.node_states[downstream_instance] = 'PENDING'  # 使用PENDING而不是READY
+                        triggered_nodes.append(downstream_instance)
+                        logger.info(f"🚀 [用户选择] 触发用户选择的节点: {downstream_instance}")
+                    else:
+                        logger.debug(f"❌ [用户选择] 节点 {downstream_instance} 状态为 {current_state}，跳过")
+
+                return triggered_nodes
+
+            # 如果用户没有选择，使用传统的条件边评估
+            logger.info(f"🔗 [条件边] 节点 {completed_node_id} 有 {len(connections)} 个下游连接")
+
+            for connection in connections:
+                to_node_id = connection.get('to_node_id')
+                condition_config = connection.get('condition_config', {})
+
+                logger.info(f"🔗 [条件边] 检查连接: {completed_node_id} -> {to_node_id}")
+
+                # 🔧 关键修复：评估条件边
+                should_activate = await self._evaluate_edge_condition(
+                    completed_node_instance_id,
+                    condition_config
+                )
+
+                if should_activate:
+                    # 找到对应的下游节点实例
+                    downstream_instance = await self._find_node_instance_by_node_id(to_node_id)
+                    if downstream_instance:
+                        current_state = self.node_states.get(downstream_instance, 'PENDING')
+
+                        if current_state in ['PENDING', 'COMPLETED']:
+                            if current_state == 'COMPLETED':
+                                logger.info(f"🔄 [条件边] 重新触发已完成节点: {downstream_instance}")
+                                # 🔧 重置已完成节点的状态为pending，允许创建新任务
+                                await self._reset_completed_node_to_pending(downstream_instance)
+
+                            # 🚀 直接触发，不需要等待所有上游
+                            self.node_states[downstream_instance] = 'PENDING'  # 使用PENDING而不是READY
+                            triggered_nodes.append(downstream_instance)
+                            logger.info(f"🚀 [条件边] 触发下游节点: {downstream_instance}")
+                        else:
+                            logger.debug(f"下游节点 {downstream_instance} 状态为 {current_state}，跳过")
+                    else:
+                        logger.warning(f"未找到节点 {to_node_id} 对应的实例")
+                else:
+                    logger.debug(f"❌ [条件边] 条件不满足，不触发: {completed_node_id} -> {to_node_id}")
+
+        except Exception as e:
+            logger.error(f"❌ 条件边触发失败: {e}")
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
+
+        return triggered_nodes
+
+    async def _evaluate_edge_condition(self, completed_node_instance_id: uuid.UUID,
+                                     condition_config: Dict[str, Any]) -> bool:
+        """评估边的条件"""
+        try:
+            # 如果没有条件配置，默认为固定边（始终触发）
+            if not condition_config:
+                logger.debug(f"🔧 [条件边] 固定边，直接激活")
+                return True
+
+            # 获取节点输出数据用于条件评估
+            node_output = self.execution_context['node_outputs'].get(completed_node_instance_id, {})
+
+            # 使用条件评估引擎
+            from .condition_evaluation_engine import get_condition_engine
+            engine = get_condition_engine()
+
+            # 构建评估上下文
+            context = {
+                'node_output': node_output,
+                'global_data': self.execution_context['global_data'],
+                'workflow_instance_id': str(self.workflow_instance_id)
+            }
+
+            result = await engine.evaluate_condition(condition_config, context)
+            logger.debug(f"🔧 [条件边] 条件评估结果: {result}")
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ 条件评估失败: {e}")
+            # 条件评估失败时，默认不触发（安全策略）
+            return False
+
+    async def _get_user_selected_nodes(self, completed_node_instance_id: uuid.UUID) -> List[str]:
+        """获取用户选择的下游节点"""
+        try:
+            # 首先从主执行路径中查找
+            main_path_id = f"main_{self.workflow_instance_id}"
+            if main_path_id in self.execution_context['execution_paths']:
+                path = self.execution_context['execution_paths'][main_path_id]
+
+                # 检查path是否是ExecutionPath对象
+                if hasattr(path, 'user_selections'):
+                    # ExecutionPath对象，直接访问属性
+                    user_selections = path.user_selections.get(completed_node_instance_id, [])
+                    if user_selections:
+                        # 转换为字符串列表
+                        result = [str(node) for node in user_selections]
+                        logger.debug(f"📍 [用户选择] 从ExecutionPath获取选择: {result}")
+                        return result
+                else:
+                    # 字典对象，按字典方式访问
+                    if 'user_selections' in path:
+                        user_selections = path['user_selections'].get(str(completed_node_instance_id), [])
+                        if user_selections:
+                            logger.debug(f"📍 [用户选择] 从执行路径字典获取选择: {user_selections}")
+                            return user_selections
+
+            # 如果主路径中没有，从全局查找
+            if 'global_user_selections' in self.execution_context:
+                user_selections = self.execution_context['global_user_selections'].get(str(completed_node_instance_id), [])
+                if user_selections:
+                    logger.debug(f"📍 [用户选择] 从全局获取选择: {user_selections}")
+                    return user_selections
+
+            return []
+
+        except Exception as e:
+            logger.error(f"❌ 获取用户选择失败: {e}")
+            return []
+
+    async def _find_node_instance_by_node_id(self, node_id: uuid.UUID) -> Optional[uuid.UUID]:
+        """根据node_id查找对应的node_instance_id"""
+        for node_instance_id, deps in self.node_dependencies.items():
+            if deps.get('node_id') == node_id:
+                return node_instance_id
+        return None
+
+    async def _reset_completed_node_to_pending(self, node_instance_id: uuid.UUID):
+        """重置已完成节点及其所有下游节点状态为pending，使用统一工作流执行逻辑"""
+        try:
+            logger.info(f"🔄 [状态重置] 开始重置节点 {node_instance_id} 及其下游节点")
+
+            # 🔧 收集需要重置的节点（该节点 + 所有下游节点）
+            nodes_to_reset = await self._collect_downstream_nodes(node_instance_id)
+
+            logger.info(f"📋 [状态重置] 发现 {len(nodes_to_reset)} 个节点需要重置: {nodes_to_reset}")
+
+            # 🔧 批量重置节点实例状态为pending
+            from ..repositories.instance.node_instance_repository import NodeInstanceRepository
+            from ..models.instance import NodeInstanceStatus
+            node_repo = NodeInstanceRepository()
+
+            for node_id in nodes_to_reset:
+                # 重置数据库中的节点状态
+                await node_repo.update_instance_status(
+                    node_id,
+                    NodeInstanceStatus.PENDING,
+                    output_data=None  # 清空输出数据
+                )
+
+                # 🔧 关键修复：完全重置内存中的节点状态
+                self.node_states[node_id] = 'PENDING'
+
+                # 🔧 关键修复：从所有相关的内存集合中移除节点
+                self.execution_context.get('completed_nodes', set()).discard(node_id)
+                self.execution_context.get('current_executing_nodes', set()).discard(node_id)
+                self.execution_context.get('failed_nodes', set()).discard(node_id)
+
+                # 🔧 关键修复：清除节点的输出数据，允许重新生成
+                self.execution_context.get('node_outputs', {}).pop(node_id, None)
+
+                logger.info(f"🔄 [状态重置] 节点 {node_id} 状态已重置为 pending")
+
+            # 🔧 软删除相关的已完成任务，让系统重新创建新任务
+            from ..repositories.instance.task_instance_repository import TaskInstanceRepository
+            task_repo = TaskInstanceRepository()
+
+            total_deleted_tasks = 0
+            for node_id in nodes_to_reset:
+                # 查找并软删除该节点的已完成任务
+                completed_tasks = await task_repo.db.fetch_all(
+                    "SELECT task_instance_id FROM task_instance WHERE node_instance_id = %s AND status IN ('completed', 'assigned', 'in_progress') AND is_deleted = FALSE",
+                    node_id
+                )
+
+                for task in completed_tasks:
+                    await task_repo.db.execute(
+                        "UPDATE task_instance SET is_deleted = TRUE WHERE task_instance_id = %s",
+                        task['task_instance_id']
+                    )
+                    total_deleted_tasks += 1
+                    logger.info(f"🗑️ [状态重置] 标记任务 {task['task_instance_id']} 为已删除")
+
+            logger.info(f"✅ [状态重置] 完成！{len(nodes_to_reset)} 个节点已重置，{total_deleted_tasks} 个任务已软删除，可以使用统一工作流逻辑重新执行")
+
+        except Exception as e:
+            logger.error(f"❌ 重置节点状态失败: {node_instance_id}, 错误: {e}")
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
+            raise  # 重新抛出异常以便调用者处理
+
+    async def _collect_downstream_nodes(self, start_node_id: uuid.UUID) -> List[uuid.UUID]:
+        """递归收集指定节点的所有下游节点（包括自己）"""
+        try:
+            nodes_to_reset = [start_node_id]  # 包含起始节点自己
+            visited = set()
+
+            async def collect_recursive(node_id: uuid.UUID):
+                if node_id in visited:
+                    return
+                visited.add(node_id)
+
+                # 查找该节点的所有下游节点
+                for downstream_node_id, deps in self.node_dependencies.items():
+                    upstream_nodes = deps.get('upstream_nodes', [])
+                    if node_id in upstream_nodes:
+                        # 这是一个下游节点
+                        if downstream_node_id not in nodes_to_reset:
+                            nodes_to_reset.append(downstream_node_id)
+                        await collect_recursive(downstream_node_id)
+
+            # 从起始节点开始递归收集
+            await collect_recursive(start_node_id)
+
+            return nodes_to_reset
+
+        except Exception as e:
+            logger.error(f"❌ 收集下游节点失败: {e}")
+            return [start_node_id]  # 至少返回起始节点
 
     # 🗑️ 废弃的方法 - 已被统一的触发逻辑替代
     # 保留以防向后兼容需要，但不推荐使用
@@ -1702,6 +1953,12 @@ class WorkflowExecutionContext:
     async def is_workflow_completed(self) -> bool:
         """检查工作流是否完成（基于路径状态而非节点计数）"""
         async with self._context_lock:
+            # 🆕 首先检查是否有END节点已完成 - 如果有，工作流立即完成
+            end_nodes_completed = await self._check_end_nodes_completion()
+            if end_nodes_completed:
+                logger.info(f"🎯 工作流完成判定: 有END节点已完成")
+                return True
+
             # 检查是否有执行路径，如果没有则使用原始逻辑
             if not self.execution_context.get('execution_paths') or not self.execution_context.get('active_paths'):
                 logger.debug("执行路径不存在，使用传统节点状态判断工作流完成")
@@ -1728,6 +1985,39 @@ class WorkflowExecutionContext:
                 logger.info(f"🎯 工作流完成判定: 所有路径已结束")
                 return True
 
+            return False
+
+    async def _check_end_nodes_completion(self) -> bool:
+        """检查是否有END节点已完成"""
+        try:
+            # 查询所有END类型的节点实例状态
+            end_nodes_query = '''
+            SELECT ni.node_instance_id, ni.status, n.name
+            FROM node_instance ni
+            JOIN node n ON ni.node_id = n.node_id
+            WHERE ni.workflow_instance_id = $1
+            AND n.type = 'end'
+            AND ni.is_deleted = FALSE
+            '''
+
+            from ..repositories.instance.workflow_instance_repository import WorkflowInstanceRepository
+            repo = WorkflowInstanceRepository()
+            end_nodes = await repo.db.fetch_all(end_nodes_query, self.workflow_instance_id)
+
+            # 检查是否有任何END节点已完成
+            completed_end_nodes = [node for node in end_nodes if node['status'] == 'completed']
+
+            if completed_end_nodes:
+                logger.info(f"✅ 发现已完成的END节点: {[node['name'] for node in completed_end_nodes]}")
+                return True
+
+            if end_nodes:
+                logger.debug(f"📊 END节点状态: {[(node['name'], node['status']) for node in end_nodes]}")
+
+            return False
+
+        except Exception as e:
+            logger.error(f"❌ 检查END节点完成状态失败: {e}")
             return False
 
     def cleanup(self):

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Card, List, Tag, Button, Modal, Form, Input, Select, message, Space, Collapse, Typography, Divider, Alert, Spin, Row, Col, Pagination } from 'antd';
-import { SaveOutlined, BranchesOutlined, EditOutlined, EyeOutlined, SearchOutlined, FilterOutlined, ClearOutlined, DownloadOutlined, FileOutlined } from '@ant-design/icons';
+import { Card, List, Tag, Button, Modal, Form, Input, Select, message, Space, Collapse, Typography, Divider, Alert, Spin, Row, Col, Pagination, Checkbox } from 'antd';
+import { SaveOutlined, BranchesOutlined, EyeOutlined, SearchOutlined, ClearOutlined, DownloadOutlined, FileOutlined } from '@ant-design/icons';
 import { useTaskStore } from '../../stores/taskStore';
 import { useAuthStore } from '../../stores/authStore';
-import { taskSubdivisionApi, executionAPI } from '../../services/api';
+import { taskSubdivisionApi, executionAPI, taskAPI } from '../../services/api';
 import { FileAPI } from '../../services/fileAPI';
 import TaskSubdivisionModal from '../../components/TaskSubdivisionModal';
 import SubdivisionResultEditModal from '../../components/SubdivisionResultEditModal';
@@ -61,6 +61,12 @@ const Todo: React.FC = () => {
   const [currentTask, setCurrentTask] = useState<any>(null);
   const [subWorkflowsForSubmit, setSubWorkflowsForSubmit] = useState<any[]>([]);
   const [loadingSubWorkflows, setLoadingSubWorkflows] = useState(false);
+
+  // 🆕 下游条件节点选择相关状态
+  const [conditionalDownstreamNodes, setConditionalDownstreamNodes] = useState<any[]>([]);
+  const [selectedDownstreamNodes, setSelectedDownstreamNodes] = useState<string[]>([]);
+  const [loadingDownstreamNodes, setLoadingDownstreamNodes] = useState(false);
+
   const [submitForm] = Form.useForm();
   const [helpForm] = Form.useForm();
   const [rejectForm] = Form.useForm();
@@ -400,17 +406,61 @@ const Todo: React.FC = () => {
     return null;
   };
 
+  // 🆕 加载下游条件节点
+  const loadConditionalDownstreamNodes = async (taskId: string) => {
+    console.log('🔍 [DOWNSTREAM] loadConditionalDownstreamNodes函数被调用，taskId:', taskId);
+    try {
+      setLoadingDownstreamNodes(true);
+      console.log('🔍 [DOWNSTREAM] 开始获取下游条件节点:', taskId);
+
+      const response = await taskAPI.getConditionalDownstreamNodes(taskId);
+      console.log('🔍 [DOWNSTREAM] API响应原始数据:', response);
+
+      // 响应拦截器已处理，需要正确访问数据
+      const responseData = response as any;
+      console.log('🔍 [DOWNSTREAM] responseData.success:', responseData.success);
+      console.log('🔍 [DOWNSTREAM] responseData.success类型:', typeof responseData.success);
+
+      if (responseData.success) {
+        const nodes = responseData.data.conditional_downstream_nodes || [];
+        console.log('✅ [DOWNSTREAM] 获取到下游条件节点:', nodes);
+        console.log('✅ [DOWNSTREAM] 节点数量:', nodes.length);
+        console.log('✅ [DOWNSTREAM] 完整响应数据:', responseData.data);
+
+        setConditionalDownstreamNodes(nodes);
+        setSelectedDownstreamNodes([]); // 重置选择
+
+        console.log('✅ [DOWNSTREAM] 状态已更新，conditionalDownstreamNodes长度:', nodes.length);
+      } else {
+        console.warn('⚠️ [DOWNSTREAM] 获取下游条件节点失败，响应:', responseData);
+        setConditionalDownstreamNodes([]);
+      }
+    } catch (error) {
+      console.error('❌ [DOWNSTREAM] 获取下游条件节点异常:', error);
+      setConditionalDownstreamNodes([]);
+    } finally {
+      setLoadingDownstreamNodes(false);
+      console.log('🔍 [DOWNSTREAM] 加载完成，设置loading为false');
+    }
+  };
+
   const handleSubmit = async (task: any) => {
     console.log('🚀 [SUBMIT] handleSubmit 被调用:');
     console.log('   - 任务:', task.task_title);
     console.log('   - 任务ID:', task.task_instance_id);
     console.log('   - 当前subWorkflowsForSubmit状态:', subWorkflowsForSubmit);
-    
+
     setCurrentTask(task);
     setSubmitModalVisible(true);
     submitForm.resetFields();
-    
+
     console.log('🎯 [SUBMIT] 模态框状态设置完成，开始加载草稿...');
+    console.log('🎯 [SUBMIT] 当前conditionalDownstreamNodes:', conditionalDownstreamNodes);
+
+    // 🆕 获取下游条件节点（所有任务类型都支持）
+    await loadConditionalDownstreamNodes(task.task_instance_id);
+
+    console.log('🎯 [SUBMIT] 下游节点加载完成后conditionalDownstreamNodes:', conditionalDownstreamNodes);
     
     // 加载草稿数据
     const draft = getTaskDraft(task.task_instance_id);
@@ -807,11 +857,23 @@ const Todo: React.FC = () => {
       // 🆕 获取附件ID列表
       const attachmentFileIds = values.attachment_file_ids || [];
       console.log('📎 提交的附件ID列表:', attachmentFileIds);
-      
-      await submitTaskResult(currentTask.task_instance_id, values.result, values.notes, attachmentFileIds);
+
+      // 🆕 获取选中的下游节点ID列表
+      console.log('🔀 提交的下游节点ID列表:', selectedDownstreamNodes);
+
+      await submitTaskResult(
+        currentTask.task_instance_id,
+        values.result,
+        values.notes,
+        attachmentFileIds,
+        selectedDownstreamNodes  // 传递选中的下游节点
+      );
       message.success('任务提交成功');
       setSubmitModalVisible(false);
       setCurrentTask(null);
+      // 🆕 重置下游节点相关状态
+      setConditionalDownstreamNodes([]);
+      setSelectedDownstreamNodes([]);
       loadTasks(); // 重新加载任务列表
     } catch (error) {
       console.error('提交失败:', error);
@@ -2165,6 +2227,9 @@ const Todo: React.FC = () => {
         onCancel={() => {
           setSubmitModalVisible(false);
           setSubWorkflowsForSubmit([]);
+          // 🆕 重置下游节点相关状态
+          setConditionalDownstreamNodes([]);
+          setSelectedDownstreamNodes([]);
         }}
         width={900}
         footer={[
@@ -2174,6 +2239,9 @@ const Todo: React.FC = () => {
           <Button key="cancel" onClick={() => {
             setSubmitModalVisible(false);
             setSubWorkflowsForSubmit([]);
+            // 🆕 重置下游节点相关状态
+            setConditionalDownstreamNodes([]);
+            setSelectedDownstreamNodes([]);
           }}>
             取消
           </Button>,
@@ -2231,6 +2299,88 @@ const Todo: React.FC = () => {
 
 可以记录使用了哪些上游数据、遇到的问题等" />
               </Form.Item>
+
+              {/* 🆕 下游条件节点选择 */}
+              {(() => {
+                console.log('🎨 [RENDER] conditionalDownstreamNodes检查:', {
+                  length: conditionalDownstreamNodes.length,
+                  nodes: conditionalDownstreamNodes,
+                  shouldShow: conditionalDownstreamNodes.length > 0,
+                  loadingDownstreamNodes
+                });
+                return null;
+              })()}
+              {conditionalDownstreamNodes.length > 0 && (
+                <Form.Item
+                  label={
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span>下游节点触发</span>
+                      {loadingDownstreamNodes && <Spin size="small" />}
+                    </div>
+                  }
+                  tooltip="选择您希望在任务完成后触发执行的下游条件节点"
+                >
+                  <div style={{ border: '1px solid #d9d9d9', borderRadius: '6px', padding: '12px', maxHeight: '200px', overflowY: 'auto' }}>
+                    {conditionalDownstreamNodes.map((node) => (
+                      <div key={node.node_instance_id} style={{ marginBottom: '8px' }}>
+                        <Checkbox
+                          checked={selectedDownstreamNodes.includes(node.node_instance_id)}
+                          disabled={!node.can_trigger}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedDownstreamNodes([...selectedDownstreamNodes, node.node_instance_id]);
+                            } else {
+                              setSelectedDownstreamNodes(selectedDownstreamNodes.filter(id => id !== node.node_instance_id));
+                            }
+                          }}
+                        >
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <Text strong style={{ color: node.can_trigger ? '#1890ff' : '#999' }}>
+                                {node.name}
+                              </Text>
+                              <Tag
+                                color={node.status === 'pending' ? 'default' : node.status === 'completed' ? 'green' : 'blue'}
+                              >
+                                {node.status === 'pending' ? '等待中' : node.status === 'completed' ? '已完成' : '执行中'}
+                                {node.can_retrigger && ' (可重新触发)'}
+                              </Tag>
+                              <Tag
+                                color={node.is_conditional ? 'orange' : 'blue'}
+                                style={{ fontSize: '10px' }}
+                              >
+                                {node.is_conditional ? '条件边' : '固定边'}
+                              </Tag>
+                            </div>
+                            <Text type="secondary" style={{ fontSize: '12px' }}>
+                              {node.condition_description}
+                            </Text>
+                            {node.description && (
+                              <Text type="secondary" style={{ fontSize: '11px' }}>
+                                {node.description}
+                              </Text>
+                            )}
+                          </div>
+                        </Checkbox>
+                      </div>
+                    ))}
+
+                    {conditionalDownstreamNodes.length === 0 && !loadingDownstreamNodes && (
+                      <Text type="secondary" style={{ fontSize: '12px' }}>
+                        暂无可触发的下游条件节点
+                      </Text>
+                    )}
+                  </div>
+
+                  {selectedDownstreamNodes.length > 0 && (
+                    <div style={{ marginTop: '8px', padding: '8px', background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: '4px' }}>
+                      <Text style={{ fontSize: '12px', color: '#52c41a' }}>
+                        已选择 {selectedDownstreamNodes.length} 个节点将在任务完成后触发执行
+                      </Text>
+                    </div>
+                  )}
+                </Form.Item>
+              )}
             </Form>
           </div>
           

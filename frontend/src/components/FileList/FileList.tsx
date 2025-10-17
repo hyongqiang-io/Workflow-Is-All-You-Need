@@ -35,6 +35,7 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import { FileAPI, FileInfo, FileSearchParams, FileStatistics } from '../../services/fileAPI';
+import FilePreview from '../FilePreview';
 import './FileList.css';
 
 const { Search } = Input;
@@ -71,6 +72,16 @@ const FileList: React.FC<FileListProps> = ({
     visible: boolean;
     file: FileInfo | null;
   }>({ visible: false, file: null });
+
+  // 预览文件 - 使用新的预览组件
+  const handlePreview = (file: FileInfo) => {
+    setPreviewModal({ visible: true, file });
+  };
+
+  // 关闭预览
+  const handleClosePreview = () => {
+    setPreviewModal({ visible: false, file: null });
+  };
 
   // 加载文件列表
   const loadFiles = useCallback(async (params: FileSearchParams) => {
@@ -182,11 +193,6 @@ const FileList: React.FC<FileListProps> = ({
         }
       }
     });
-  };
-
-  // 预览文件信息
-  const handlePreview = (file: FileInfo) => {
-    setPreviewModal({ visible: true, file });
   };
 
   // 文件上传
@@ -448,66 +454,13 @@ const FileList: React.FC<FileListProps> = ({
         scroll={{ x: 800 }}
       />
 
-      {/* 文件预览模态框 */}
-      <Modal
-        title="文件详情"
-        open={previewModal.visible}
-        onCancel={() => setPreviewModal({ visible: false, file: null })}
-        footer={[
-          <Button key="download" type="primary" icon={<DownloadOutlined />}
-            onClick={() => previewModal.file && handleDownload(previewModal.file)}>
-            下载文件
-          </Button>,
-          <Button key="close" onClick={() => setPreviewModal({ visible: false, file: null })}>
-            关闭
-          </Button>
-        ]}
-        width={600}
-      >
-        {previewModal.file && (
-          <div className="file-preview">
-            <Row gutter={16}>
-              <Col span={24}>
-                <div className="file-icon-large">
-                  <span style={{ fontSize: '48px' }}>
-                    {FileAPI.getFileTypeIcon(previewModal.file.content_type)}
-                  </span>
-                </div>
-              </Col>
-            </Row>
-            <Row gutter={16} style={{ marginTop: 16 }}>
-              <Col span={8}><strong>文件名:</strong></Col>
-              <Col span={16}>{previewModal.file.original_filename}</Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={8}><strong>文件类型:</strong></Col>
-              <Col span={16}>
-                <Tag color="blue">
-                  {FileAPI.getFileTypeDescription(previewModal.file.content_type)}
-                </Tag>
-              </Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={8}><strong>文件大小:</strong></Col>
-              <Col span={16}>{FileAPI.formatFileSize(previewModal.file.file_size)}</Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={8}><strong>上传时间:</strong></Col>
-              <Col span={16}>{new Date(previewModal.file.created_at).toLocaleString()}</Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={8}><strong>上传者:</strong></Col>
-              <Col span={16}>{previewModal.file.uploaded_by_name || '未知'}</Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={8}><strong>文件ID:</strong></Col>
-              <Col span={16}>
-                <code>{previewModal.file.file_id}</code>
-              </Col>
-            </Row>
-          </div>
-        )}
-      </Modal>
+      {/* 文件预览模态框 - 使用新的预览组件 */}
+      <FilePreview
+        file={previewModal.file}
+        visible={previewModal.visible}
+        onClose={handleClosePreview}
+        onDownload={handleDownload}
+      />
     </div>
   );
 };

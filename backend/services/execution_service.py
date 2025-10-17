@@ -3137,19 +3137,35 @@ class ExecutionEngine:
                 for node in waiting_nodes:
                     node_instance_id = node['node_instance_id']
                     node_name = node['name']
-                    
+
                     logger.trace(f"  检查节点: {node_name} ({node_instance_id})")
-                    
-                    # 🔧 检查节点是否已经有任务（防止重复创建）
+
+                    # 🔧 检查节点状态：只处理PENDING状态的节点
+                    context = await self.context_manager.get_context(workflow_instance_id)
+                    if context:
+                        node_state = context.node_states.get(node_instance_id, 'PENDING')
+                        if node_state != 'PENDING':
+                            logger.trace(f"    节点 {node_name} 状态为 {node_state}，跳过")
+                            continue
+                    else:
+                        logger.trace(f"    工作流上下文不存在，跳过节点 {node_name}")
+                        continue
+
+                    # 🔧 检查是否已有活跃任务（使用统一工作流逻辑）
                     existing_tasks = await self.task_instance_repo.db.fetch_all(
-                        "SELECT task_instance_id FROM task_instance WHERE node_instance_id = %s AND is_deleted = FALSE",
+                        "SELECT task_instance_id, status FROM task_instance WHERE node_instance_id = %s AND is_deleted = FALSE",
                         node_instance_id
                     )
-                    
-                    if existing_tasks:
-                        logger.trace(f"    节点 {node_name} 已有 {len(existing_tasks)} 个任务，跳过")
+
+                    # 只关心活跃任务，已完成的任务不影响重新执行
+                    active_tasks = [task for task in existing_tasks if task['status'] not in ['completed', 'failed', 'cancelled']]
+
+                    if active_tasks:
+                        logger.trace(f"    节点 {node_name} 已有 {len(active_tasks)} 个活跃任务，跳过")
                         continue
-                    
+
+                    logger.info(f"  🎯 节点 {node_name} 状态为PENDING，使用统一工作流逻辑创建任务")
+
                     # 尝试创建任务
                     try:
                         created = await self._create_tasks_when_ready(workflow_instance_id, node_instance_id)
@@ -4461,10 +4477,24 @@ class ExecutionEngine:
                                 main_path_id = f"main_{workflow_instance_id}"
                                 if main_path_id in context.execution_context['execution_paths']:
                                     path = context.execution_context['execution_paths'][main_path_id]
-                                    path.user_selections[node_instance_id] = selected_next_nodes
-                                    logger.info(f"✅ [条件边] 用户选择已保存到执行路径")
+                                    # 检查path是否是ExecutionPath对象
+                                    if hasattr(path, 'user_selections'):
+                                        # ExecutionPath对象，直接访问属性
+                                        path.user_selections[node_instance_id] = selected_next_nodes
+                                        logger.info(f"✅ [条件边] 用户选择已保存到ExecutionPath: {path.user_selections[node_instance_id]}")
+                                    else:
+                                        # 字典对象，按字典方式访问
+                                        if 'user_selections' not in path:
+                                            path['user_selections'] = {}
+                                        path['user_selections'][str(node_instance_id)] = [str(node) for node in selected_next_nodes]
+                                        logger.info(f"✅ [条件边] 用户选择已保存到执行路径字典: {path['user_selections'][str(node_instance_id)]}")
                                 else:
                                     logger.warning(f"⚠️ [条件边] 主执行路径不存在: {main_path_id}")
+                                    # 如果主路径不存在，直接保存到上下文顶层
+                                    if 'global_user_selections' not in context.execution_context:
+                                        context.execution_context['global_user_selections'] = {}
+                                    context.execution_context['global_user_selections'][str(node_instance_id)] = [str(node) for node in selected_next_nodes]
+                                    logger.info(f"✅ [条件边] 用户选择已保存到全局: {context.execution_context['global_user_selections'][str(node_instance_id)]}")
                             else:
                                 logger.warning(f"⚠️ [条件边] 工作流上下文不存在: {workflow_instance_id}")
                         except Exception as e:

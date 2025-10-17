@@ -468,6 +468,230 @@ class FileContentExtractor:
             }
         }
 
+    async def extract_preview_content(self, file_path: str, content_type: str, max_size: int = 1024 * 1024) -> Dict[str, Any]:
+        """
+        为预览功能提取文件内容 - Linus式简洁设计
+
+        Args:
+            file_path: 文件路径
+            content_type: MIME类型
+            max_size: 最大预览大小限制
+
+        Returns:
+            预览数据字典，包含preview_type, content等字段
+        """
+        try:
+            # 检查文件大小
+            file_size = os.path.getsize(file_path)
+            if file_size > max_size:
+                return {
+                    'preview_type': 'error',
+                    'content': f'文件过大，无法预览 (大小: {file_size / 1024 / 1024:.1f}MB，限制: {max_size / 1024 / 1024:.1f}MB)',
+                    'error': 'file_too_large'
+                }
+
+            # 根据内容类型决定预览方式
+            if self._is_text_type(content_type):
+                return await self._preview_as_text(file_path, content_type)
+            elif self._is_image_type(content_type):
+                return await self._preview_as_image(file_path, content_type)
+            elif self._is_pdf_type(content_type):
+                return await self._preview_as_pdf(file_path)
+            elif self._is_office_type(content_type):
+                return await self._preview_as_office(file_path, content_type)
+            else:
+                return await self._preview_as_metadata(file_path, content_type)
+
+        except Exception as e:
+            logger.error(f"文件预览提取失败: {file_path}, 错误: {e}")
+            return {
+                'preview_type': 'error',
+                'content': f'预览失败: {str(e)}',
+                'error': str(e)
+            }
+
+    def _is_text_type(self, content_type: str) -> bool:
+        """判断是否为文本类型文件"""
+        text_types = [
+            'text/plain', 'text/markdown', 'text/csv', 'text/html',
+            'application/json', 'application/xml'
+        ]
+        return content_type in text_types or content_type.startswith('text/')
+
+    def _is_image_type(self, content_type: str) -> bool:
+        """判断是否为图片类型文件"""
+        return content_type.startswith('image/')
+
+    def _is_pdf_type(self, content_type: str) -> bool:
+        """判断是否为PDF文件"""
+        return content_type == 'application/pdf'
+
+    def _is_office_type(self, content_type: str) -> bool:
+        """判断是否为Office文档"""
+        office_types = [
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'application/msword',
+            'application/vnd.ms-excel',
+            'application/vnd.ms-powerpoint'
+        ]
+        return content_type in office_types
+
+    async def _preview_as_text(self, file_path: str, content_type: str) -> Dict[str, Any]:
+        """以文本形式预览"""
+        try:
+            # 限制预览长度
+            max_chars = 50000  # 50KB文本
+
+            encodings = ['utf-8', 'gbk', 'gb2312', 'latin-1']
+            for encoding in encodings:
+                try:
+                    with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
+                        content = f.read(max_chars)
+
+                    return {
+                        'preview_type': 'text',
+                        'content': content,
+                        'encoding': encoding,
+                        'truncated': len(content) >= max_chars
+                    }
+                except UnicodeDecodeError:
+                    continue
+
+            return {
+                'preview_type': 'error',
+                'content': '无法识别文件编码',
+                'error': 'encoding_error'
+            }
+
+        except Exception as e:
+            return {
+                'preview_type': 'error',
+                'content': f'文本预览失败: {str(e)}',
+                'error': str(e)
+            }
+
+    async def _preview_as_image(self, file_path: str, content_type: str) -> Dict[str, Any]:
+        """以图片形式预览 - 返回base64数据"""
+        try:
+            import base64
+
+            # 限制图片预览大小
+            max_image_size = 5 * 1024 * 1024  # 5MB
+            file_size = os.path.getsize(file_path)
+
+            if file_size > max_image_size:
+                return {
+                    'preview_type': 'error',
+                    'content': f'图片过大，无法预览 ({file_size / 1024 / 1024:.1f}MB)',
+                    'error': 'image_too_large'
+                }
+
+            with open(file_path, 'rb') as f:
+                image_data = f.read()
+
+            base64_data = base64.b64encode(image_data).decode('utf-8')
+
+            return {
+                'preview_type': 'image',
+                'content': base64_data,
+                'content_type': content_type,
+                'file_size': file_size
+            }
+
+        except Exception as e:
+            return {
+                'preview_type': 'error',
+                'content': f'图片预览失败: {str(e)}',
+                'error': str(e)
+            }
+
+    async def _preview_as_pdf(self, file_path: str) -> Dict[str, Any]:
+        """PDF预览 - 提取前几页文本"""
+        try:
+            result = await self._extract_pdf(file_path)
+
+            # 限制预览长度
+            content = result.get('text', '')
+            max_chars = 10000  # 10KB文本预览
+
+            if len(content) > max_chars:
+                content = content[:max_chars] + '\n\n[内容已截断，完整内容请下载查看]'
+
+            return {
+                'preview_type': 'pdf_text',
+                'content': content,
+                'extractor': result.get('extractor', 'pdf'),
+                'metadata': result.get('metadata', {}),
+                'truncated': len(result.get('text', '')) > max_chars
+            }
+
+        except Exception as e:
+            return {
+                'preview_type': 'error',
+                'content': f'PDF预览失败: {str(e)}',
+                'error': str(e)
+            }
+
+    async def _preview_as_office(self, file_path: str, content_type: str) -> Dict[str, Any]:
+        """Office文档预览"""
+        try:
+            # 根据文档类型选择提取器
+            if 'wordprocessingml' in content_type:
+                result = await self._extract_docx(file_path)
+            elif 'spreadsheetml' in content_type:
+                result = await self._extract_excel(file_path)
+            else:
+                result = await self._extract_docx(file_path)  # 默认用docx提取器
+
+            # 限制预览长度
+            content = result.get('text', '')
+            max_chars = 10000  # 10KB文本预览
+
+            if len(content) > max_chars:
+                content = content[:max_chars] + '\n\n[内容已截断，完整内容请下载查看]'
+
+            return {
+                'preview_type': 'office_text',
+                'content': content,
+                'extractor': result.get('extractor', 'office'),
+                'metadata': result.get('metadata', {}),
+                'truncated': len(result.get('text', '')) > max_chars
+            }
+
+        except Exception as e:
+            return {
+                'preview_type': 'error',
+                'content': f'Office文档预览失败: {str(e)}',
+                'error': str(e)
+            }
+
+    async def _preview_as_metadata(self, file_path: str, content_type: str) -> Dict[str, Any]:
+        """其他文件类型只返回元数据"""
+        try:
+            file_stat = os.stat(file_path)
+
+            return {
+                'preview_type': 'metadata',
+                'content': {
+                    'filename': os.path.basename(file_path),
+                    'content_type': content_type,
+                    'file_size': file_stat.st_size,
+                    'created_time': file_stat.st_ctime,
+                    'modified_time': file_stat.st_mtime,
+                    'message': '此文件类型不支持内容预览，请下载查看'
+                }
+            }
+
+        except Exception as e:
+            return {
+                'preview_type': 'error',
+                'content': f'获取文件信息失败: {str(e)}',
+                'error': str(e)
+            }
+
+
     # ==================== 多模态AI支持方法 ====================
 
     async def extract_content_for_multimodal(self, file_path: str, content_type: Optional[str] = None) -> Dict[str, Any]:
@@ -745,3 +969,7 @@ class FileContentExtractor:
 
 # 全局实例
 file_content_extractor = FileContentExtractor()
+
+def get_file_content_extractor() -> FileContentExtractor:
+    """获取文件内容提取器实例"""
+    return file_content_extractor

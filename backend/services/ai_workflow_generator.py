@@ -96,6 +96,83 @@ class AIWorkflowGeneratorService:
             logger.error(f"🤖 [AI-API] ❌ AI API调用失败: {type(e).__name__}: {str(e)}")
             raise Exception(f"AI服务暂时不可用，请稍后重试。错误详情: {str(e)}")
     
+    async def _call_real_api_with_functions(self, task_description: str, functions: list, function_call: str = None) -> dict:
+        """使用Function Calling调用AI API"""
+        import requests
+        import asyncio
+
+        try:
+            logger.info(f"🤖 [FUNCTION-CALL] 开始Function Calling API调用")
+            logger.info(f"🤖 [FUNCTION-CALL] 函数数量: {len(functions)}")
+
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+
+            user_prompt = f"请分析以下工作流上下文并使用generate_graph_operations函数生成合适的图操作序列：{task_description}"
+
+            payload = {
+                "model": self.model_name,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": self.system_prompt
+                    },
+                    {
+                        "role": "user",
+                        "content": user_prompt
+                    }
+                ],
+                "functions": functions,
+                "temperature": 0.7,
+                "max_tokens": 4000,
+                "stream": False
+            }
+
+            # 如果指定了特定函数调用
+            if function_call:
+                payload["function_call"] = {"name": function_call}
+
+            logger.info(f"🤖 [FUNCTION-CALL] 发送Function Calling请求")
+
+            def make_request():
+                response = requests.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=120
+                )
+                return response
+
+            response = await asyncio.get_event_loop().run_in_executor(None, make_request)
+
+            if response.status_code != 200:
+                logger.error(f"🤖 [FUNCTION-CALL] API返回错误状态: {response.status_code}")
+                logger.error(f"🤖 [FUNCTION-CALL] 错误内容: {response.text}")
+                raise Exception(f"API调用失败，状态码: {response.status_code}")
+
+            result = response.json()
+
+            # 检查是否有function call
+            message = result['choices'][0]['message']
+            if 'function_call' in message:
+                logger.info(f"🤖 [FUNCTION-CALL] ✅ 收到function call: {message['function_call']['name']}")
+                return {
+                    'type': 'function_call',
+                    'function_call': message['function_call']
+                }
+            else:
+                logger.info(f"🤖 [FUNCTION-CALL] ✅ 收到常规回复")
+                return {
+                    'type': 'text',
+                    'content': message.get('content', '')
+                }
+
+        except Exception as e:
+            logger.error(f"🤖 [FUNCTION-CALL] ❌ Function Calling失败: {str(e)}")
+            raise Exception(f"Function Calling调用失败: {str(e)}")
+
     async def _call_real_api(self, task_description: str) -> str:
         """调用真实的AI API"""
         import requests
@@ -252,8 +329,8 @@ class AIWorkflowGeneratorService:
             
             if len(start_nodes) != 1:
                 raise Exception("工作流必须有且仅有一个开始节点")
-            if len(end_nodes) != 1:
-                raise Exception("工作流必须有且仅有一个结束节点")
+            if len(end_nodes) == 0:
+                raise Exception("工作流必须至少有一个结束节点")
             
             logger.info(f"JSON解析成功: {workflow_data['name']}")
             return workflow_data

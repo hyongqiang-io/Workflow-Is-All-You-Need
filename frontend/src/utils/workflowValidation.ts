@@ -57,13 +57,10 @@ export function validateWorkflow(nodes: Node[], edges: Edge[]): ValidationResult
     result.errors.push(`工作流只能有一个开始节点，当前有 ${details.startNodes.length} 个`);
   }
 
-  // 2. 检查结束节点数量（必须有且仅有一个）
+  // 2. 检查结束节点数量（必须至少有一个）
   if (details.endNodes.length === 0) {
     result.isValid = false;
-    result.errors.push('工作流必须有且仅有一个结束类型节点');
-  } else if (details.endNodes.length > 1) {
-    result.isValid = false;
-    result.errors.push(`工作流只能有一个结束节点，当前有 ${details.endNodes.length} 个`);
+    result.errors.push('工作流必须至少有一个结束类型节点');
   }
 
   // 3. 检查processor节点连接（所有processor节点必须前后都有连接）
@@ -105,6 +102,11 @@ export function validateWorkflow(nodes: Node[], edges: Edge[]): ValidationResult
   // 7. 添加一些警告
   if (details.processorNodes.length === 0) {
     result.warnings.push('工作流没有处理器节点，可能只是一个简单的开始-结束流程');
+  }
+
+  // 8. 多结束节点的提示信息
+  if (details.endNodes.length > 1) {
+    result.warnings.push(`工作流包含 ${details.endNodes.length} 个结束节点，任意一个结束节点完成都会标记工作流为完成状态`);
   }
 
   return result;

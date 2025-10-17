@@ -108,7 +108,7 @@ class WorkflowImport(BaseModel):
         if len(end_nodes) == 0:
             warnings.append("建议添加结束节点")
         elif len(end_nodes) > 1:
-            warnings.append("建议只使用一个结束节点")
+            warnings.append(f"工作流包含 {len(end_nodes)} 个结束节点，任意一个结束节点完成都会标记工作流为完成状态")
         
         # 检查连接的有效性
         unique_node_names = list(set(node_names))  # 使用去重后的名称列表

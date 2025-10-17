@@ -144,7 +144,7 @@ interface TaskState {
   loadTasks: (status?: string) => Promise<void>;
   getTaskDetails: (taskId: string) => Promise<void>;
   startTask: (taskId: string) => Promise<void>;
-  submitTaskResult: (taskId: string, resultData: any, summary?: string, attachmentFileIds?: string[]) => Promise<void>;
+  submitTaskResult: (taskId: string, resultData: any, summary?: string, attachmentFileIds?: string[], selectedNextNodes?: string[]) => Promise<void>;
   pauseTask: (taskId: string, reason?: string) => Promise<void>;
   requestHelp: (taskId: string, helpMessage: string) => Promise<void>;
   rejectTask: (taskId: string, reason: string) => Promise<void>;
@@ -273,13 +273,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
-  submitTaskResult: async (taskId: string, resultData: any, summary?: string, attachmentFileIds?: string[]) => {
+  submitTaskResult: async (taskId: string, resultData: any, summary?: string, attachmentFileIds?: string[], selectedNextNodes?: string[]) => {
     set({ loading: true, error: null });
     try {
-      const submitData = { 
-        result_data: resultData, 
+      const submitData = {
+        result_data: resultData,
         result_summary: summary,
-        attachment_file_ids: attachmentFileIds || []  // 🆕 添加附件ID支持
+        attachment_file_ids: attachmentFileIds || [],  // 🆕 添加附件ID支持
+        selected_next_nodes: selectedNextNodes || []    // 🆕 添加选中的下游节点支持
       };
       await taskAPI.submitTaskResult(taskId, submitData);
       // 清除草稿

@@ -15,7 +15,11 @@
       "mcp__grep__searchGitHub",
       "Bash(npx:*)",
       "WebSearch",
-      "WebFetch(domain:docs.siliconflow.cn)"
+      "WebFetch(domain:docs.siliconflow.cn)",
+      "WebFetch(domain:docs.cursor.com)",
+      "WebFetch(domain:blog.bytebytego.com)",
+      "Bash(npm run build:*)",
+      "Read(//home/ubuntu/**)"
     ],
     "deny": [],
     "ask": [],

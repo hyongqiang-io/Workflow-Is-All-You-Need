@@ -202,17 +202,8 @@ class WorkflowImportExportService:
             
             # 验证数据
             validation_result = import_data.validate_import_data()
-            
-            # 检查名称冲突
-            conflicts = []
-            existing_workflows = await self.workflow_service.get_user_workflows(user_id)
-            
-            for workflow in existing_workflows:
-                if workflow.name == import_data.name:
-                    conflicts.append(f"已存在同名工作流: {import_data.name}")
-                    break
-            
-            # 创建预览信息
+
+            # 创建预览信息（不检查名称冲突，因为导入会创建新的工作流）
             preview = ImportPreview(
                 workflow_info={
                     "name": import_data.name,
@@ -223,7 +214,7 @@ class WorkflowImportExportService:
                 nodes_count=len(import_data.nodes),
                 connections_count=len(import_data.connections),
                 validation_result=validation_result,
-                conflicts=conflicts
+                conflicts=[]  # 不再检查名称冲突
             )
             
             return preview
@@ -287,18 +278,7 @@ class WorkflowImportExportService:
                         warnings=validation_result.get("warnings", [])
                     )
             
-            # 检查名称冲突
-            if not overwrite:
-                existing_workflows = await self.workflow_service.get_user_workflows(user_id)
-                for workflow in existing_workflows:
-                    if workflow.name == import_data.name:
-                        return ImportResult(
-                            success=False,
-                            message=f"已存在同名工作流: {import_data.name}",
-                            errors=[f"工作流名称 '{import_data.name}' 已存在"]
-                        )
-            
-            # 创建工作流
+            # 创建工作流（允许同名，因为ID唯一即可保证区分）
             workflow_create = WorkflowCreate(
                 name=import_data.name,
                 description=import_data.description,

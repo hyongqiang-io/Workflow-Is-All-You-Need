@@ -44,16 +44,16 @@ api.interceptors.request.use(
 // 响应拦截器 - 处理错误
 api.interceptors.response.use(
   (response) => {
-    // console.log('🔄 [INTERCEPTOR-DEBUG] 响应拦截器 - 成功响应');
-    // console.log('   - URL:', response.config.url);
-    // console.log('   - 方法:', response.config.method);
-    // console.log('   - 状态码:', response.status);
-    // console.log('   - 原始响应数据:', response.data);
-    // console.log('   - 原始响应数据类型:', typeof response.data);
-    
+    console.log('🔄 [INTERCEPTOR-DEBUG] 响应拦截器 - 成功响应');
+    console.log('   - URL:', response.config.url);
+    console.log('   - 方法:', response.config.method);
+    console.log('   - 状态码:', response.status);
+    console.log('   - 原始响应数据:', response.data);
+    console.log('   - 原始响应数据类型:', typeof response.data);
+
     // 后端返回统一格式: { success: boolean, message: string, data: any }
     const responseData = response.data;
-    
+
     // 特殊处理AI工作流API
     if (response.config.url?.includes('/ai-workflows/generate')) {
       console.log('🤖 [INTERCEPTOR-DEBUG] 检测到AI工作流API响应');
@@ -68,7 +68,7 @@ api.interceptors.response.use(
         return responseData;
       }
     }
-    
+
     // 如果响应包含success字段，说明是后端的统一格式
     if (typeof responseData === 'object' && responseData.hasOwnProperty('success')) {
       if (!responseData.success) {
@@ -78,16 +78,16 @@ api.interceptors.response.use(
         // 业务逻辑错误，抛出异常
         throw new Error(responseData.message || '操作失败');
       }
-      // console.log('✅ [INTERCEPTOR-DEBUG] 返回业务数据');
-      // console.log('   - 返回的数据结构:', responseData);
-      // console.log('   - 是否提取data字段:', responseData.data ? '是' : '否');
+      console.log('✅ [INTERCEPTOR-DEBUG] 返回业务数据');
+      console.log('   - 返回的数据结构:', responseData);
+      console.log('   - 是否提取data字段:', responseData.data ? '是' : '否');
       // 为了调试，暂时返回完整的responseData而不是data字段
       return responseData;
     }
-    
+
     console.log('✅ [INTERCEPTOR-DEBUG] 返回原始数据');
-    // 兼容原有的直接返回数据的格式
-    return responseData;
+    // 保持axios response结构，不要直接返回data
+    return response;
   },
   (error) => {
     console.error('❌ [INTERCEPTOR-DEBUG] 响应拦截器 - 错误响应');
@@ -242,8 +242,12 @@ export const taskAPI = {
     api.post(`/execution/tasks/${taskId}/start`),
 
   // 提交任务结果
-  submitTaskResult: (taskId: string, data: { result_data: any; result_summary?: string; attachment_file_ids?: string[] }) =>
+  submitTaskResult: (taskId: string, data: { result_data: any; result_summary?: string; attachment_file_ids?: string[]; selected_next_nodes?: string[] }) =>
     api.post(`/execution/tasks/${taskId}/submit`, data),
+
+  // 获取任务的下游条件节点
+  getConditionalDownstreamNodes: (taskId: string) =>
+    api.get(`/execution/tasks/${taskId}/conditional-downstream-nodes`),
 
   // 暂停任务
   pauseTask: (taskId: string, data: { reason?: string }) =>

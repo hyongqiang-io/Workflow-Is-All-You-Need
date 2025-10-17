@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from 'react';
 import ReactFlow, {
   Node,
   Edge,
@@ -288,12 +288,17 @@ interface WorkflowDesignerProps {
   readOnly?: boolean;
 }
 
-const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
+interface WorkflowDesignerRef {
+  refreshWorkflow: () => Promise<void>;
+  getWorkflowState: () => { nodes: Node[]; edges: Edge[] };
+}
+
+const WorkflowDesigner = forwardRef<WorkflowDesignerRef, WorkflowDesignerProps>(({
   workflowId,
   onSave,
   onExecute,
   readOnly = false,
-}) => {
+}, ref) => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [nodeModalVisible, setNodeModalVisible] = useState(false);
@@ -665,6 +670,12 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
       message.error('加载工作流失败');
     }
   };
+
+  // 暴露方法给父组件
+  useImperativeHandle(ref, () => ({
+    refreshWorkflow: loadWorkflow,
+    getWorkflowState: () => ({ nodes, edges })
+  }), [loadWorkflow, nodes, edges]);
 
   const onConnect = useCallback(
     async (params: Connection) => {
@@ -1650,6 +1661,8 @@ const WorkflowDesigner: React.FC<WorkflowDesignerProps> = ({
       />
     </ReactFlowProvider>
   );
-};
+});
+
+WorkflowDesigner.displayName = 'WorkflowDesigner';
 
 export default WorkflowDesigner; 
