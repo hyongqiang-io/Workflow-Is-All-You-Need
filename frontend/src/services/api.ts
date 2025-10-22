@@ -598,6 +598,10 @@ export const executionAPI = {
     }
   },
 
+  // 获取工作流实例中包含对话的节点
+  getWorkflowConversationNodes: (workflowInstanceId: string) =>
+    api.get(`/tasks/workflow/${workflowInstanceId}/conversation-nodes`),
+
   // 获取工作流实例上下文
   getWorkflowContext: (instanceId: string) =>
     api.get(`/execution/workflows/instances/${instanceId}/context`),

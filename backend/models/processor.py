@@ -15,6 +15,7 @@ class ProcessorType(str, Enum):
     HUMAN = "human"
     AGENT = "agent"
     MIX = "mix"
+    SIMULATOR = "simulator"
 
 
 class ProcessorBase(BaseModel):
@@ -36,6 +37,7 @@ class ProcessorCreate(ProcessorBase, CreateRequest):
     """处理器创建模型"""
     user_id: Optional[uuid.UUID] = Field(None, description="用户ID")
     agent_id: Optional[uuid.UUID] = Field(None, description="Agent ID")
+    group_id: Optional[uuid.UUID] = Field(None, description="群组ID")
 
 
 class ProcessorUpdate(UpdateRequest):
@@ -44,6 +46,7 @@ class ProcessorUpdate(UpdateRequest):
     type: Optional[ProcessorType] = Field(None, description="处理器类型")
     user_id: Optional[uuid.UUID] = Field(None, description="用户ID")
     agent_id: Optional[uuid.UUID] = Field(None, description="Agent ID")
+    group_id: Optional[uuid.UUID] = Field(None, description="群组ID")
 
 
 class ProcessorResponse(ProcessorBase):

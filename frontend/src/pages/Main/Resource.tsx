@@ -20,6 +20,7 @@ import {
   ExclamationCircleOutlined
 } from '@ant-design/icons';
 import { resourceAPI, agentAPI, processorAPI } from '../../services/api';
+import { groupAPI } from '../../services/groupAPI';
 import MCPToolsManagement from '../../components/MCPToolsManagement';
 import AgentToolSelector from '../../components/AgentToolSelector';
 import { useAuthStore } from '../../stores/authStore';
@@ -56,7 +57,7 @@ interface Tool {
 interface Processor {
   processor_id: string;
   name: string;
-  type: 'human' | 'agent' | 'mix';
+  type: 'human' | 'agent' | 'mix' | 'simulator';
   version: number;
   created_at: string;
   user_id?: string;
@@ -73,6 +74,7 @@ const Resource: React.FC = () => {
   const [resources, setResources] = useState<ResourceItem[]>([]);
   const [tools, setTools] = useState<Tool[]>([]);
   const [processors, setProcessors] = useState<Processor[]>([]);
+  const [userGroups, setUserGroups] = useState<any[]>([]); // 用户所在的群组
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'human' | 'agent'>('all');
@@ -250,12 +252,32 @@ const Resource: React.FC = () => {
     }
   }, []);
 
+  // 加载用户参与的群组（群组成员都可以将Processor分配到该群组）
+  const loadUserGroups = useCallback(async () => {
+    try {
+      console.log('正在加载用户参与的群组...');
+      const response: any = await groupAPI.getMyGroups(); // 不传is_creator参数，获取所有参与的群组
+      console.log('用户参与的群组API响应:', response);
+      if (response && response.data) {
+        setUserGroups(response.data);
+        console.log('用户参与的群组数据设置成功:', response.data);
+      } else {
+        console.log('用户参与的群组数据为空');
+        setUserGroups([]);
+      }
+    } catch (error) {
+      console.error('加载用户参与的群组失败:', error);
+      setUserGroups([]);
+    }
+  }, []);
+
   // 初始化数据加载
   useEffect(() => {
     loadResources();
     loadTools();
     loadProcessors();
-  }, [loadResources, loadTools, loadProcessors]);
+    loadUserGroups();
+  }, [loadResources, loadTools, loadProcessors, loadUserGroups]);
 
   // Agent管理相关方法
   // 使用 useCallback 优化事件处理函数
@@ -508,7 +530,9 @@ const Resource: React.FC = () => {
   const handleCreateProcessor = useCallback(() => {
     setCreateProcessorModalVisible(true);
     createProcessorForm.resetFields();
-  }, [createProcessorForm]);
+    console.log('创建Processor模态框已打开');
+    console.log('当前用户群组数量:', userGroups.length);
+  }, [createProcessorForm, userGroups]);
 
   const handleCreateProcessorConfirm = useCallback(async () => {
     try {
@@ -526,9 +550,16 @@ const Resource: React.FC = () => {
         requestData.user_id = values.user_id;
       } else if (values.type === 'agent' && values.agent_id) {
         requestData.agent_id = values.agent_id;
+      } else if (values.type === 'simulator' && values.agent_id) {
+        requestData.agent_id = values.agent_id;
       } else if (values.type === 'mix' && values.user_id && values.agent_id) {
         requestData.user_id = values.user_id;
         requestData.agent_id = values.agent_id;
+      }
+
+      // 添加群组ID（如果选择了群组）
+      if (values.group_id) {
+        requestData.group_id = values.group_id;
       }
 
       console.log('准备发送请求，数据为:', requestData);
@@ -1063,6 +1094,7 @@ const Resource: React.FC = () => {
                 const typeConfig = {
                   human: { color: 'blue', text: '用户' },
                   agent: { color: 'purple', text: 'Agent' },
+                  simulator: { color: 'green', text: '模拟器' },
                   mix: { color: 'orange', text: '混合' }
                 };
                 const config = typeConfig[type as keyof typeof typeConfig] || { color: 'default', text: type };
@@ -1102,6 +1134,25 @@ const Resource: React.FC = () => {
               )
             },
             {
+              title: '所属群组',
+              key: 'group_info',
+              width: 120,
+              render: (text: string, record: any) => (
+                record.group_id ? (
+                  <div>
+                    <div style={{ fontWeight: 'bold' }}>{record.group_name || '未知群组'}</div>
+                    <div style={{ fontSize: '12px', color: '#666' }}>
+                      <Tag color={record.group_is_public ? 'green' : 'orange'}>
+                        {record.group_is_public ? '公开' : '私有'}
+                      </Tag>
+                    </div>
+                  </div>
+                ) : (
+                  <Tag color="blue">公开Processor</Tag>
+                )
+              )
+            },
+            {
               title: '创建者',
               key: 'creator',
               width: 120,
@@ -1128,9 +1179,9 @@ const Resource: React.FC = () => {
                 <Space>
                   {canEditProcessor(record) && (
                     <Tooltip title="编辑处理器">
-                      <Button 
-                        type="link" 
-                        size="small" 
+                      <Button
+                        type="link"
+                        size="small"
                         icon={<EditOutlined />}
                         onClick={(e) => {
                           e.preventDefault();
@@ -1140,20 +1191,22 @@ const Resource: React.FC = () => {
                       />
                     </Tooltip>
                   )}
-                  <Tooltip title="删除处理器">
-                    <Button 
-                      type="link" 
-                      size="small" 
-                      danger
-                      icon={<DeleteOutlined />}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        console.log('Delete button clicked, record:', record);
-                        handleDeleteProcessor(record);
-                      }}
-                    />
-                  </Tooltip>
+                  {canEditProcessor(record) && (
+                    <Tooltip title="删除处理器">
+                      <Button
+                        type="link"
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          console.log('Delete button clicked, record:', record);
+                          handleDeleteProcessor(record);
+                        }}
+                      />
+                    </Tooltip>
+                  )}
                 </Space>
               )
             }
@@ -1479,7 +1532,9 @@ const Resource: React.FC = () => {
         open={createProcessorModalVisible}
         onOk={handleCreateProcessorConfirm}
         onCancel={() => setCreateProcessorModalVisible(false)}
-        width={600}
+        width={700}
+        style={{ top: 20 }}
+        bodyStyle={{ maxHeight: '70vh', overflowY: 'auto' }}
       >
         <Form form={createProcessorForm} layout="vertical">
           <Form.Item
@@ -1492,7 +1547,50 @@ const Resource: React.FC = () => {
           >
             <Input placeholder="请输入Processor名称" />
           </Form.Item>
-          
+
+          <Form.Item
+            name="group_id"
+            label="所属群组"
+            tooltip="可以将Processor分配到您参与的任何群组中；不选择则为公开Processor"
+          >
+            <Select
+              placeholder={userGroups.length > 0 ? "请选择群组（可选，不选择则为公开Processor）" : "暂无您参与的群组，该Processor将为公开Processor"}
+              allowClear
+              showSearch
+              disabled={userGroups.length === 0}
+              filterOption={(input, option) =>
+                String(option?.children || '').toLowerCase().includes(input.toLowerCase())
+              }
+            >
+              {userGroups.length > 0 ? (
+                userGroups.map(group => (
+                  <Option key={group.group_id} value={group.group_id}>
+                    <span>
+                      {group.group_name}
+                      <Tag color={group.is_public ? 'green' : 'orange'} style={{ marginLeft: '8px' }}>
+                        {group.is_public ? '公开' : '私有'}
+                      </Tag>
+                      {group.is_creator && (
+                        <Tag color="blue" style={{ marginLeft: '4px' }}>
+                          创建者
+                        </Tag>
+                      )}
+                    </span>
+                  </Option>
+                ))
+              ) : (
+                <Option value="" disabled>
+                  暂无您参与的群组，请先加入群组
+                </Option>
+              )}
+            </Select>
+            {userGroups.length === 0 && (
+              <div style={{ marginTop: '4px', color: '#666', fontSize: '12px' }}>
+                提示：您还没有参与任何群组，创建的Processor将默认为公开Processor。可以在"群组管理"页面创建或加入群组。
+              </div>
+            )}
+          </Form.Item>
+
           <Form.Item
             name="type"
             label="处理器类型"
@@ -1501,6 +1599,7 @@ const Resource: React.FC = () => {
             <Select placeholder="请选择处理器类型">
               <Option value="human">用户处理器</Option>
               <Option value="agent">Agent处理器</Option>
+              <Option value="simulator">模拟器处理器</Option>
             </Select>
           </Form.Item>
 
@@ -1540,11 +1639,11 @@ const Resource: React.FC = () => {
                     </Form.Item>
                   )}
 
-                  {(processorType === 'agent' || processorType === 'mix') && (
+                  {(processorType === 'agent' || processorType === 'simulator' || processorType === 'mix') && (
                     <Form.Item
                       name="agent_id"
                       label="关联Agent"
-                      rules={processorType === 'agent' || processorType === 'mix' ? [{ required: true, message: '请选择关联Agent' }] : []}
+                      rules={processorType === 'agent' || processorType === 'simulator' || processorType === 'mix' ? [{ required: true, message: '请选择关联Agent' }] : []}
                     >
                       <Select 
                         placeholder="请选择关联Agent"
@@ -1767,6 +1866,7 @@ const Resource: React.FC = () => {
             <Select placeholder="请选择处理器类型">
               <Option value="human">用户处理器</Option>
               <Option value="agent">Agent处理器</Option>
+              <Option value="simulator">模拟器处理器</Option>
               {/* <Option value="mix">混合处理器</Option> */}
             </Select>
           </Form.Item>
@@ -1807,11 +1907,11 @@ const Resource: React.FC = () => {
                     </Form.Item>
                   )}
 
-                  {(processorType === 'agent' || processorType === 'mix') && (
+                  {(processorType === 'agent' || processorType === 'simulator' || processorType === 'mix') && (
                     <Form.Item
                       name="agent_id"
                       label="关联Agent"
-                      rules={processorType === 'agent' || processorType === 'mix' ? [{ required: true, message: '请选择关联Agent' }] : []}
+                      rules={processorType === 'agent' || processorType === 'simulator' || processorType === 'mix' ? [{ required: true, message: '请选择关联Agent' }] : []}
                     >
                       <Select 
                         placeholder="请选择关联Agent"

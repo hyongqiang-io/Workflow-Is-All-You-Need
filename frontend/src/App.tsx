@@ -18,6 +18,7 @@ import Profile from './pages/Profile/Profile';
 import TaskFlow from './pages/Workflow/TaskFlow';
 import AgentManagement from './pages/Agent/AgentManagement';
 import Help from './pages/Main/Help';
+import GroupManagement from './pages/Main/GroupManagement';
 import WorkflowStore from './pages/Store/WorkflowStore';
 import WorkflowStoreDetail from './pages/Store/WorkflowStoreDetail';
 
@@ -51,6 +52,7 @@ function App() {
             <Route path="workflow/:workflowId/task-flow" element={<TaskFlow />} />
             <Route path="todo" element={<Todo />} />
             <Route path="agent" element={<AgentManagement />} />
+            <Route path="groups" element={<GroupManagement />} />
             <Route path="help" element={<Help />} />
             <Route path="store" element={<WorkflowStore />} />
             <Route path="store/workflow/:storeId" element={<WorkflowStoreDetail />} />

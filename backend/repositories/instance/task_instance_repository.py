@@ -128,8 +128,9 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
     async def get_task_by_id(self, task_instance_id: uuid.UUID) -> Optional[Dict[str, Any]]:
         """根据ID获取任务实例"""
         try:
+            logger.info(f"📋 开始获取任务实例: {task_instance_id}")
             query = """
-                SELECT ti.*, 
+                SELECT ti.*,
                        p.name as processor_name, p.type as processor_type,
                        u.username as assigned_user_name,
                        a.agent_name as assigned_agent_name
@@ -140,13 +141,40 @@ class TaskInstanceRepository(BaseRepository[TaskInstance]):
                 WHERE ti.task_instance_id = $1 AND ti.is_deleted = FALSE
             """
             result = await self.db.fetch_one(query, task_instance_id)
+            logger.info(f"📊 数据库查询结果: {'已找到' if result else '未找到'}")
+
             if result:
-                result = dict(result)
+                task = dict(result)
+                logger.info(f"🕐 处理任务中的时间戳字段...")
+
+                # 处理所有可能的时间戳字段
+                timestamp_fields = ['created_at', 'updated_at', 'started_at', 'completed_at', 'timeout_at']
+                for field in timestamp_fields:
+                    if task.get(field):
+                        logger.info(f"处理{field}: {task[field]} (类型: {type(task[field])})")
+                        try:
+                            # 导入timestamp_utils模块
+                            from backend.utils.timestamp_utils import safe_format_timestamp
+                            task[field] = safe_format_timestamp(task[field])
+                            logger.info(f"{field}格式化成功: {task[field]}")
+                        except Exception as ts_error:
+                            logger.error(f"❌ {field}格式化失败: {ts_error}")
+                            logger.error(f"原始时间戳: {repr(task[field])}")
+                            task[field] = None
+
                 # input_data, context_data, output_data现在是文本格式，不需要JSON解析
-            
-            return result
+                logger.info(f"✅ 任务实例获取成功: {task.get('task_title', 'Unknown')}")
+                return task
+            else:
+                logger.info(f"🚫 未找到任务实例")
+                return None
+
         except Exception as e:
-            logger.error(f"获取任务实例失败: {e}")
+            logger.error(f"❌ 获取任务实例失败: {e}")
+            logger.error(f"task_id: {task_instance_id} (类型: {type(task_instance_id)})")
+            logger.error(f"错误类型: {type(e)}")
+            import traceback
+            logger.error(f"错误堆栈: {traceback.format_exc()}")
             raise
     
     async def update_task(self, task_instance_id: uuid.UUID, 

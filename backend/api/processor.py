@@ -80,6 +80,8 @@ async def test_create_processor(
             raise ValidationError("human类型处理器必须指定user_id")
         elif processor_data.type == ProcessorType.AGENT and not processor_data.agent_id:
             raise ValidationError("agent类型处理器必须指定agent_id")
+        elif processor_data.type == ProcessorType.SIMULATOR and not processor_data.agent_id:
+            raise ValidationError("simulator类型处理器必须指定agent_id")
         elif processor_data.type == ProcessorType.MIX and (not processor_data.user_id or not processor_data.agent_id):
             raise ValidationError("mix类型处理器必须同时指定user_id和agent_id")
         
@@ -139,6 +141,8 @@ async def create_processor(
             raise ValidationError("human类型处理器必须指定user_id")
         elif processor_data.type == ProcessorType.AGENT and not processor_data.agent_id:
             raise ValidationError("agent类型处理器必须指定agent_id")
+        elif processor_data.type == ProcessorType.SIMULATOR and not processor_data.agent_id:
+            raise ValidationError("simulator类型处理器必须指定agent_id")
         elif processor_data.type == ProcessorType.MIX and (not processor_data.user_id or not processor_data.agent_id):
             raise ValidationError("mix类型处理器必须同时指定user_id和agent_id")
         
@@ -308,32 +312,66 @@ async def get_available_processors(
         )
 
 
+@router.get("/grouped", response_model=BaseResponse)
+async def get_processors_grouped(
+    current_user: Optional[CurrentUser] = Depends(get_current_user_context)
+):
+    """
+    获取按群组分类的处理器列表
+
+    Args:
+        current_user: 当前用户（可选）
+
+    Returns:
+        按群组分类的处理器列表
+    """
+    try:
+        user_id = str(current_user.user_id) if current_user else None
+        grouped_processors = await processor_repository.get_processors_grouped(user_id)
+
+        return BaseResponse(
+            success=True,
+            data=grouped_processors,
+            message="获取分组处理器列表成功"
+        )
+
+    except Exception as e:
+        logger.error(f"获取分组处理器列表失败: {e}")
+        return BaseResponse(
+            success=False,
+            message="获取分组处理器列表失败",
+            data={"公共Processor": []}
+        )
+
+
 @router.get("/registered", response_model=BaseResponse)
 async def get_registered_processors(
     processor_type: Optional[ProcessorType] = Query(None, description="处理器类型筛选"),
     current_user: CurrentUser = Depends(get_current_user_context)
 ):
     """
-    获取已注册的处理器列表
-    
+    获取已注册的处理器列表（仅显示公开的或用户所在群组的处理器）
+
     Args:
         processor_type: 处理器类型筛选
         current_user: 当前用户
-        
+
     Returns:
         已注册处理器列表
     """
     try:
+        user_id = current_user.user_id
+
         if processor_type:
-            processors = await processor_repository.get_processors_by_type(processor_type)
+            processors = await processor_repository.get_accessible_processors_by_type(processor_type, user_id)
         else:
-            # 获取所有类型的处理器
+            # 获取所有类型的用户可访问处理器
             all_processors = []
             for ptype in ProcessorType:
-                processors_of_type = await processor_repository.get_processors_by_type(ptype)
+                processors_of_type = await processor_repository.get_accessible_processors_by_type(ptype, user_id)
                 all_processors.extend(processors_of_type)
             processors = all_processors
-        
+
         # 格式化响应数据
         formatted_processors = []
         for processor in processors:
@@ -349,10 +387,13 @@ async def get_registered_processors(
                 "user_email": processor.get('user_email'),
                 "agent_name": processor.get('agent_name'),
                 "agent_description": processor.get('agent_description'),
-                "creator_name": processor.get('creator_name')
+                "creator_name": processor.get('creator_name'),
+                "group_id": str(processor['group_id']) if processor['group_id'] else None,
+                "group_name": processor.get('group_name'),
+                "group_is_public": processor.get('group_is_public')
             }
             formatted_processors.append(formatted_processor)
-        
+
         return BaseResponse(
             success=True,
             message="获取已注册处理器列表成功",

@@ -48,6 +48,7 @@ class TaskInstanceType(str, Enum):
     HUMAN = "human"         # 人工任务
     AGENT = "agent"         # AI代理任务
     MIXED = "mixed"         # 混合任务
+    SIMULATOR = "simulator" # 模拟器任务
 
 
 # ==================== 工作流实例模型 ====================

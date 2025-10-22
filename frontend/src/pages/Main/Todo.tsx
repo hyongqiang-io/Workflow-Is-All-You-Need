@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Card, List, Tag, Button, Modal, Form, Input, Select, message, Space, Collapse, Typography, Divider, Alert, Spin, Row, Col, Pagination, Checkbox } from 'antd';
-import { SaveOutlined, BranchesOutlined, EyeOutlined, SearchOutlined, ClearOutlined, DownloadOutlined, FileOutlined } from '@ant-design/icons';
+import { Card, List, Tag, Button, Modal, Form, Input, Select, message, Space, Collapse, Typography, Divider, Alert, Spin, Row, Col, Pagination, Checkbox, Tabs } from 'antd';
+import { SaveOutlined, BranchesOutlined, EyeOutlined, SearchOutlined, ClearOutlined, DownloadOutlined, FileOutlined, RobotOutlined } from '@ant-design/icons';
 import { useTaskStore } from '../../stores/taskStore';
 import { useAuthStore } from '../../stores/authStore';
 import { taskSubdivisionApi, executionAPI, taskAPI } from '../../services/api';
@@ -9,6 +9,8 @@ import TaskSubdivisionModal from '../../components/TaskSubdivisionModal';
 import SubdivisionResultEditModal from '../../components/SubdivisionResultEditModal';
 import TaskFlowViewer from '../../components/TaskFlowViewer';
 import NodeAttachmentManager from '../../components/NodeAttachmentManager';
+import TaskConversationPanel from '../../components/TaskConversationPanel';
+import SimulatorConversationPanel from '../../components/SimulatorConversationPanel';
 
 const { TextArea } = Input;
 const { Panel } = Collapse;
@@ -1567,6 +1569,29 @@ const Todo: React.FC = () => {
               )}
             </Card>
 
+            {/* Simulator任务的对话界面 */}
+            {currentTask.task_type === 'simulator' && currentTask.context_data?.session_id && (
+              <div style={{ marginBottom: '16px' }}>
+                <SimulatorConversationPanel
+                  taskId={currentTask.task_instance_id}
+                  sessionId={currentTask.context_data.session_id}
+                  onConversationComplete={(result) => {
+                    message.success('Simulator对话已完成');
+                    setDetailModalVisible(false);
+                    loadTasks(); // 重新加载任务列表
+                  }}
+                  onConversationInterrupt={() => {
+                    message.info('Simulator对话已中断');
+                    setDetailModalVisible(false);
+                    loadTasks(); // 重新加载任务列表
+                  }}
+                />
+              </div>
+            )}
+
+            {/* 非Simulator任务或没有会话ID的任务显示常规信息 */}
+            {!(currentTask.task_type === 'simulator' && currentTask.context_data?.session_id) && (
+              <>
             {/* 上下文信息 */}
             {(currentTask.context_data || currentTask.input_data) && (
               <Card size="small" title="执行上下文" style={{ marginBottom: '16px' }}>
@@ -2114,6 +2139,8 @@ const Todo: React.FC = () => {
                 )}
               </Card>
             )}
+              </>
+            )}
 
             {/* 任务结果 */}
             {(currentTask.output_data || currentTask.result_summary) && (
@@ -2231,7 +2258,7 @@ const Todo: React.FC = () => {
           setConditionalDownstreamNodes([]);
           setSelectedDownstreamNodes([]);
         }}
-        width={900}
+        width={1200}  // 增大宽度以容纳AI对话面板
         footer={[
           <Button key="save-draft" onClick={handleSaveDraft}>
             保存草稿
@@ -2259,24 +2286,32 @@ const Todo: React.FC = () => {
                 label="任务结果"
                 rules={[{ required: true, message: '请输入任务结果' }]}
                 extra={
-                  (currentTask?.input_data?.immediate_upstream || 
-                   currentTask?.input_data?.workflow_global ||
-                   currentTask?.context_data?.immediate_upstream_results ||
-                   currentTask?.context_data?.upstream_outputs) ? 
-                    '提示：您可以在上方的"任务详情"中查看上游处理器执行结果和上下文数据' : null
+                  <div>
+                    {(currentTask?.input_data?.immediate_upstream ||
+                     currentTask?.input_data?.workflow_global ||
+                     currentTask?.context_data?.immediate_upstream_results ||
+                     currentTask?.context_data?.upstream_outputs) && (
+                      <div style={{ marginBottom: '4px' }}>
+                        💡 您可以在"任务详情"中查看上游处理器执行结果和上下文数据
+                      </div>
+                    )}
+                    <div style={{ color: '#1890ff', fontSize: '12px' }}>
+                      🤖 右侧AI助手可以帮助您理解任务要求和分析上游数据
+                    </div>
+                  </div>
                 }
               >
                 <TextArea rows={8} placeholder="请详细描述任务完成情况...
 
 可以参考上游上下文数据来完成任务。
-您也可以从右侧的子工作流结果中选择内容填充。" />
+您也可以从右侧子工作流结果中选择内容填充，或与AI助手对话获取帮助。" />
               </Form.Item>
               <Form.Item
                 name="attachments"
                 label="附件上传"
                 tooltip="您可以上传与任务完成相关的文件，如截图、文档等"
               >
-                <NodeAttachmentManager 
+                <NodeAttachmentManager
                   workflowId={currentTask?.workflow_instance_id}
                   nodeId={currentTask?.node_instance_id}
                   onChange={(fileIds) => {
@@ -2383,150 +2418,198 @@ const Todo: React.FC = () => {
               )}
             </Form>
           </div>
-          
-          {/* 右侧：子工作流列表 */}
-          <div style={{ width: '350px', borderLeft: '1px solid #f0f0f0', paddingLeft: '16px' }}>
-            <div style={{ marginBottom: '12px' }}>
-              <Text strong style={{ fontSize: '16px' }}>相关子工作流</Text>
-              {loadingSubWorkflows && <Spin size="small" style={{ marginLeft: '8px' }} />}
-            </div>
 
-            {subWorkflowsForSubmit.length > 0 ? (
-              <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-                {subWorkflowsForSubmit.map((subWorkflow, index) => {
-                  
-                  return (
-                    <Card 
-                      key={subWorkflow.subdivision_id || index}
-                    size="small" 
-                    style={{ marginBottom: '8px' }}
-                    title={
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Text strong style={{ fontSize: '12px' }}>
-                          {subWorkflow.subdivision_name || `子工作流 ${index + 1}`}
-                        </Text>
-                        <Tag 
-                          color={
-                            // 优先使用工作流实例的状态，否则使用细分状态
-                            (subWorkflow.workflowDetails?.status || subWorkflow.status) === 'completed' ? 'green' :
-                            (subWorkflow.workflowDetails?.status || subWorkflow.status) === 'failed' ? 'red' :
-                            (subWorkflow.workflowDetails?.status || subWorkflow.status) === 'running' ? 'blue' : 'orange'
+          {/* 右侧：子工作流和AI助手 */}
+          <div style={{ width: '400px', borderLeft: '1px solid #f0f0f0', paddingLeft: '16px' }}>
+            <Tabs
+              defaultActiveKey="ai-assistant"
+              size="small"
+              items={[
+                {
+                  key: 'ai-assistant',
+                  label: (
+                    <span>
+                      <RobotOutlined />
+                      AI助手
+                    </span>
+                  ),
+                  children: (
+                    <div style={{ height: '500px' }}>
+                      <TaskConversationPanel
+                        taskId={currentTask?.task_instance_id || ''}
+                        taskInfo={currentTask ? {
+                          title: currentTask.task_title,
+                          description: currentTask.task_description,
+                          status: currentTask.status
+                        } : undefined}
+                        onSuggestionSelect={(suggestion) => {
+                          // 处理AI建议点击
+                          if (suggestion.includes('提交') || suggestion.includes('完成')) {
+                            // 如果建议是提交任务，可以在这里做处理
+                            console.log('AI建议提交任务');
+                          } else if (suggestion.includes('检查') || suggestion.includes('验证')) {
+                            // 如果建议是检查数据，可以切换到任务详情
+                            console.log('AI建议检查数据');
+                          } else {
+                            // 其他建议作为消息发送给AI
+                            console.log('处理AI建议:', suggestion);
                           }
-                          style={{ fontSize: '10px' }}
-                        >
-                          {(() => {
-                            const actualStatus = subWorkflow.workflowDetails?.status || subWorkflow.status;
-
-                            return actualStatus === 'completed' ? '已完成' :
-                                   actualStatus === 'failed' ? '失败' :
-                                   actualStatus === 'running' ? '运行中' : '进行中';
-                          })()}
-                        </Tag>
+                        }}
+                      />
+                    </div>
+                  )
+                },
+                {
+                  key: 'sub-workflows',
+                  label: `子工作流 ${subWorkflowsForSubmit.length > 0 ? `(${subWorkflowsForSubmit.length})` : ''}`,
+                  children: (
+                    <div style={{ height: '500px', overflow: 'hidden' }}>
+                      <div style={{ marginBottom: '12px' }}>
+                        <Text strong style={{ fontSize: '16px' }}>相关子工作流</Text>
+                        {loadingSubWorkflows && <Spin size="small" style={{ marginLeft: '8px' }} />}
                       </div>
-                    }
-                    extra={
-                      <Space size="small">
-                        <Button 
-                          type="link" 
-                          size="small" 
-                          icon={<EyeOutlined />}
-                          onClick={() => handleViewSubWorkflowDetails(subWorkflow)}
-                          style={{ padding: '0 4px', fontSize: '12px' }}
-                        >
-                          查看
-                        </Button>
-                        {(() => {
-                          const actualStatus = subWorkflow.workflowDetails?.status || subWorkflow.status;
-                          return actualStatus === 'completed' && (
-                            <Button 
-                              type="primary" 
+
+                      {subWorkflowsForSubmit.length > 0 ? (
+                        <div style={{ height: '430px', overflowY: 'auto' }}>
+                          {subWorkflowsForSubmit.map((subWorkflow, index) => {
+
+                            return (
+                              <Card
+                                key={subWorkflow.subdivision_id || index}
                               size="small"
-                              onClick={() => handleSelectSubWorkflowResult(subWorkflow)}
-                              style={{ padding: '0 8px', fontSize: '12px' }}
+                              style={{ marginBottom: '8px' }}
+                              title={
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                  <Text strong style={{ fontSize: '12px' }}>
+                                    {subWorkflow.subdivision_name || `子工作流 ${index + 1}`}
+                                  </Text>
+                                  <Tag
+                                    color={
+                                      // 优先使用工作流实例的状态，否则使用细分状态
+                                      (subWorkflow.workflowDetails?.status || subWorkflow.status) === 'completed' ? 'green' :
+                                      (subWorkflow.workflowDetails?.status || subWorkflow.status) === 'failed' ? 'red' :
+                                      (subWorkflow.workflowDetails?.status || subWorkflow.status) === 'running' ? 'blue' : 'orange'
+                                    }
+                                    style={{ fontSize: '10px' }}
+                                  >
+                                    {(() => {
+                                      const actualStatus = subWorkflow.workflowDetails?.status || subWorkflow.status;
+
+                                      return actualStatus === 'completed' ? '已完成' :
+                                             actualStatus === 'failed' ? '失败' :
+                                             actualStatus === 'running' ? '运行中' : '进行中';
+                                    })()}
+                                  </Tag>
+                                </div>
+                              }
+                              extra={
+                                <Space size="small">
+                                  <Button
+                                    type="link"
+                                    size="small"
+                                    icon={<EyeOutlined />}
+                                    onClick={() => handleViewSubWorkflowDetails(subWorkflow)}
+                                    style={{ padding: '0 4px', fontSize: '12px' }}
+                                  >
+                                    查看
+                                  </Button>
+                                  {(() => {
+                                    const actualStatus = subWorkflow.workflowDetails?.status || subWorkflow.status;
+                                    return actualStatus === 'completed' && (
+                                      <Button
+                                        type="primary"
+                                        size="small"
+                                        onClick={() => handleSelectSubWorkflowResult(subWorkflow)}
+                                        style={{ padding: '0 8px', fontSize: '12px' }}
+                                      >
+                                        选择结果
+                                      </Button>
+                                    );
+                                  })()}
+                                </Space>
+                              }
                             >
-                              选择结果
-                            </Button>
-                          );
-                        })()}
-                      </Space>
-                    }
-                  >
-                    <div style={{ fontSize: '12px' }}>
-                      <div style={{ marginBottom: '4px' }}>
-                        <Text type="secondary">创建时间: </Text>
-                        <Text>
-                          {(() => {
-                            // 优先使用工作流实例的创建时间，否则使用细分创建时间
-                            const createTime = subWorkflow.workflowDetails?.created_at ||
-                                             subWorkflow.created_at ||
-                                             subWorkflow.subdivision_created_at;
+                              <div style={{ fontSize: '12px' }}>
+                                <div style={{ marginBottom: '4px' }}>
+                                  <Text type="secondary">创建时间: </Text>
+                                  <Text>
+                                    {(() => {
+                                      // 优先使用工作流实例的创建时间，否则使用细分创建时间
+                                      const createTime = subWorkflow.workflowDetails?.created_at ||
+                                                       subWorkflow.created_at ||
+                                                       subWorkflow.subdivision_created_at;
 
-                            if (!createTime) return '未知';
+                                      if (!createTime) return '未知';
 
-                            try {
-                              return new Date(createTime).toLocaleString();
-                            } catch (e) {
-                              console.warn('时间解析失败:', createTime, e);
-                              return '时间格式错误';
-                            }
-                          })()}
-                        </Text>
-                      </div>
-                      {(() => {
-                        const completedTime = subWorkflow.workflowDetails?.completed_at || subWorkflow.completed_at;
-                        return completedTime && (
-                          <div style={{ marginBottom: '4px' }}>
-                            <Text type="secondary">完成时间: </Text>
-                            <Text>
-                              {(() => {
-                                try {
-                                  return new Date(completedTime).toLocaleString();
-                                } catch (e) {
-                                  console.warn('完成时间解析失败:', completedTime, e);
-                                  return '时间格式错误';
-                                }
-                              })()}
-                            </Text>
-                          </div>
-                        );
-                      })()}
-                      {subWorkflow.subdivision_description && (
-                        <div style={{ marginTop: '8px' }}>
-                          <Text type="secondary" style={{ fontSize: '11px' }}>
-                            {subWorkflow.subdivision_description}
-                          </Text>
+                                      try {
+                                        return new Date(createTime).toLocaleString();
+                                      } catch (e) {
+                                        console.warn('时间解析失败:', createTime, e);
+                                        return '时间格式错误';
+                                      }
+                                    })()}
+                                  </Text>
+                                </div>
+                                {(() => {
+                                  const completedTime = subWorkflow.workflowDetails?.completed_at || subWorkflow.completed_at;
+                                  return completedTime && (
+                                    <div style={{ marginBottom: '4px' }}>
+                                      <Text type="secondary">完成时间: </Text>
+                                      <Text>
+                                        {(() => {
+                                          try {
+                                            return new Date(completedTime).toLocaleString();
+                                          } catch (e) {
+                                            console.warn('完成时间解析失败:', completedTime, e);
+                                            return '时间格式错误';
+                                          }
+                                        })()}
+                                      </Text>
+                                    </div>
+                                  );
+                                })()}
+                                {subWorkflow.subdivision_description && (
+                                  <div style={{ marginTop: '8px' }}>
+                                    <Text type="secondary" style={{ fontSize: '11px' }}>
+                                      {subWorkflow.subdivision_description}
+                                    </Text>
+                                  </div>
+                                )}
+                              </div>
+                            </Card>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div style={{ textAlign: 'center', padding: '20px', color: '#999' }}>
+                          {loadingSubWorkflows ? '加载中...' : (
+                            <div>
+                              <div>该任务没有相关的子工作流</div>
+                              <div style={{ fontSize: '12px', marginTop: '8px', color: '#666' }}>
+                                💡 提示：只有已拆解的任务才会显示子工作流
+                              </div>
+                              <div style={{ fontSize: '11px', marginTop: '4px', color: '#999' }}>
+                                如需测试此功能，请选择已完成拆解的任务
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
+
+                      {subWorkflowsForSubmit.length > 0 && (
+                        <Alert
+                          message="使用提示"
+                          description='点击"选择结果"可将子工作流的执行结果填充到左侧的任务结果中，您可以进一步编辑这些内容。'
+                          type="info"
+                          showIcon
+                          style={{ marginTop: '12px', fontSize: '11px' }}
+                        />
+                      )}
                     </div>
-                  </Card>
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{ textAlign: 'center', padding: '20px', color: '#999' }}>
-                {loadingSubWorkflows ? '加载中...' : (
-                  <div>
-                    <div>该任务没有相关的子工作流</div>
-                    <div style={{ fontSize: '12px', marginTop: '8px', color: '#666' }}>
-                      💡 提示：只有已拆解的任务才会显示子工作流
-                    </div>
-                    <div style={{ fontSize: '11px', marginTop: '4px', color: '#999' }}>
-                      如需测试此功能，请选择已完成拆解的任务
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            
-            {subWorkflowsForSubmit.length > 0 && (
-              <Alert
-                message="使用提示"
-                description='点击"选择结果"可将子工作流的执行结果填充到左侧的任务结果中，您可以进一步编辑这些内容。'
-                type="info"
-                showIcon
-                style={{ marginTop: '12px', fontSize: '11px' }}
-              />
-            )}
+                  )
+                }
+              ]}
+            />
           </div>
         </div>
       </Modal>

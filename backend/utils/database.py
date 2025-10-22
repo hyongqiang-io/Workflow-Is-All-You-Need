@@ -478,3 +478,8 @@ def get_db_manager() -> DatabaseManager:
 def get_database() -> DatabaseManager:
     """获取数据库实例 - 兼容旧版本API"""
     return db_manager
+
+
+def get_db_connection() -> DatabaseManager:
+    """获取数据库连接 - 兼容性别名"""
+    return db_manager

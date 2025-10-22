@@ -548,6 +548,7 @@ class AgentTaskService:
             logger.trace(f"   - agent_params: {agent_params}")
             logger.trace(f"   - temperature: {temperature}")
             logger.trace(f"   - max_tokens: {max_tokens}")
+            logger.trace(f"   - Agent完整信息: {agent}")
             
             # 获取Agent的MCP工具
             agent_id = None
@@ -669,26 +670,41 @@ class AgentTaskService:
             # 调用OpenAI客户端处理任务（支持工具调用）
             logger.trace(f"🔄 [OPENAI-FORMAT] 调用OpenAI客户端")
             logger.trace(f"   - 使用模型: {openai_request['model']}")
-            
-            # 获取Base URL和API Key（兼容字典和对象）
-            base_url = 'default'
-            has_api_key = False
+
+            # 获取Agent的配置信息创建专用客户端
+            agent_api_key = None
+            agent_base_url = None
+
             if isinstance(agent, dict):
-                base_url = agent.get('base_url', 'default')
-                has_api_key = bool(agent.get('api_key'))
-            elif hasattr(agent, 'base_url'):
-                base_url = getattr(agent, 'base_url', 'default')
-                has_api_key = bool(getattr(agent, 'api_key', None))
-                
-            logger.trace(f"   - Base URL: {base_url}")
-            logger.trace(f"   - API Key存在: {'是' if has_api_key else '否'}")
-            logger.trace(f" 系统消息：{openai_request['messages'][0]['content']}")
-            logger.trace(f" 用户消息：{openai_request['messages'][1]['content']}")
-            
+                agent_api_key = agent.get('api_key')
+                agent_base_url = agent.get('base_url')
+            elif hasattr(agent, 'api_key'):
+                agent_api_key = getattr(agent, 'api_key', None)
+                agent_base_url = getattr(agent, 'base_url', None)
+
+            logger.trace(f"   - Agent Base URL: {agent_base_url}")
+            logger.trace(f"   - Agent API Key存在: {'是' if agent_api_key else '否'}")
+
+            # 🔥 关键修复：为每个Agent创建专用的OpenAIClient
+            from ..utils.openai_client import OpenAIClient
+
+            agent_openai_client = OpenAIClient(
+                api_key=agent_api_key,
+                base_url=agent_base_url,
+                model=model_name,
+                temperature=temperature
+            )
+
+            logger.info(f"🔧 [AGENT-CLIENT] 为Agent创建专用OpenAI客户端")
+            logger.info(f"   - Base URL: {agent_base_url}")
+            logger.info(f"   - 模型: {model_name}")
+            logger.info(f"   - API Key存在: {'是' if agent_api_key else '否'}")
+            logger.info(f"   - Agent原始model_name: {agent.get('model_name') if isinstance(agent, dict) else getattr(agent, 'model_name', 'N/A')}")
+
             # 设置超时时间（防止卡死）
             try:
                 openai_result = await asyncio.wait_for(
-                    self._process_with_tools(agent, openai_request, mcp_tools),
+                    self._process_with_tools(agent, openai_request, mcp_tools, agent_openai_client),
                     timeout=600  # 10分钟超时（工具调用可能需要更长时间）
                 )
                 logger.trace(f"✅ [OPENAI-FORMAT] OpenAI客户端调用成功")
@@ -1235,9 +1251,10 @@ class AgentTaskService:
                 'has_multimodal_content': False
             }
     
-    async def _process_with_tools(self, agent: Dict[str, Any], 
-                                openai_request: Dict[str, Any], 
-                                mcp_tools: List) -> Dict[str, Any]:
+    async def _process_with_tools(self, agent: Dict[str, Any],
+                                openai_request: Dict[str, Any],
+                                mcp_tools: List,
+                                openai_client: 'OpenAIClient') -> Dict[str, Any]:
         """处理带有工具调用的OpenAI请求"""
         try:
             # 如果没有工具，直接调用普通API

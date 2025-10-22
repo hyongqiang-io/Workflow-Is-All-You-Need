@@ -37,6 +37,7 @@ class ProcessorRepository(BaseRepository[Processor]):
                 "processor_id": uuid.uuid4(),
                 "user_id": processor_data.user_id,
                 "agent_id": processor_data.agent_id,
+                "group_id": processor_data.group_id,
                 "name": processor_data.name,
                 "type": processor_data.type.value,
                 "created_by": created_by,
@@ -168,11 +169,13 @@ class ProcessorRepository(BaseRepository[Processor]):
                 SELECT p.*,
                        u.username, u.email as user_email,
                        a.agent_name, a.description as agent_description,
-                       creator.username as creator_name
+                       creator.username as creator_name,
+                       g.group_name, g.is_public as group_is_public
                 FROM processor p
                 LEFT JOIN "user" u ON u.user_id = p.user_id AND u.is_deleted = FALSE
                 LEFT JOIN agent a ON a.agent_id = p.agent_id AND a.is_deleted = FALSE
                 LEFT JOIN "user" creator ON creator.user_id = p.created_by AND creator.is_deleted = FALSE
+                LEFT JOIN "groups" g ON g.group_id = p.group_id AND g.is_deleted = FALSE
                 WHERE p.type = $1 AND p.is_deleted = FALSE
                 ORDER BY p.created_at DESC
             """
@@ -180,6 +183,38 @@ class ProcessorRepository(BaseRepository[Processor]):
             return results
         except Exception as e:
             logger.error(f"根据类型获取处理器列表失败: {e}")
+            raise
+
+    async def get_accessible_processors_by_type(self, processor_type: ProcessorType, user_id: uuid.UUID) -> List[Dict[str, Any]]:
+        """根据类型获取用户可访问的处理器列表（公开的或同群组的）"""
+        try:
+            query = """
+                SELECT p.*,
+                       u.username, u.email as user_email,
+                       a.agent_name, a.description as agent_description,
+                       creator.username as creator_name,
+                       g.group_name, g.is_public as group_is_public
+                FROM processor p
+                LEFT JOIN "user" u ON u.user_id = p.user_id AND u.is_deleted = FALSE
+                LEFT JOIN agent a ON a.agent_id = p.agent_id AND a.is_deleted = FALSE
+                LEFT JOIN "user" creator ON creator.user_id = p.created_by AND creator.is_deleted = FALSE
+                LEFT JOIN "groups" g ON g.group_id = p.group_id AND g.is_deleted = FALSE
+                WHERE p.type = $1 AND p.is_deleted = FALSE
+                AND (
+                    p.group_id IS NULL  -- 公开processor（未分配群组）
+                    OR EXISTS (
+                        SELECT 1 FROM group_members gm
+                        WHERE gm.group_id = p.group_id
+                        AND gm.user_id = $2
+                        AND gm.status = 'active'
+                    )  -- 用户所在群组的processor
+                )
+                ORDER BY p.created_at DESC
+            """
+            results = await self.db.fetch_all(query, processor_type.value, user_id)
+            return results
+        except Exception as e:
+            logger.error(f"根据类型获取用户可访问处理器列表失败: {e}")
             raise
     
     async def get_processors_by_user(self, user_id: uuid.UUID) -> List[Dict[str, Any]]:
@@ -241,6 +276,91 @@ class ProcessorRepository(BaseRepository[Processor]):
         except Exception as e:
             logger.error(f"搜索处理器失败: {e}")
             raise
+
+    async def get_processors_by_group(self, group_id: str) -> List[Dict[str, Any]]:
+        """获取群组内的processor列表"""
+        try:
+            query = """
+            SELECT p.processor_id, p.name, p.type, p.user_id, p.agent_id, p.group_id,
+                   p.created_at, p.updated_at,
+                   u.username, u.email as user_email,
+                   a.agent_name, a.description as agent_description,
+                   creator.username as creator_name
+            FROM processor p
+            LEFT JOIN user u ON u.user_id = p.user_id AND u.is_deleted = FALSE
+            LEFT JOIN agent a ON a.agent_id = p.agent_id AND a.is_deleted = FALSE
+            LEFT JOIN user creator ON creator.user_id = p.created_by AND creator.is_deleted = FALSE
+            WHERE p.group_id = %s AND p.is_deleted = FALSE
+            ORDER BY p.created_at DESC
+            """
+
+            results = await self.db.fetch_all(query, group_id)
+            return [dict(result) for result in results]
+
+        except Exception as e:
+            logger.error(f"获取群组processor列表失败: {e}")
+            return []
+
+    async def get_processors_grouped(self, user_id: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
+        """获取按群组分类的processor列表"""
+        try:
+            # 构建基础查询
+            query = """
+            SELECT p.processor_id, p.name, p.type, p.user_id, p.agent_id, p.group_id,
+                   p.created_at, p.updated_at,
+                   u.username, u.email as user_email,
+                   a.agent_name, a.description as agent_description,
+                   creator.username as creator_name,
+                   g.group_name, g.is_public
+            FROM processor p
+            LEFT JOIN user u ON u.user_id = p.user_id AND u.is_deleted = FALSE
+            LEFT JOIN agent a ON a.agent_id = p.agent_id AND a.is_deleted = FALSE
+            LEFT JOIN user creator ON creator.user_id = p.created_by AND creator.is_deleted = FALSE
+            LEFT JOIN `groups` g ON g.group_id = p.group_id AND g.is_deleted = FALSE
+            WHERE p.is_deleted = FALSE
+            """
+
+            # 如果提供了用户ID，则只显示用户有权访问的processor
+            if user_id:
+                query += """
+                AND (
+                    p.group_id IS NULL OR
+                    g.is_public = TRUE OR
+                    EXISTS (
+                        SELECT 1 FROM group_members gm
+                        WHERE gm.group_id = p.group_id
+                        AND gm.user_id = %s
+                        AND gm.status = 'active'
+                        AND gm.is_deleted = FALSE
+                    )
+                )
+                ORDER BY g.group_name, p.created_at DESC
+                """
+                results = await self.db.fetch_all(query, user_id)
+            else:
+                # 如果没有提供用户ID，只显示公开群组的processor和无群组的processor
+                query += " AND (p.group_id IS NULL OR g.is_public = TRUE) ORDER BY g.group_name, p.created_at DESC"
+                results = await self.db.fetch_all(query)
+
+            # 按群组分类
+            grouped_processors = {
+                "公共Processor": []
+            }
+
+            for result in results:
+                processor_dict = dict(result)
+                group_name = processor_dict.get('group_name', '公共Processor')
+
+                if group_name not in grouped_processors:
+                    grouped_processors[group_name] = []
+
+                grouped_processors[group_name].append(processor_dict)
+
+            return grouped_processors
+
+        except Exception as e:
+            logger.error(f"获取分组processor列表失败: {e}")
+            return {"公共Processor": []}
 
 
 class NodeProcessorRepository:

@@ -12,7 +12,8 @@ import {
   DashboardOutlined,
   QuestionCircleOutlined,
   FileTextOutlined,
-  AppstoreOutlined
+  AppstoreOutlined,
+  UsergroupAddOutlined
 } from '@ant-design/icons';
 
 const { Header, Sider, Content } = Layout;
@@ -61,6 +62,11 @@ const MainLayout: React.FC = () => {
       key: '/resource',
       icon: <TeamOutlined />,
       label: '资源管理',
+    },
+    {
+      key: '/groups',
+      icon: <UsergroupAddOutlined />,
+      label: '群组管理',
     },
     {
       key: '/help',

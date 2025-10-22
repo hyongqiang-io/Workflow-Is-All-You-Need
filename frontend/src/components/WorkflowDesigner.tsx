@@ -19,6 +19,7 @@ import 'reactflow/dist/style.css';
 import { Card, Button, Modal, Form, Input, Select, Space, message, Tag, Tooltip, Badge } from 'antd';
 import { PlusOutlined, PlayCircleOutlined, SaveOutlined, DeleteOutlined, ReloadOutlined, ExclamationCircleOutlined } from '@ant-design/icons';
 import { nodeAPI, processorAPI, executionAPI } from '../services/api';
+import { processorGroupAPI, groupAPI } from '../services/groupAPI';
 import { validateWorkflow, canSaveWorkflow, type ValidationResult } from '../utils/workflowValidation';
 import NodeAttachmentManager from './NodeAttachmentManager';
 import EdgeEditModal from './EdgeEditModal';
@@ -306,6 +307,8 @@ const WorkflowDesigner = forwardRef<WorkflowDesignerRef, WorkflowDesignerProps>(
   const [edgeModalVisible, setEdgeModalVisible] = useState(false);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [processors, setProcessors] = useState<any[]>([]);
+  const [userGroups, setUserGroups] = useState<any[]>([]); // 用户所在的群组
+  const [groupedProcessors, setGroupedProcessors] = useState<{ [key: string]: any[] }>({});
   const [nodeForm] = Form.useForm();
   const [executionStatus, setExecutionStatus] = useState<any>(null);
   const [statusUpdateInterval, setStatusUpdateInterval] = useState<NodeJS.Timeout | null>(null);
@@ -328,8 +331,14 @@ const WorkflowDesigner = forwardRef<WorkflowDesignerRef, WorkflowDesignerProps>(
     const styleElement = document.createElement('style');
     styleElement.textContent = reactFlowStyle;
     document.head.appendChild(styleElement);
-    
-    loadProcessors();
+
+    // 先加载用户群组，然后再加载processors以便正确过滤
+    const initializeData = async () => {
+      await loadUserGroups();
+      await loadProcessors();
+    };
+
+    initializeData();
     if (workflowId) {
       loadWorkflow();
     }
@@ -393,14 +402,27 @@ const WorkflowDesigner = forwardRef<WorkflowDesignerRef, WorkflowDesignerProps>(
     setCanSave(canSaveWorkflow(nodes, edges));
   }, [nodes, edges]);
 
+  // 加载用户所在的群组（用于processor权限过滤）
+  const loadUserGroups = async () => {
+    try {
+      // 获取用户参与的所有群组（包括创建的和加入的），用于查看权限
+      const response: any = await groupAPI.getMyGroups();
+      if (response && response.data) {
+        setUserGroups(response.data);
+      }
+    } catch (error) {
+      console.error('加载用户群组失败:', error);
+    }
+  };
+
   const loadProcessors = async () => {
     try {
       // 优先获取已注册的处理器（这些有真正的处理器名称）
       const registeredResponse: any = await processorAPI.getRegisteredProcessors();
       console.log('已注册处理器API响应:', registeredResponse);
-      
+
       let processorsData = [];
-      
+
       // 处理已注册处理器数据
       if (registeredResponse && registeredResponse.data && registeredResponse.data.processors) {
         processorsData = registeredResponse.data.processors.map((processor: any) => ({
@@ -408,22 +430,35 @@ const WorkflowDesigner = forwardRef<WorkflowDesignerRef, WorkflowDesignerProps>(
           name: processor.name, // 这是真正的处理器名称
           type: processor.type,
           entity_type: processor.type,
-          description: processor.username ? `用户: ${processor.username}` : 
-                      processor.agent_name ? `Agent: ${processor.agent_name}` : 
+          description: processor.username ? `用户: ${processor.username}` :
+                      processor.agent_name ? `Agent: ${processor.agent_name}` :
                       processor.name,
           username: processor.username,
           agent_name: processor.agent_name,
           user_email: processor.user_email,
-          agent_description: processor.agent_description
+          agent_description: processor.agent_description,
+          group_name: processor.group_name
         }));
       }
-      
+
+      // 同时获取按群组分类的processors
+      try {
+        const groupedResponse: any = await processorGroupAPI.getProcessorsGrouped();
+        if (groupedResponse && groupedResponse.success) {
+          setGroupedProcessors(groupedResponse.data || {});
+          console.log('按群组分类的processors:', groupedResponse.data);
+        }
+      } catch (groupError) {
+        console.error('加载分组processors失败:', groupError);
+        setGroupedProcessors({});
+      }
+
       // 如果没有已注册的处理器，则获取可用的用户和Agent作为备选
       if (processorsData.length === 0) {
         console.log('没有已注册处理器，获取可用处理器作为备选');
         const availableResponse: any = await processorAPI.getAvailableProcessors();
         console.log('可用处理器API响应:', availableResponse);
-        
+
         if (availableResponse && availableResponse.data) {
           let availableData = [];
           if (Array.isArray(availableResponse.data)) {
@@ -431,12 +466,12 @@ const WorkflowDesigner = forwardRef<WorkflowDesignerRef, WorkflowDesignerProps>(
           } else if (availableResponse.data.processors && Array.isArray(availableResponse.data.processors)) {
             availableData = availableResponse.data.processors;
           }
-          
+
           // 格式化可用处理器数据，给它们一个更清晰的名称
           processorsData = availableData.map((processor: any) => ({
             processor_id: processor.id,
-            name: processor.type === 'agent' ? 
-                  `${processor.name.replace('Agent: ', '')} 处理器` : 
+            name: processor.type === 'agent' ?
+                  `${processor.name.replace('Agent: ', '')} 处理器` :
                   `${processor.name.replace('用户: ', '')} 处理器`,
             type: processor.type,
             entity_type: processor.entity_type,
@@ -445,20 +480,25 @@ const WorkflowDesigner = forwardRef<WorkflowDesignerRef, WorkflowDesignerProps>(
           }));
         }
       }
-      
+
       console.log('最终处理器数据:', processorsData);
-      
-      // 如果仍然没有处理器数据，使用默认处理器
-      // if (!processorsData || processorsData.length === 0) {
-      //   console.log('使用默认处理器数据');
-      //   processorsData = [
-      //     { processor_id: 'fallback-gpt4', name: 'GPT-4 处理器', type: 'agent' },
-      //     { processor_id: 'fallback-claude', name: 'Claude 处理器', type: 'agent' },
-      //     { processor_id: 'fallback-human', name: '人工处理器', type: 'human' },
-      //   ];
-      // }
-      
-      setProcessors(processorsData);
+
+      // 过滤processor：只显示公开的或用户群组内的processor
+      const userGroupIds = userGroups.map(group => group.group_id);
+      const filteredProcessors = processorsData.filter((processor: any) => {
+        // 如果processor没有group_id，则是公开的processor
+        if (!processor.group_id) {
+          return true;
+        }
+
+        // 如果processor有group_id，检查用户是否在该群组中
+        return userGroupIds.includes(processor.group_id);
+      });
+
+      console.log('过滤后的处理器数据:', filteredProcessors);
+      console.log('用户群组ID列表:', userGroupIds);
+
+      setProcessors(filteredProcessors);
     } catch (error) {
       console.error('加载处理器失败:', error);
       // API失败时使用默认处理器
@@ -468,6 +508,7 @@ const WorkflowDesigner = forwardRef<WorkflowDesignerRef, WorkflowDesignerProps>(
         { processor_id: 'fallback-human', name: '人工处理器', type: 'human' },
       ];
       setProcessors(fallbackProcessors);
+      setGroupedProcessors({});
       console.log('使用fallback处理器数据');
     }
   };
@@ -1551,7 +1592,7 @@ const WorkflowDesigner = forwardRef<WorkflowDesignerRef, WorkflowDesignerProps>(
             dependencies={['type']}
             extra={!Array.isArray(processors) || processors.length === 0 ? "暂无可用处理器，将使用默认处理器" : null}
           >
-            <Select 
+            <Select
               placeholder="请选择处理器"
               disabled={nodeForm.getFieldValue('type') !== 'processor'}
               allowClear
@@ -1561,77 +1602,89 @@ const WorkflowDesigner = forwardRef<WorkflowDesignerRef, WorkflowDesignerProps>(
                 return childrenStr ? childrenStr.includes(input.toLowerCase()) : false;
               }}
             >
-              {/* 默认处理器选项 */}
-              {/* <Option value="default-agent">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>默认AI处理器</span>
-                  <Tag color="blue">agent</Tag>
-                </div>
-              </Option>
-              <Option value="default-human">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>默认人工处理器</span>
-                  <Tag color="yellow">human</Tag>
-                </div>
-              </Option> */}
-              
-              {/* 从API加载的处理器 */}
-              {Array.isArray(processors) && processors.map((processor) => {
-                const processorType = processor.type || processor.entity_type || 'unknown';
-                const processorName = processor.name || processor.agent_name || processor.username || '未命名处理器';
-                const processorValue = processor.processor_id || processor.id;
-                
-                // 🔍 DEBUG: 输出processor选项信息
-                // console.log(`🔍 DEBUG: Processor选项 ${index + 1}:`, {
-                //   name: processorName,
-                //   value: processorValue,
-                //   processor_id: processor.processor_id,
-                //   id: processor.id,
-                //   type: processorType,
-                //   fullData: processor
-                // });
-                
-                const getTypeColor = (type: string) => {
-                  switch (type.toLowerCase()) {
-                    case 'agent': return 'blue';
-                    case 'human': return 'orange';
-                    default: return 'default';
-                  }
-                };
-                
-                return (
-                  <Option key={processorValue} value={processorValue}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {processorName}
-                      </span>
-                      <Tag color={getTypeColor(processorType)}>
-                        {processorType}
-                      </Tag>
-                    </div>
-                  </Option>
-                );
-              })}
-              
-              {/* 静态备选处理器 */}
-              {/* <Option value="gpt-4">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>GPT-4处理器</span>
-                  <Tag color="blue">agent</Tag>
-                </div>
-              </Option>
-              <Option value="claude">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>Claude处理器</span>
-                  <Tag color="blue">agent</Tag>
-                </div>
-              </Option>
-              <Option value="human-review">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>人工审核</span>
-                  <Tag color="green">human</Tag>
-                </div>
-              </Option> */}
+              {/* 按群组显示processors */}
+              {Object.keys(groupedProcessors).length > 0 ? (
+                Object.entries(groupedProcessors)
+                  .filter(([groupName, groupProcessors]) => groupProcessors.length > 0) // 过滤掉空群组
+                  .map(([groupName, groupProcessors]) => {
+                  const getTypeColor = (type: string) => {
+                    switch (type.toLowerCase()) {
+                      case 'agent': return 'blue';
+                      case 'human': return 'orange';
+                      default: return 'default';
+                    }
+                  };
+
+                  return (
+                    <Select.OptGroup key={groupName} label={
+                      <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0' }}>
+                        <span style={{ fontWeight: 'bold', color: '#1890ff' }}>
+                          📁 {groupName} ({groupProcessors.length})
+                        </span>
+                      </div>
+                    }>
+                      {groupProcessors.map((processor: any) => {
+                        const processorType = processor.type || 'unknown';
+                        const processorName = processor.name || processor.agent_name || processor.username || '未命名处理器';
+                        const processorValue = processor.processor_id || processor.id;
+
+                        return (
+                          <Option key={processorValue} value={processorValue}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {processorName}
+                              </span>
+                              <div style={{ display: 'flex', gap: '4px' }}>
+                                <Tag color={getTypeColor(processorType)} style={{ fontSize: '11px', lineHeight: '16px', padding: '0 4px' }}>
+                                  {processorType}
+                                </Tag>
+                                {processor.username && (
+                                  <Tag color="cyan" style={{ fontSize: '11px', lineHeight: '16px', padding: '0 4px' }}>
+                                    {processor.username}
+                                  </Tag>
+                                )}
+                                {processor.agent_name && (
+                                  <Tag color="purple" style={{ fontSize: '11px', lineHeight: '16px', padding: '0 4px' }}>
+                                    {processor.agent_name}
+                                  </Tag>
+                                )}
+                              </div>
+                            </div>
+                          </Option>
+                        );
+                      })}
+                    </Select.OptGroup>
+                  );
+                })
+              ) : (
+                // 如果没有分组数据，则使用原有的扁平显示方式
+                Array.isArray(processors) && processors.map((processor) => {
+                  const processorType = processor.type || processor.entity_type || 'unknown';
+                  const processorName = processor.name || processor.agent_name || processor.username || '未命名处理器';
+                  const processorValue = processor.processor_id || processor.id;
+
+                  const getTypeColor = (type: string) => {
+                    switch (type.toLowerCase()) {
+                      case 'agent': return 'blue';
+                      case 'human': return 'orange';
+                      default: return 'default';
+                    }
+                  };
+
+                  return (
+                    <Option key={processorValue} value={processorValue}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {processorName}
+                        </span>
+                        <Tag color={getTypeColor(processorType)}>
+                          {processorType}
+                        </Tag>
+                      </div>
+                    </Option>
+                  );
+                })
+              )}
             </Select>
           </Form.Item>
 

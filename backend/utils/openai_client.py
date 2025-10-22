@@ -81,6 +81,69 @@ class OpenAIClient:
                 'model': model or self.model
             }
 
+    async def chat_completion_with_functions(
+        self,
+        messages: List[Dict[str, str]],
+        functions: List[Dict[str, Any]],
+        function_call: Optional[Dict[str, str]] = None,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """使用Function Calling调用OpenAI API"""
+        try:
+            # 转换functions为tools格式
+            tools = []
+            for func in functions:
+                tools.append({
+                    "type": "function",
+                    "function": func
+                })
+
+            # 构建请求参数
+            request_params = {
+                "model": model or self.model,
+                "messages": messages,
+                "temperature": temperature or self.temperature,
+                "tools": tools
+            }
+
+            # 如果指定了function_call，转换为tool_choice
+            if function_call:
+                if function_call.get("name"):
+                    request_params["tool_choice"] = {
+                        "type": "function",
+                        "function": {"name": function_call["name"]}
+                    }
+
+            logger.info(f"🛠️ [FUNCTION-CALL] 调用模型: {request_params['model']}")
+            logger.info(f"🛠️ [FUNCTION-CALL] 函数数量: {len(functions)}")
+
+            # 调用OpenAI API
+            response = await self.aclient.chat.completions.create(**request_params)
+
+            # 处理响应
+            message = response.choices[0].message
+
+            if message.tool_calls:
+                tool_call = message.tool_calls[0]
+                return {
+                    "function_call": {
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments
+                    },
+                    "content": message.content,
+                    "usage": response.usage.model_dump() if response.usage else {}
+                }
+            else:
+                return {
+                    "content": message.content,
+                    "usage": response.usage.model_dump() if response.usage else {}
+                }
+
+        except Exception as e:
+            logger.error(f"🛠️ [FUNCTION-CALL] API调用失败: {e}")
+            raise
+
     def _convert_to_multimodal_messages(self, messages: List[Dict], images: List[Dict]) -> List[Dict]:
         """
         将普通消息转换为多模态消息格式

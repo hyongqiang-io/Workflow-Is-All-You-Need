@@ -84,6 +84,9 @@ from backend.api.feishu_bot import router as feishu_bot_router
 from backend.api.files import router as files_router
 from backend.api.tab_completion import router as tab_completion_router
 from backend.api.workflow_store import router as workflow_store_router
+from backend.api.group import router as group_router
+from backend.api.task_conversation import router as task_conversation_router
+from backend.api.simulator_conversation import router as simulator_conversation_router
 from backend.utils.database import initialize_database, close_database
 from backend.utils.exceptions import BusinessException, ErrorResponse
 from backend.services.execution_service import execution_engine
@@ -313,6 +316,14 @@ async def startup_event():
         # 初始化数据库连接
         await initialize_database()
         logger.trace("数据库连接初始化成功")
+
+        # 初始化任务对话数据库表
+        try:
+            from backend.database.init_task_conversation import init_task_conversation_tables
+            await init_task_conversation_tables()
+            logger.trace("任务对话数据库表初始化成功")
+        except Exception as e:
+            logger.warning(f"任务对话数据库表初始化失败: {e}")
         
         # 启动执行引擎
         await execution_engine.start_engine()
@@ -462,6 +473,9 @@ logger.trace("注册文件管理路由...")
 app.include_router(files_router, tags=["文件管理"])
 app.include_router(tab_completion_router, tags=["Tab补全"])
 app.include_router(workflow_store_router, prefix="/api", tags=["工作流商店"])
+app.include_router(group_router, prefix="/api", tags=["群组管理"])
+app.include_router(task_conversation_router, tags=["任务对话"])
+app.include_router(simulator_conversation_router, tags=["Simulator对话"])
 logger.trace("文件管理路由注册完成")
 
 logger.trace("所有路由注册完成")

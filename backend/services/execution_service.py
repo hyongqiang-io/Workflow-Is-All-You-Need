@@ -30,6 +30,7 @@ from ..models.node import NodeType
 from ..utils.helpers import now_utc
 from .agent_task_service import agent_task_service
 from .resource_cleanup_manager import ResourceCleanupManager
+from .simulator_processor_service import SimulatorProcessorService
 
 # 使用新的统一上下文管理器
 from .workflow_execution_context import get_context_manager, WorkflowExecutionContext
@@ -71,6 +72,7 @@ class ExecutionEngine:
         
         # 系统组件
         self.resource_cleanup_manager = ResourceCleanupManager()
+        self.simulator_processor_service = SimulatorProcessorService()
         
         # 上下文管理器 - 使用新的统一架构
         self.context_manager = get_context_manager()
@@ -236,10 +238,10 @@ class ExecutionEngine:
         """
         await conn.execute(
             create_instance_query,
-            instance_id, workflow_id, request.workflow_base_id, executor_id, 
-            request.workflow_instance_name,
-            json.dumps(request.input_data or {}), json.dumps(request.context_data or {}),
-            'RUNNING', now_utc(), False
+            (instance_id, workflow_id, request.workflow_base_id, executor_id,
+             request.workflow_instance_name,
+             json.dumps(request.input_data or {}), json.dumps(request.context_data or {}),
+             'RUNNING', now_utc(), False)
         )
         
         # 3. 批量创建节点实例和对应的任务实例
@@ -269,10 +271,10 @@ class ExecutionEngine:
             
             await conn.execute(
                 create_node_query,
-                node_instance_id, instance_id, node['node_id'], node['node_base_id'],
-                f"{node['name']}_instance", node.get('task_description', ''),
-                NodeInstanceStatus.PENDING.value, json.dumps({}), json.dumps({}),
-                None, 0, now_utc(), False
+                (node_instance_id, instance_id, node['node_id'], node['node_base_id'],
+                 f"{node['name']}_instance", node.get('task_description', ''),
+                 NodeInstanceStatus.PENDING.value, json.dumps({}), json.dumps({}),
+                 None, 0, now_utc(), False)
             )
             
             # 🔧 Critical Fix: 创建节点实例后立即继承附件
@@ -618,13 +620,15 @@ class ExecutionEngine:
     def _determine_task_type(self, processor_type: str) -> TaskInstanceType:
         """根据处理器类型确定任务类型"""
         processor_type_upper = processor_type.upper() if processor_type else ""
-        
+
         if processor_type_upper == "HUMAN":
             return TaskInstanceType.HUMAN
         elif processor_type_upper == "AGENT":
             return TaskInstanceType.AGENT
         elif processor_type_upper == "MIX" or processor_type_upper == "MIXED":
             return TaskInstanceType.MIXED
+        elif processor_type_upper == "SIMULATOR":
+            return TaskInstanceType.SIMULATOR
         else:
             # 记录调试信息
             logger.warning(f"未知的处理器类型: '{processor_type}' (转换后: '{processor_type_upper}')，默认为人工任务")
@@ -746,15 +750,18 @@ class ExecutionEngine:
         try:
             task_id = task['task_instance_id']
             task_type = task['task_type']
-            
-            logger.trace(f"执行任务: {task['task_title']} (类型: {task_type})")
-            
+
+            logger.info(f"🚀 [任务执行] 开始执行任务: {task['task_title']} (类型: {task_type})")
+            logger.info(f"🚀 [任务执行] 任务ID: {task_id}")
+            logger.info(f"🚀 [任务执行] 任务详情: {task}")
+
             if task_type == TaskInstanceType.HUMAN.value:
+                logger.info(f"👤 [HUMAN任务] 进入人工任务处理逻辑")
                 # 人工任务：更新状态为已分配，等待人工处理
                 logger.trace(f"👤 处理人工任务: {task['task_title']}")
                 logger.trace(f"   - 任务ID: {task_id}")
                 logger.trace(f"   - 分配目标用户: {task.get('assigned_user_id')}")
-                
+
                 # 检查任务是否有分配的用户
                 assigned_user_id = task.get('assigned_user_id')
                 if not assigned_user_id:
@@ -800,12 +807,25 @@ class ExecutionEngine:
                 print("=" * 60)
                 
             elif task_type == TaskInstanceType.AGENT.value:
+                logger.info(f"🤖 [AGENT任务] 进入Agent任务处理逻辑")
                 # Agent任务：调用AI处理
                 await self._process_agent_task(task)
-                
+
             elif task_type == TaskInstanceType.MIXED.value:
+                logger.info(f"🔀 [MIXED任务] 进入混合任务处理逻辑")
                 # 混合任务：同时提交给人工和Agent处理
                 await self._process_mixed_task(task)
+
+            elif task_type == TaskInstanceType.SIMULATOR.value:
+                logger.info(f"🎭 [SIMULATOR任务] 进入Simulator任务处理逻辑!!!")
+                logger.info(f"🎭 [SIMULATOR任务] 即将调用 _process_simulator_task")
+                logger.info(f"🎭 [SIMULATOR任务] 任务详情: {task}")
+                # Simulator任务：智能对话决策处理
+                await self._process_simulator_task(task)
+                logger.info(f"🎭 [SIMULATOR任务] _process_simulator_task 执行完成")
+            else:
+                logger.error(f"❌ [任务执行] 未知的任务类型: {task_type}")
+                raise ValueError(f"未知的任务类型: {task_type}")
             
         except Exception as e:
             logger.error(f"执行任务失败: {e}")
@@ -997,6 +1017,71 @@ class ExecutionEngine:
             
         except Exception as e:
             logger.error(f"处理混合任务失败: {e}")
+            # 更新任务状态为失败
+            fail_update = TaskInstanceUpdate(
+                status=TaskInstanceStatus.FAILED,
+                error_message=str(e)
+            )
+            await self.task_instance_repo.update_task(task['task_instance_id'], fail_update)
+            raise
+
+    async def _process_simulator_task(self, task: Dict[str, Any]):
+        """处理Simulator任务 - 智能对话决策处理"""
+        try:
+            task_id = task['task_instance_id']
+            logger.info(f"🎭 [SIMULATOR] 开始处理Simulator任务: {task['task_title']}")
+            logger.info(f"🎭 [SIMULATOR] 任务ID: {task_id}")
+
+            # 更新任务状态为进行中
+            update_data = TaskInstanceUpdate(status=TaskInstanceStatus.IN_PROGRESS)
+            await self.task_instance_repo.update_task(task_id, update_data)
+            logger.info(f"🎭 [SIMULATOR] 任务状态已更新为进行中")
+
+            # 调用Simulator处理器服务
+            logger.info(f"🎭 [SIMULATOR] 即将调用SimulatorProcessorService.execute_simulator_task")
+            simulator_result = await self.simulator_processor_service.execute_simulator_task(task)
+            logger.info(f"🎭 [SIMULATOR] SimulatorProcessorService返回结果: {simulator_result}")
+
+            # 打印对话内容到控制台（如果存在）
+            if 'session' in simulator_result and simulator_result['session']:
+                self._print_simulator_conversation(simulator_result['session'])
+
+            if simulator_result['status'] == 'completed':
+                # 任务直接完成
+                completion_update = TaskInstanceUpdate(
+                    status=TaskInstanceStatus.COMPLETED,
+                    result_data=simulator_result['result'],
+                    context_data={
+                        'execution_type': simulator_result['execution_type'],
+                        'session_id': simulator_result.get('session_id'),
+                        'total_rounds': simulator_result.get('total_rounds', 0)
+                    }
+                )
+                await self.task_instance_repo.update_task(task_id, completion_update)
+
+                logger.trace(f"Simulator任务 {task_id} 已完成 (类型: {simulator_result['execution_type']})")
+
+                # 触发工作流执行引擎的任务完成处理
+                await self._handle_task_completion_unified(task, simulator_result['result'])
+
+            elif simulator_result['status'] == 'conversation_started':
+                # 对话已开始，需要等待用户交互
+                conversation_update = TaskInstanceUpdate(
+                    status=TaskInstanceStatus.ASSIGNED,  # 等待用户交互
+                    context_data={
+                        'execution_type': 'conversation_required',
+                        'session_id': simulator_result['session_id'],
+                        'weak_model_analysis': simulator_result['weak_model_analysis'],
+                        'next_action': simulator_result['next_action']
+                    }
+                )
+                await self.task_instance_repo.update_task(task_id, conversation_update)
+
+                logger.trace(f"Simulator任务 {task_id} 已创建对话会话: {simulator_result['session_id']}")
+                logger.trace(f"等待用户通过前端界面进行对话交互")
+
+        except Exception as e:
+            logger.error(f"处理Simulator任务失败: {e}")
             # 更新任务状态为失败
             fail_update = TaskInstanceUpdate(
                 status=TaskInstanceStatus.FAILED,
@@ -1944,6 +2029,16 @@ class ExecutionEngine:
                 elif task['task_type'] == TaskInstanceType.MIXED.value:
                     # Mixed任务：先分配给用户，同时提供AI辅助
                     await self._execute_mixed_task(task)
+                elif task['task_type'] == TaskInstanceType.SIMULATOR.value:
+                    # 🆕 Simulator任务：弱模型主导的智能决策处理
+                    logger.info(f"🎭 [SIMULATOR任务] 开始执行Simulator任务: {task['task_instance_id']}")
+                    await self._execute_simulator_task(task)
+                elif task['task_type'] == TaskInstanceType.PROCESSOR.value:
+                    # 🆕 Processor任务：通用处理器任务
+                    logger.info(f"⚙️ [PROCESSOR任务] 开始执行Processor任务: {task['task_instance_id']}")
+                    await self._execute_processor_task(task)
+                else:
+                    logger.warning(f"⚠️ 未知任务类型: {task['task_type']} (任务ID: {task['task_instance_id']})")
             
             # 注册任务完成监听
             await self._register_node_completion_monitor(workflow_instance_id, node_instance_id)
@@ -2151,9 +2246,117 @@ class ExecutionEngine:
             # 这里可以实现AI辅助逻辑
             # 例如：分析任务内容，提供建议等
             logger.trace(f"为任务 {task['task_instance_id']} 提供AI辅助")
-            
+
         except Exception as e:
             logger.error(f"提供AI辅助失败: {e}")
+
+    async def _execute_simulator_task(self, task: Dict[str, Any]):
+        """执行Simulator任务 - 弱模型主导的智能决策"""
+        try:
+            logger.info(f"🎭 [SIMULATOR执行] 开始执行Simulator任务: {task['task_instance_id']}")
+
+            # 导入Simulator处理服务
+            from .simulator_processor_service import SimulatorProcessorService
+
+            # 更新任务状态为IN_PROGRESS
+            task_id = task['task_instance_id']
+            update_data = TaskInstanceUpdate(status=TaskInstanceStatus.IN_PROGRESS)
+            await self.task_instance_repo.update_task(task_id, update_data)
+
+            logger.info(f"🎭 [SIMULATOR执行] 任务状态已更新为IN_PROGRESS: {task_id}")
+
+            # 创建Simulator处理器服务实例
+            simulator_service = SimulatorProcessorService()
+
+            # 调用Simulator处理逻辑
+            logger.info(f"🎭 [SIMULATOR执行] 即将调用simulator_service.execute_simulator_task")
+            result = await simulator_service.execute_simulator_task(task)
+
+            logger.info(f"🎭 [SIMULATOR执行] Simulator任务执行完成: {result}")
+
+            # 根据结果更新任务状态
+            if result.get('status') == 'completed':
+                # 任务完成
+                final_result = result.get('result', {})
+                summary = result.get('execution_result', {}).get('summary', 'Simulator任务执行完成')
+
+                # 将结果字典转换为JSON字符串
+                import json
+                output_data_str = json.dumps(final_result, ensure_ascii=False, indent=2)
+
+                completion_data = TaskInstanceUpdate(
+                    status=TaskInstanceStatus.COMPLETED,
+                    output_data=output_data_str,
+                    result_summary=summary,
+                    completed_at=datetime.utcnow()
+                )
+                await self.task_instance_repo.update_task(task_id, completion_data)
+                logger.info(f"✅ [SIMULATOR执行] 任务已标记为完成: {task_id}")
+
+            elif result.get('status') == 'conversation_started':
+                # 对话已开始，任务保持IN_PROGRESS状态
+                logger.info(f"💬 [SIMULATOR执行] 对话模式已启动: {task_id}")
+
+            else:
+                # 其他状态，记录但保持当前状态
+                logger.warning(f"⚠️ [SIMULATOR执行] 未知结果状态: {result.get('status')}")
+
+        except Exception as e:
+            logger.error(f"❌ [SIMULATOR执行] 执行Simulator任务失败: {e}")
+            # 标记任务失败
+            try:
+                failure_data = TaskInstanceUpdate(
+                    status=TaskInstanceStatus.FAILED,
+                    error_message=str(e),
+                    completed_at=datetime.utcnow()
+                )
+                await self.task_instance_repo.update_task(task['task_instance_id'], failure_data)
+            except Exception as update_error:
+                logger.error(f"❌ [SIMULATOR执行] 更新任务失败状态失败: {update_error}")
+            raise
+
+    async def _execute_processor_task(self, task: Dict[str, Any]):
+        """执行通用Processor任务"""
+        try:
+            logger.info(f"⚙️ [PROCESSOR执行] 开始执行Processor任务: {task['task_instance_id']}")
+
+            # 更新任务状态为IN_PROGRESS
+            task_id = task['task_instance_id']
+            update_data = TaskInstanceUpdate(status=TaskInstanceStatus.IN_PROGRESS)
+            await self.task_instance_repo.update_task(task_id, update_data)
+
+            # 获取处理器信息
+            processor_id = task.get('processor_id')
+            if not processor_id:
+                raise ValueError("PROCESSOR任务缺少processor_id")
+
+            # 根据处理器类型调用相应的处理逻辑
+            # 这里可以扩展不同类型的处理器
+            logger.info(f"⚙️ [PROCESSOR执行] 处理器ID: {processor_id}")
+
+            # 示例：简单完成任务
+            completion_data = TaskInstanceUpdate(
+                status=TaskInstanceStatus.COMPLETED,
+                output_data={"message": "Processor任务已完成"},
+                result_summary="通用处理器任务执行完成",
+                completed_at=datetime.utcnow()
+            )
+            await self.task_instance_repo.update_task(task_id, completion_data)
+            logger.info(f"✅ [PROCESSOR执行] 任务已完成: {task_id}")
+
+        except Exception as e:
+            logger.error(f"❌ [PROCESSOR执行] 执行Processor任务失败: {e}")
+            # 标记任务失败
+            try:
+                failure_data = TaskInstanceUpdate(
+                    status=TaskInstanceStatus.FAILED,
+                    error_message=str(e),
+                    completed_at=datetime.utcnow()
+                )
+                await self.task_instance_repo.update_task(task['task_instance_id'], failure_data)
+            except Exception as update_error:
+                logger.error(f"❌ [PROCESSOR执行] 更新任务失败状态失败: {update_error}")
+            raise
     
     async def _register_node_completion_monitor(self, workflow_instance_id: uuid.UUID, node_instance_id: uuid.UUID):
         """注册节点完成监听器（防重复）"""
@@ -3733,10 +3936,17 @@ class ExecutionEngine:
                 task_type = self._determine_task_type(processor_type)
                 assigned_user_id = processor.get('user_id')
                 assigned_agent_id = processor.get('agent_id')
-                
-                logger.info(f"   - 处理器类型: {processor_type} -> 任务类型: {task_type.value}")
+
+                logger.info(f"🔍 [任务类型判断] 处理器类型: {processor_type} -> 任务类型: {task_type.value}")
+                logger.info(f"🔍 [任务类型判断] 处理器详情: {processor}")
                 logger.info(f"   - 分配用户ID: {assigned_user_id}")
                 logger.info(f"   - 分配AgentID: {assigned_agent_id}")
+
+                # 特别关注Simulator类型
+                if processor_type.upper() == "SIMULATOR":
+                    logger.info(f"🤖 [SIMULATOR检测] 发现Simulator处理器!")
+                    logger.info(f"🤖 [SIMULATOR检测] 任务类型应该是: {task_type.value}")
+                    logger.info(f"🤖 [SIMULATOR检测] 处理器绑定的Agent: {assigned_agent_id}")
                 
                 # 🔧 修复：获取真实的上下文和输入数据
                 logger.info(f"🔍 [新架构-任务创建] 获取节点上下文数据...")
@@ -3994,6 +4204,8 @@ class ExecutionEngine:
                         task_type = TaskInstanceType.AGENT
                     elif processor_type == 'mixed':
                         task_type = TaskInstanceType.MIXED
+                    elif processor_type == 'simulator':
+                        task_type = TaskInstanceType.SIMULATOR
                     else:
                         logger.warning(f"未知的处理器类型: {processor_type}")
                         return
@@ -5156,6 +5368,10 @@ class ExecutionEngine:
                 task_type = TaskInstanceType.AGENT
                 assigned_user_id = None
                 assigned_agent_id = processor_info.get('processor_id')
+            elif processor_type == 'SIMULATOR':
+                task_type = TaskInstanceType.SIMULATOR
+                assigned_user_id = None
+                assigned_agent_id = processor_info.get('agent_id')  # Simulator需要绑定agent作为强模型
             else:
                 task_type = TaskInstanceType.HUMAN
                 assigned_user_id = executor_id
@@ -5359,6 +5575,48 @@ class ExecutionEngine:
             logger.error(f"❌ 检查工作流状态失败: {e}")
             import traceback
             logger.error(f"   堆栈: {traceback.format_exc()}")
+
+    def _print_simulator_conversation(self, session_data):
+        """在控制台打印Simulator对话内容"""
+        try:
+            print("\n" + "="*80)
+            print("🎭 SIMULATOR 对话记录")
+            print("="*80)
+
+            if hasattr(session_data, 'messages') and session_data.messages:
+                for i, message in enumerate(session_data.messages, 1):
+                    role_emoji = {
+                        'weak_model': '🤖',
+                        'strong_model': '🧠',
+                        'user': '👤',
+                        'system': '⚙️'
+                    }.get(message.role, '❓')
+
+                    print(f"\n[{i}] {role_emoji} {message.role.upper()} (第{message.round_number}轮):")
+                    print(f"    {message.content}")
+
+                    if hasattr(message, 'metadata') and message.metadata:
+                        print(f"    📝 元数据: {message.metadata}")
+
+            print("="*80 + "\n")
+
+        except Exception as e:
+            logger.warning(f"打印对话记录失败: {e}")
+
+    def _print_conversation_start_info(self, task, simulator_result):
+        """打印对话开始信息"""
+        try:
+            print("\n" + "🎭"*30)
+            print("SIMULATOR 对话模式已启动")
+            print("🎭"*30)
+            print(f"任务: {task['task_title']}")
+            print(f"会话ID: {simulator_result.get('session_id', 'Unknown')}")
+            print(f"初始问题: {simulator_result.get('initial_questions', [])}")
+            print(f"决策理由: {simulator_result.get('reasoning', 'N/A')}")
+            print("🎭"*30 + "\n")
+
+        except Exception as e:
+            logger.warning(f"打印对话开始信息失败: {e}")
 
 
 # 全局执行引擎实例

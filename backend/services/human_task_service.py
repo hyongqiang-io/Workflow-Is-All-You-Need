@@ -15,6 +15,7 @@ from ..models.instance import (
     TaskInstanceUpdate, TaskInstanceStatus, TaskInstanceType
 )
 from ..utils.helpers import now_utc
+from ..utils.timestamp_utils import safe_parse_timestamp, safe_format_timestamp
 from .workflow_context_manager import WorkflowContextManager
 from .feishu_bot_service import feishu_bot_service
 
@@ -523,29 +524,22 @@ class HumanTaskService:
             if task.get('started_at'):
                 try:
                     logger.info(f"📅 处理开始时间: {task['started_at']} (类型: {type(task['started_at'])})")
-                    started_at = task['started_at']
-                    
-                    # 处理不同类型的时间数据
-                    if isinstance(started_at, str):
-                        # 字符串类型，需要解析
-                        start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
-                    elif hasattr(started_at, 'replace'):
-                        # 已经是datetime对象
-                        start_time = started_at
-                    else:
-                        logger.warning(f"⚠️ 无法处理的开始时间类型: {type(started_at)}")
-                        start_time = None
-                    
+
+                    # 使用安全的时间戳解析函数
+                    start_time = safe_parse_timestamp(task['started_at'])
+
                     if start_time:
                         # 确保时间有时区信息
                         if start_time.tzinfo is None:
-                            from ..utils.helpers import now_utc
                             current_time = now_utc()
                         else:
                             current_time = datetime.now().replace(tzinfo=start_time.tzinfo)
-                        
+
                         actual_duration = int((current_time - start_time).total_seconds() / 60)
                         logger.info(f"⏱️ 计算执行时间成功: {actual_duration} 分钟")
+                    else:
+                        logger.warning(f"⚠️ 无法解析开始时间: {task['started_at']}")
+                        actual_duration = None
                     
                 except Exception as time_error:
                     logger.error(f"❌ 时间计算失败: {time_error}")
@@ -765,8 +759,8 @@ class HumanTaskService:
             
             for task in tasks:
                 if task.get('completed_at'):
-                    completed_at = datetime.fromisoformat(task['completed_at'].replace('Z', '+00:00'))
-                    if completed_at.replace(tzinfo=None) >= cutoff_date:
+                    completed_at = safe_parse_timestamp(task['completed_at'])
+                    if completed_at and completed_at.replace(tzinfo=None) >= cutoff_date:
                         recent_tasks.append(task)
             
             logger.info(f"获取用户 {user_id} 的任务历史，{days}天内共 {len(recent_tasks)} 个任务")
@@ -843,36 +837,28 @@ class HumanTaskService:
             # 计算任务耗时
             if task.get('started_at') and task.get('completed_at'):
                 try:
-                    # 处理不同类型的时间数据
-                    started_at = task['started_at']
-                    completed_at = task['completed_at']
-                    
-                    if isinstance(started_at, str):
-                        start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                    # 使用安全的时间戳解析
+                    start_time = safe_parse_timestamp(task['started_at'])
+                    end_time = safe_parse_timestamp(task['completed_at'])
+
+                    if start_time and end_time:
+                        task['total_duration'] = int((end_time - start_time).total_seconds() / 60)
                     else:
-                        start_time = started_at
-                    
-                    if isinstance(completed_at, str):
-                        end_time = datetime.fromisoformat(completed_at.replace('Z', '+00:00'))
-                    else:
-                        end_time = completed_at
-                    
-                    task['total_duration'] = int((end_time - start_time).total_seconds() / 60)
+                        task['total_duration'] = 0
                 except Exception as time_error:
                     logger.error(f"计算总耗时失败: {time_error}")
                     task['total_duration'] = 0
                     
             elif task.get('started_at') and task['status'] == TaskInstanceStatus.IN_PROGRESS.value:
                 try:
-                    started_at = task['started_at']
-                    
-                    if isinstance(started_at, str):
-                        start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                    # 使用安全的时间戳解析
+                    start_time = safe_parse_timestamp(task['started_at'])
+
+                    if start_time:
+                        now_time = datetime.now().replace(tzinfo=start_time.tzinfo if start_time.tzinfo else None)
+                        task['current_duration'] = int((now_time - start_time).total_seconds() / 60)
                     else:
-                        start_time = started_at
-                    
-                    now_time = datetime.now().replace(tzinfo=start_time.tzinfo if start_time.tzinfo else None)
-                    task['current_duration'] = int((now_time - start_time).total_seconds() / 60)
+                        task['current_duration'] = 0
                 except Exception as time_error:
                     logger.error(f"计算当前耗时失败: {time_error}")
                     task['current_duration'] = 0
@@ -880,15 +866,14 @@ class HumanTaskService:
             # 添加截止时间（基于估计时长）
             if task.get('created_at') and task.get('estimated_duration'):
                 try:
-                    created_at = task['created_at']
-                    
-                    if isinstance(created_at, str):
-                        created_time = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    # 使用安全的时间戳解析
+                    created_time = safe_parse_timestamp(task['created_at'])
+
+                    if created_time:
+                        estimated_minutes = task['estimated_duration']
+                        task['estimated_deadline'] = (created_time + timedelta(minutes=estimated_minutes)).isoformat()
                     else:
-                        created_time = created_at
-                    
-                    estimated_minutes = task['estimated_duration']
-                    task['estimated_deadline'] = (created_time + timedelta(minutes=estimated_minutes)).isoformat()
+                        task['estimated_deadline'] = None
                 except Exception as time_error:
                     logger.error(f"计算截止时间失败: {time_error}")
                     task['estimated_deadline'] = None

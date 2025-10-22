@@ -47,6 +47,11 @@ from .workflow_store import (
     WorkflowStoreImportRequest, WorkflowStoreImportResult,
     WorkflowStoreStats, StoreCategory, StoreStatus
 )
+from .group import (
+    Group, GroupCreate, GroupUpdate, GroupResponse,
+    GroupMember, GroupMemberAdd, GroupList, GroupQuery,
+    ProcessorGroupInfo
+)
 
 __all__ = [
     # Base
@@ -95,4 +100,9 @@ __all__ = [
     "WorkflowStoreRating", "WorkflowStoreRatingCreate",
     "WorkflowStoreImportRequest", "WorkflowStoreImportResult",
     "WorkflowStoreStats", "StoreCategory", "StoreStatus",
+
+    # Group
+    "Group", "GroupCreate", "GroupUpdate", "GroupResponse",
+    "GroupMember", "GroupMemberAdd", "GroupList", "GroupQuery",
+    "ProcessorGroupInfo",
 ]

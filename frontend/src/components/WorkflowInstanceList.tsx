@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Tag, Button, Space, Modal, message, Tooltip, Badge, Progress, Tabs } from 'antd';
-import { PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined, EyeOutlined, InfoCircleOutlined, DeleteOutlined, BranchesOutlined, ExpandAltOutlined, ShrinkOutlined } from '@ant-design/icons';
+import { PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined, EyeOutlined, InfoCircleOutlined, DeleteOutlined, BranchesOutlined, ExpandAltOutlined, ShrinkOutlined, MessageOutlined } from '@ant-design/icons';
 
 // 导入统一的节点组件
 import { CustomInstanceNode } from './CustomInstanceNode';
 import FilePreview from './FilePreview';
+import TaskConversationPanel from './TaskConversationPanel';
 import ReactFlow, {
   Node,
   Edge,
@@ -132,6 +133,12 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
   const [nodesDetail, setNodesDetail] = useState<any>(null);
   const [loadingNodesDetail, setLoadingNodesDetail] = useState(false);
 
+  // 对话节点相关状态
+  const [conversationNodes, setConversationNodes] = useState<any[]>([]);
+  const [loadingConversationNodes, setLoadingConversationNodes] = useState(false);
+  const [conversationNodesVisible, setConversationNodesVisible] = useState(false);
+  const [selectedConversationTask, setSelectedConversationTask] = useState<any>(null);
+
   // 文件预览状态
   const [previewModalVisible, setPreviewModalVisible] = useState(false);
   const [previewFile, setPreviewFile] = useState<any>(null);
@@ -209,6 +216,40 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
       console.error('文件下载失败:', error);
       message.error('文件下载失败');
     }
+  };
+
+
+  // 获取工作流实例中包含对话的节点
+  const fetchConversationNodes = async (workflowInstanceId: string) => {
+    setLoadingConversationNodes(true);
+    try {
+      const response: any = await executionAPI.getWorkflowConversationNodes(workflowInstanceId);
+      if (response && (response.success || response.data?.success)) {
+        const nodesData = response.data?.data || response.data || [];
+        setConversationNodes(nodesData);
+        message.success(`找到 ${nodesData.length} 个包含对话的节点`);
+      } else {
+        message.info('该工作流实例中没有包含对话的节点');
+        setConversationNodes([]);
+      }
+    } catch (error: any) {
+      console.error('获取对话节点失败:', error);
+      message.error(`获取对话节点失败: ${error.response?.data?.detail || error.message}`);
+      setConversationNodes([]);
+    } finally {
+      setLoadingConversationNodes(false);
+    }
+  };
+
+  // 显示对话节点列表
+  const showConversationNodes = async (instance: WorkflowInstance) => {
+    await fetchConversationNodes(instance.instance_id);
+    setConversationNodesVisible(true);
+  };
+
+  // 选择对话任务进行对话
+  const selectConversationTask = (task: any) => {
+    setSelectedConversationTask(task);
   };
 
 
@@ -1095,6 +1136,14 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
         onCancel={() => setDetailVisible(false)}
         width={1200}
         footer={[
+          <Button key="conversations"
+            icon={<MessageOutlined />}
+            onClick={() => selectedInstance && showConversationNodes(selectedInstance)}
+            loading={loadingConversationNodes}
+            disabled={!selectedInstance}
+          >
+            显示对话节点
+          </Button>,
           <Button key="close" onClick={() => setDetailVisible(false)}>
             关闭
           </Button>
@@ -1921,6 +1970,198 @@ const WorkflowInstanceList: React.FC<WorkflowInstanceListProps> = ({
         onClose={handleClosePreview}
         onDownload={(file) => handleDownloadFile(file.file_id)}
       />
+
+      {/* 对话节点列表模态框 */}
+      <Modal
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <MessageOutlined />
+            <span>工作流对话节点</span>
+            {conversationNodes.length > 0 && (
+              <Badge count={conversationNodes.length} style={{ backgroundColor: '#52c41a' }} />
+            )}
+          </div>
+        }
+        open={conversationNodesVisible}
+        onCancel={() => {
+          setConversationNodesVisible(false);
+          setConversationNodes([]);
+        }}
+        width={800}
+        footer={[
+          <Button key="close" onClick={() => {
+            setConversationNodesVisible(false);
+            setConversationNodes([]);
+          }}>
+            关闭
+          </Button>
+        ]}
+      >
+        {loadingConversationNodes ? (
+          <div style={{ textAlign: 'center', padding: '40px' }}>
+            加载对话节点中...
+          </div>
+        ) : conversationNodes.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
+            <MessageOutlined style={{ fontSize: '48px', marginBottom: '16px' }} />
+            <div style={{ fontSize: '16px', marginBottom: '8px' }}>
+              未找到包含对话的节点
+            </div>
+            <div style={{ fontSize: '14px' }}>
+              该工作流实例中的节点没有进行过AI对话
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div style={{ marginBottom: '16px', color: '#666', fontSize: '14px' }}>
+              找到 {conversationNodes.length} 个包含AI对话的节点，点击节点可查看对话详情：
+            </div>
+            {conversationNodes.map((node, index) => (
+              <div key={node.task_instance_id} style={{
+                border: '1px solid #e8e8e8',
+                borderRadius: '8px',
+                padding: '16px',
+                marginBottom: '12px',
+                backgroundColor: '#fafafa',
+                cursor: 'pointer',
+                transition: 'all 0.3s'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f0f8ff'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#fafafa'}
+              onClick={() => selectConversationTask(node)}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                      <strong style={{ fontSize: '16px', color: '#1890ff' }}>
+                        {node.node_name}
+                      </strong>
+                      {getStatusTag(node.status)}
+                    </div>
+
+                    {node.task_title && (
+                      <div style={{ marginBottom: '6px' }}>
+                        <strong>任务:</strong> {node.task_title}
+                      </div>
+                    )}
+
+                    {node.task_description && (
+                      <div style={{ marginBottom: '8px', color: '#666', fontSize: '13px' }}>
+                        {node.task_description}
+                      </div>
+                    )}
+
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '16px',
+                      fontSize: '12px',
+                      color: '#999'
+                    }}>
+                      <span>💬 对话消息: {node.conversation_stats?.message_count || 0} 条</span>
+                      {node.conversation_stats?.last_message_at && (
+                        <span>📅 最后对话: {new Date(node.conversation_stats.last_message_at).toLocaleString('zh-CN')}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <Button
+                    type="primary"
+                    size="small"
+                    icon={<MessageOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      selectConversationTask(node);
+                    }}
+                  >
+                    查看对话
+                  </Button>
+                </div>
+
+                {/* 最近消息预览 */}
+                {node.recent_messages && node.recent_messages.length > 0 && (
+                  <div style={{
+                    marginTop: '12px',
+                    paddingTop: '12px',
+                    borderTop: '1px solid #e8e8e8',
+                    fontSize: '12px'
+                  }}>
+                    <div style={{ color: '#666', marginBottom: '4px' }}>最近对话预览:</div>
+                    {node.recent_messages.slice(-2).map((msg: any, msgIndex: number) => (
+                      <div key={msgIndex} style={{
+                        marginBottom: '4px',
+                        paddingLeft: '8px',
+                        borderLeft: `2px solid ${msg.role === 'user' ? '#52c41a' : '#1890ff'}`,
+                        color: '#666'
+                      }}>
+                        <span style={{ fontWeight: 'bold', color: msg.role === 'user' ? '#52c41a' : '#1890ff' }}>
+                          {msg.role === 'user' ? '用户' : 'AI'}:
+                        </span>
+                        <span style={{ marginLeft: '4px' }}>
+                          {msg.content.length > 60 ? msg.content.substring(0, 60) + '...' : msg.content}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
+
+      {/* 任务对话模态框 */}
+      <Modal
+        title={
+          selectedConversationTask && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <MessageOutlined />
+              <span>AI对话 - {selectedConversationTask.node_name}</span>
+              {getStatusTag(selectedConversationTask.status)}
+            </div>
+          )
+        }
+        open={!!selectedConversationTask}
+        onCancel={() => setSelectedConversationTask(null)}
+        width={900}
+        height={700}
+        style={{ top: 20 }}
+        styles={{ body: { height: '600px', padding: 0 } }}
+        footer={[
+          <Button key="close" onClick={() => setSelectedConversationTask(null)}>
+            关闭对话
+          </Button>
+        ]}
+      >
+        {selectedConversationTask && (
+          <div style={{ height: '100%' }}>
+            <TaskConversationPanel
+              taskId={selectedConversationTask.task_instance_id}
+              taskInfo={{
+                title: selectedConversationTask.task_title || selectedConversationTask.node_name,
+                description: selectedConversationTask.task_description || '',
+                status: selectedConversationTask.status
+              }}
+              onSuggestionSelect={(suggestion) => {
+                console.log('用户选择建议:', suggestion);
+              }}
+              className="conversation-panel-modal"
+            />
+          </div>
+        )}
+      </Modal>
+
+      {/* 内联样式 */}
+      <style>{`
+        .conversation-panel-modal .ant-card {
+          height: 100% !important;
+          border: none !important;
+          box-shadow: none !important;
+        }
+        .conversation-panel-modal .ant-card-body {
+          height: calc(100% - 40px) !important;
+        }
+      `}</style>
     </>
   );
 };
